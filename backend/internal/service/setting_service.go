@@ -975,6 +975,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		DingTalkOAuthEnabled:             dingTalkEnabled,
 		FeishuOAuthEnabled:               feishuEnabled,
+		FeishuOrgSyncEnabled:             settings[SettingKeyFeishuOrgSyncEnabled] == "true",
 		WeChatOAuthEnabled:               weChatEnabled,
 		WeChatOAuthOpenEnabled:           weChatOpenEnabled,
 		WeChatOAuthMPEnabled:             weChatMPEnabled,
@@ -1502,6 +1503,7 @@ type PublicSettingsInjectionPayload struct {
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
 	FeishuOAuthEnabled               bool                     `json:"feishu_oauth_enabled"`
+	FeishuOrgSyncEnabled             bool                     `json:"feishu_org_sync_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
 	WeChatOAuthOpenEnabled           bool                     `json:"wechat_oauth_open_enabled"`
 	WeChatOAuthMPEnabled             bool                     `json:"wechat_oauth_mp_enabled"`
@@ -1574,6 +1576,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		DingTalkOAuthEnabled:             settings.DingTalkOAuthEnabled,
 		FeishuOAuthEnabled:               settings.FeishuOAuthEnabled,
+		FeishuOrgSyncEnabled:             settings.FeishuOrgSyncEnabled,
 		WeChatOAuthEnabled:               settings.WeChatOAuthEnabled,
 		WeChatOAuthOpenEnabled:           settings.WeChatOAuthOpenEnabled,
 		WeChatOAuthMPEnabled:             settings.WeChatOAuthMPEnabled,

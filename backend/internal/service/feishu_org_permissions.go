@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -113,6 +115,474 @@ type FeishuDepartmentGroupPoolResult struct {
 	OpenDepartmentID string  `json:"open_department_id"`
 	GroupIDs         []int64 `json:"group_ids"`
 	RevokedUserIDs   []int64 `json:"revoked_user_ids,omitempty"`
+}
+
+type FeishuOrgListInput struct {
+	TenantKey string
+	Limit     int
+	Offset    int
+}
+
+type FeishuOrgGroupBrief struct {
+	ID               int64  `json:"id"`
+	Name             string `json:"name"`
+	Platform         string `json:"platform"`
+	SubscriptionType string `json:"subscription_type"`
+}
+
+type FeishuOrgDepartmentView struct {
+	TenantKey              string                `json:"tenant_key"`
+	OpenDepartmentID       string                `json:"open_department_id"`
+	ParentOpenDepartmentID string                `json:"parent_open_department_id"`
+	Name                   string                `json:"name"`
+	Path                   string                `json:"path"`
+	Status                 string                `json:"status"`
+	LeaderOpenIDs          []string              `json:"leader_open_ids"`
+	EmployeeCount          int64                 `json:"employee_count"`
+	ManagerCount           int64                 `json:"manager_count"`
+	AssignableGroups       []FeishuOrgGroupBrief `json:"assignable_groups"`
+	LastSyncedAt           *time.Time            `json:"last_synced_at,omitempty"`
+}
+
+type FeishuOrgDepartmentListResult struct {
+	Items  []FeishuOrgDepartmentView `json:"items"`
+	Limit  int                       `json:"limit"`
+	Offset int                       `json:"offset"`
+}
+
+type FeishuOrgUserView struct {
+	UserID                     int64                 `json:"user_id"`
+	LocalEmail                 string                `json:"local_email"`
+	LocalUsername              string                `json:"local_username"`
+	LocalStatus                string                `json:"local_status"`
+	TenantKey                  string                `json:"tenant_key"`
+	OpenID                     string                `json:"open_id"`
+	UnionID                    string                `json:"union_id"`
+	FeishuUserID               string                `json:"feishu_user_id"`
+	Name                       string                `json:"name"`
+	Email                      string                `json:"email"`
+	EmployeeNo                 string                `json:"employee_no"`
+	Status                     string                `json:"status"`
+	PrimaryOpenDepartmentID    string                `json:"primary_open_department_id"`
+	PrimaryDepartmentName      string                `json:"primary_department_name"`
+	PrimaryDepartmentPath      string                `json:"primary_department_path"`
+	DepartmentOpenIDs          []string              `json:"department_open_ids"`
+	DepartmentManagerGroupIDs  []int64               `json:"department_manager_group_ids"`
+	SuperAdminOverrideGroupIDs []int64               `json:"super_admin_override_group_ids"`
+	EffectiveGroupIDs          []int64               `json:"effective_group_ids"`
+	AssignableGroups           []FeishuOrgGroupBrief `json:"assignable_groups,omitempty"`
+	LastSyncedAt               *time.Time            `json:"last_synced_at,omitempty"`
+}
+
+type FeishuOrgUserListResult struct {
+	Items  []FeishuOrgUserView `json:"items"`
+	Limit  int                 `json:"limit"`
+	Offset int                 `json:"offset"`
+}
+
+type FeishuOrgSyncRunView struct {
+	ID                int64      `json:"id"`
+	Status            string     `json:"status"`
+	StartedAt         time.Time  `json:"started_at"`
+	FinishedAt        *time.Time `json:"finished_at,omitempty"`
+	DepartmentsSynced int        `json:"departments_synced"`
+	UsersSynced       int        `json:"users_synced"`
+	ManagersSynced    int        `json:"managers_synced"`
+	UsersToCreate     int        `json:"users_to_create"`
+	UsersToDisable    int        `json:"users_to_disable"`
+	BindingsMissing   int        `json:"bindings_missing"`
+	ReviewRequired    bool       `json:"review_required"`
+	ErrorMessage      string     `json:"error_message"`
+	TriggeredByUserID int64      `json:"triggered_by_user_id"`
+}
+
+type FeishuOrgSyncRunListResult struct {
+	Items  []FeishuOrgSyncRunView `json:"items"`
+	Limit  int                    `json:"limit"`
+	Offset int                    `json:"offset"`
+}
+
+type FeishuManualReconcileResult struct {
+	SyncRun  FeishuOrgSyncRunView    `json:"sync_run"`
+	Decision FeishuDepartureDecision `json:"decision"`
+}
+
+func (s *FeishuOrgPermissionService) ListDepartments(ctx context.Context, input FeishuOrgListInput) (*FeishuOrgDepartmentListResult, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("feishu org permission service is not configured")
+	}
+	tenantKey, limit, offset := normalizeFeishuOrgListInput(input)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT d.tenant_key,
+       d.open_department_id,
+       d.parent_open_department_id,
+       d.name,
+       d.path,
+       d.status,
+       d.leader_open_ids::text AS leader_open_ids,
+       d.last_synced_at,
+       COALESCE(employee_counts.employee_count, 0) AS employee_count,
+       COALESCE(manager_counts.manager_count, 0) AS manager_count,
+       COALESCE(group_pools.assignable_groups, '[]'::jsonb)::text AS assignable_groups
+FROM feishu_departments d
+LEFT JOIN (
+    SELECT tenant_key, primary_open_department_id AS open_department_id, COUNT(*) AS employee_count
+    FROM feishu_org_users
+    WHERE status = 'active'
+    GROUP BY tenant_key, primary_open_department_id
+) employee_counts
+  ON employee_counts.tenant_key = d.tenant_key
+ AND employee_counts.open_department_id = d.open_department_id
+LEFT JOIN (
+    SELECT tenant_key, open_department_id, COUNT(*) AS manager_count
+    FROM feishu_department_managers
+    WHERE status = 'active'
+    GROUP BY tenant_key, open_department_id
+) manager_counts
+  ON manager_counts.tenant_key = d.tenant_key
+ AND manager_counts.open_department_id = d.open_department_id
+LEFT JOIN (
+    SELECT grants.tenant_key,
+           grants.open_department_id,
+           jsonb_agg(
+             jsonb_build_object(
+               'id', groups.id,
+               'name', groups.name,
+               'platform', groups.platform,
+               'subscription_type', groups.subscription_type
+             )
+             ORDER BY groups.sort_order, groups.id
+           ) AS assignable_groups
+    FROM feishu_department_group_grants grants
+    JOIN groups
+      ON groups.id = grants.group_id
+     AND groups.deleted_at IS NULL
+    GROUP BY grants.tenant_key, grants.open_department_id
+) group_pools
+  ON group_pools.tenant_key = d.tenant_key
+ AND group_pools.open_department_id = d.open_department_id
+WHERE ($1 = '' OR d.tenant_key = $1)
+  AND d.status = 'active'
+ORDER BY d.path, d.name, d.open_department_id
+LIMIT $2 OFFSET $3`, tenantKey, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make([]FeishuOrgDepartmentView, 0)
+	for rows.Next() {
+		var item FeishuOrgDepartmentView
+		var leaderRaw string
+		var groupsRaw string
+		var lastSyncedAt sql.NullTime
+		if err := rows.Scan(
+			&item.TenantKey,
+			&item.OpenDepartmentID,
+			&item.ParentOpenDepartmentID,
+			&item.Name,
+			&item.Path,
+			&item.Status,
+			&leaderRaw,
+			&lastSyncedAt,
+			&item.EmployeeCount,
+			&item.ManagerCount,
+			&groupsRaw,
+		); err != nil {
+			return nil, err
+		}
+		leaders, err := decodeFeishuJSONStringSlice(leaderRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode department leaders: %w", err)
+		}
+		groups, err := decodeFeishuJSONGroups(groupsRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode department group pool: %w", err)
+		}
+		item.LeaderOpenIDs = leaders
+		item.AssignableGroups = groups
+		item.LastSyncedAt = sqlNullTimePtr(lastSyncedAt)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &FeishuOrgDepartmentListResult{Items: items, Limit: limit, Offset: offset}, nil
+}
+
+func (s *FeishuOrgPermissionService) ListUsers(ctx context.Context, input FeishuOrgListInput) (*FeishuOrgUserListResult, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("feishu org permission service is not configured")
+	}
+	tenantKey, limit, offset := normalizeFeishuOrgListInput(input)
+	rows, err := s.db.QueryContext(ctx, feishuOrgUsersListSQL(`
+WHERE ($1 = '' OR fu.tenant_key = $1)
+ORDER BY fu.name, fu.open_id
+LIMIT $2 OFFSET $3`), tenantKey, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items, err := scanFeishuOrgUserViews(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &FeishuOrgUserListResult{Items: items, Limit: limit, Offset: offset}, nil
+}
+
+func (s *FeishuOrgPermissionService) ListSyncRuns(ctx context.Context, input FeishuOrgListInput) (*FeishuOrgSyncRunListResult, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("feishu org permission service is not configured")
+	}
+	_, limit, offset := normalizeFeishuOrgListInput(input)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id,
+       status,
+       started_at,
+       finished_at,
+       departments_synced,
+       users_synced,
+       managers_synced,
+       users_to_create,
+       users_to_disable,
+       bindings_missing,
+       review_required,
+       error_message,
+       triggered_by_user_id
+FROM feishu_org_sync_runs
+ORDER BY started_at DESC, id DESC
+LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make([]FeishuOrgSyncRunView, 0)
+	for rows.Next() {
+		var item FeishuOrgSyncRunView
+		var finishedAt sql.NullTime
+		var triggeredBy sql.NullInt64
+		if err := rows.Scan(
+			&item.ID,
+			&item.Status,
+			&item.StartedAt,
+			&finishedAt,
+			&item.DepartmentsSynced,
+			&item.UsersSynced,
+			&item.ManagersSynced,
+			&item.UsersToCreate,
+			&item.UsersToDisable,
+			&item.BindingsMissing,
+			&item.ReviewRequired,
+			&item.ErrorMessage,
+			&triggeredBy,
+		); err != nil {
+			return nil, err
+		}
+		item.FinishedAt = sqlNullTimePtr(finishedAt)
+		if triggeredBy.Valid {
+			item.TriggeredByUserID = triggeredBy.Int64
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &FeishuOrgSyncRunListResult{Items: items, Limit: limit, Offset: offset}, nil
+}
+
+func (s *FeishuOrgPermissionService) RunManualReconcile(ctx context.Context, actorUserID int64, policy FeishuDeparturePolicy) (*FeishuManualReconcileResult, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("feishu org permission service is not configured")
+	}
+	previousActiveUsers, err := s.countActiveFeishuOrgUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("count active feishu org users: %w", err)
+	}
+	departedUserIDs, err := s.listDepartedActiveLocalUserIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list departed local users: %w", err)
+	}
+	decision := EvaluateFeishuDepartureDecision(previousActiveUsers, departedUserIDs, policy)
+
+	status := "success"
+	reviewRequired := false
+	errorMessage := ""
+	if decision.RequiresReview {
+		status = "partial_failed"
+		reviewRequired = true
+		errorMessage = decision.Reason
+		if err := s.appendAuditLog(ctx, actorUserID, 0, "", "", "sync_blocked_for_review", decision.Reason); err != nil {
+			return nil, fmt.Errorf("append review audit log: %w", err)
+		}
+	} else if decision.AutoDisable {
+		if err := s.disableLocalUsers(ctx, decision.UserIDs); err != nil {
+			return nil, fmt.Errorf("disable local users: %w", err)
+		}
+		for _, userID := range decision.UserIDs {
+			if err := s.appendAuditLog(ctx, actorUserID, userID, "", "", "auto_disable_user", "feishu_departure_auto_disable"); err != nil {
+				return nil, fmt.Errorf("append auto disable audit log: %w", err)
+			}
+			if s.authCacheInvalidator != nil {
+				s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+			}
+		}
+	}
+
+	run, err := s.insertSyncRun(ctx, status, len(departedUserIDs), reviewRequired, errorMessage, actorUserID)
+	if err != nil {
+		return nil, fmt.Errorf("insert sync run: %w", err)
+	}
+	return &FeishuManualReconcileResult{SyncRun: *run, Decision: decision}, nil
+}
+
+func (s *FeishuOrgPermissionService) ListManagerUsers(ctx context.Context, managerUserID int64, input FeishuOrgListInput) (*FeishuOrgUserListResult, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("feishu org permission service is not configured")
+	}
+	if managerUserID <= 0 {
+		return nil, errors.New("manager_user_id is required")
+	}
+	_, limit, offset := normalizeFeishuOrgListInput(input)
+	rows, err := s.db.QueryContext(ctx, `
+WITH RECURSIVE manager_roots AS (
+    SELECT tenant_key, open_department_id, include_subdepartments
+    FROM feishu_department_managers
+    WHERE manager_user_id = $1
+      AND status = 'active'
+),
+managed_scope AS (
+    SELECT tenant_key, open_department_id, include_subdepartments
+    FROM manager_roots
+    UNION ALL
+    SELECT child.tenant_key, child.open_department_id, scope.include_subdepartments
+    FROM feishu_departments child
+    JOIN managed_scope scope
+      ON child.tenant_key = scope.tenant_key
+     AND child.parent_open_department_id = scope.open_department_id
+    WHERE scope.include_subdepartments = true
+      AND child.status = 'active'
+)
+`+feishuOrgUsersListSQL(`
+JOIN managed_scope scope
+  ON scope.tenant_key = fu.tenant_key
+ AND scope.open_department_id = fu.primary_open_department_id
+WHERE fu.status = 'active'
+ORDER BY fu.name, fu.open_id
+LIMIT $2 OFFSET $3`), managerUserID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items, err := scanFeishuOrgUserViews(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &FeishuOrgUserListResult{Items: items, Limit: limit, Offset: offset}, nil
+}
+
+func (s *FeishuOrgPermissionService) countActiveFeishuOrgUsers(ctx context.Context) (int, error) {
+	var count int
+	err := scanFeishuSingleRow(ctx, s.db, `
+SELECT COUNT(*) FROM feishu_org_users
+WHERE user_id IS NOT NULL
+  AND status = 'active'`, nil, &count)
+	return count, err
+}
+
+func (s *FeishuOrgPermissionService) listDepartedActiveLocalUserIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT org_user.user_id
+FROM feishu_org_users org_user
+JOIN users local_user
+  ON local_user.id = org_user.user_id
+WHERE org_user.user_id IS NOT NULL
+  AND org_user.status IN ('departed', 'disabled')
+  AND local_user.status = $1
+  AND local_user.role <> $2
+ORDER BY org_user.user_id`, StatusActive, RoleAdmin)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return uniqueSortedInt64s(ids), nil
+}
+
+func (s *FeishuOrgPermissionService) disableLocalUsers(ctx context.Context, userIDs []int64) error {
+	userIDs = uniqueSortedInt64s(userIDs)
+	if len(userIDs) == 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE users
+SET status = $1,
+    updated_at = NOW()
+WHERE id = ANY($2)
+  AND role <> $3`, StatusDisabled, pq.Array(userIDs), RoleAdmin)
+	return err
+}
+
+func (s *FeishuOrgPermissionService) insertSyncRun(ctx context.Context, status string, usersToDisable int, reviewRequired bool, errorMessage string, actorUserID int64) (*FeishuOrgSyncRunView, error) {
+	var item FeishuOrgSyncRunView
+	var finishedAt sql.NullTime
+	var triggeredBy sql.NullInt64
+	err := scanFeishuSingleRow(ctx, s.db, `
+INSERT INTO feishu_org_sync_runs (
+    status,
+    started_at,
+    finished_at,
+    users_to_disable,
+    review_required,
+    error_message,
+    triggered_by_user_id
+)
+VALUES ($1, NOW(), NOW(), $2, $3, $4, NULLIF($5, 0))
+RETURNING id,
+          status,
+          started_at,
+          finished_at,
+          departments_synced,
+          users_synced,
+          managers_synced,
+          users_to_create,
+          users_to_disable,
+          bindings_missing,
+          review_required,
+          error_message,
+          triggered_by_user_id`, []any{status, usersToDisable, reviewRequired, errorMessage, actorUserID},
+		&item.ID,
+		&item.Status,
+		&item.StartedAt,
+		&finishedAt,
+		&item.DepartmentsSynced,
+		&item.UsersSynced,
+		&item.ManagersSynced,
+		&item.UsersToCreate,
+		&item.UsersToDisable,
+		&item.BindingsMissing,
+		&item.ReviewRequired,
+		&item.ErrorMessage,
+		&triggeredBy,
+	)
+	if err != nil {
+		return nil, err
+	}
+	item.FinishedAt = sqlNullTimePtr(finishedAt)
+	if triggeredBy.Valid {
+		item.TriggeredByUserID = triggeredBy.Int64
+	}
+	return &item, nil
 }
 
 func (s *FeishuOrgPermissionService) SetDepartmentGroupPool(ctx context.Context, input FeishuSetDepartmentGroupPoolInput) (*FeishuDepartmentGroupPoolResult, error) {
@@ -589,6 +1059,218 @@ func scanFeishuSingleRow(ctx context.Context, q feishuOrgSQLExecutor, query stri
 		return err
 	}
 	return nil
+}
+
+func feishuOrgUsersListSQL(suffix string) string {
+	return `
+SELECT COALESCE(fu.user_id, 0) AS user_id,
+       COALESCE(local_user.email, '') AS local_email,
+       COALESCE(local_user.username, '') AS local_username,
+       COALESCE(local_user.status, '') AS local_status,
+       fu.tenant_key,
+       fu.open_id,
+       fu.union_id,
+       fu.feishu_user_id,
+       fu.name,
+       fu.email,
+       fu.employee_no,
+       fu.status,
+       fu.primary_open_department_id,
+       COALESCE(primary_department.name, '') AS primary_department_name,
+       COALESCE(primary_department.path, '') AS primary_department_path,
+       fu.department_open_ids::text AS department_open_ids,
+       COALESCE(department_grants.group_ids, '[]'::jsonb)::text AS department_manager_group_ids,
+       COALESCE(override_grants.group_ids, '[]'::jsonb)::text AS super_admin_override_group_ids,
+       COALESCE(effective_groups.group_ids, '[]'::jsonb)::text AS effective_group_ids,
+       COALESCE(assignable_groups.groups, '[]'::jsonb)::text AS assignable_groups,
+       fu.last_synced_at
+FROM feishu_org_users fu
+LEFT JOIN users local_user
+  ON local_user.id = fu.user_id
+LEFT JOIN feishu_departments primary_department
+  ON primary_department.tenant_key = fu.tenant_key
+ AND primary_department.open_department_id = fu.primary_open_department_id
+LEFT JOIN (
+    SELECT user_id, jsonb_agg(group_id ORDER BY group_id) AS group_ids
+    FROM feishu_user_group_grants
+    WHERE revoked_at IS NULL
+      AND source = 'department_manager'
+    GROUP BY user_id
+) department_grants
+  ON department_grants.user_id = fu.user_id
+LEFT JOIN (
+    SELECT user_id, jsonb_agg(group_id ORDER BY group_id) AS group_ids
+    FROM feishu_user_group_grants
+    WHERE revoked_at IS NULL
+      AND source = 'super_admin_override'
+    GROUP BY user_id
+) override_grants
+  ON override_grants.user_id = fu.user_id
+LEFT JOIN (
+    SELECT user_id, jsonb_agg(group_id ORDER BY group_id) AS group_ids
+    FROM user_allowed_groups
+    GROUP BY user_id
+) effective_groups
+  ON effective_groups.user_id = fu.user_id
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(
+             jsonb_build_object(
+               'id', groups.id,
+               'name', groups.name,
+               'platform', groups.platform,
+               'subscription_type', groups.subscription_type
+             )
+             ORDER BY groups.sort_order, groups.id
+           ) AS groups
+    FROM feishu_department_group_grants grants
+    JOIN groups
+      ON groups.id = grants.group_id
+     AND groups.deleted_at IS NULL
+    WHERE grants.tenant_key = fu.tenant_key
+      AND grants.open_department_id = fu.primary_open_department_id
+) assignable_groups ON true
+` + suffix
+}
+
+func scanFeishuOrgUserViews(rows *sql.Rows) ([]FeishuOrgUserView, error) {
+	items := make([]FeishuOrgUserView, 0)
+	for rows.Next() {
+		var item FeishuOrgUserView
+		var departmentRaw string
+		var managerGrantRaw string
+		var overrideGrantRaw string
+		var effectiveRaw string
+		var assignableRaw string
+		var lastSyncedAt sql.NullTime
+		if err := rows.Scan(
+			&item.UserID,
+			&item.LocalEmail,
+			&item.LocalUsername,
+			&item.LocalStatus,
+			&item.TenantKey,
+			&item.OpenID,
+			&item.UnionID,
+			&item.FeishuUserID,
+			&item.Name,
+			&item.Email,
+			&item.EmployeeNo,
+			&item.Status,
+			&item.PrimaryOpenDepartmentID,
+			&item.PrimaryDepartmentName,
+			&item.PrimaryDepartmentPath,
+			&departmentRaw,
+			&managerGrantRaw,
+			&overrideGrantRaw,
+			&effectiveRaw,
+			&assignableRaw,
+			&lastSyncedAt,
+		); err != nil {
+			return nil, err
+		}
+		departmentIDs, err := decodeFeishuJSONStringSlice(departmentRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode feishu user departments: %w", err)
+		}
+		managerGroupIDs, err := decodeFeishuJSONInt64Slice(managerGrantRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode department manager grants: %w", err)
+		}
+		overrideGroupIDs, err := decodeFeishuJSONInt64Slice(overrideGrantRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode super admin override grants: %w", err)
+		}
+		effectiveGroupIDs, err := decodeFeishuJSONInt64Slice(effectiveRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode effective groups: %w", err)
+		}
+		assignableGroups, err := decodeFeishuJSONGroups(assignableRaw)
+		if err != nil {
+			return nil, fmt.Errorf("decode assignable groups: %w", err)
+		}
+		item.DepartmentOpenIDs = departmentIDs
+		item.DepartmentManagerGroupIDs = managerGroupIDs
+		item.SuperAdminOverrideGroupIDs = overrideGroupIDs
+		item.EffectiveGroupIDs = effectiveGroupIDs
+		item.AssignableGroups = assignableGroups
+		item.LastSyncedAt = sqlNullTimePtr(lastSyncedAt)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func normalizeFeishuOrgListInput(input FeishuOrgListInput) (tenantKey string, limit int, offset int) {
+	tenantKey = strings.TrimSpace(input.TenantKey)
+	limit = input.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset = input.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	return tenantKey, limit, offset
+}
+
+func decodeFeishuJSONStringSlice(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out, nil
+}
+
+func decodeFeishuJSONInt64Slice(raw string) ([]int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var values []int64
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, err
+	}
+	return uniqueSortedInt64s(values), nil
+}
+
+func decodeFeishuJSONGroups(raw string) ([]FeishuOrgGroupBrief, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var groups []FeishuOrgGroupBrief
+	if err := json.Unmarshal([]byte(raw), &groups); err != nil {
+		return nil, err
+	}
+	out := make([]FeishuOrgGroupBrief, 0, len(groups))
+	for _, group := range groups {
+		if group.ID > 0 {
+			out = append(out, group)
+		}
+	}
+	return out, nil
+}
+
+func sqlNullTimePtr(value sql.NullTime) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	t := value.Time
+	return &t
 }
 
 func departurePercent(total int, departed int) int {

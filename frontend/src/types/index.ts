@@ -220,6 +220,7 @@ export interface PublicSettings {
   linuxdo_oauth_enabled: boolean
   dingtalk_oauth_enabled?: boolean
   feishu_oauth_enabled?: boolean
+  feishu_org_sync_enabled?: boolean
   wechat_oauth_enabled: boolean
   wechat_oauth_open_enabled?: boolean
   wechat_oauth_mp_enabled?: boolean

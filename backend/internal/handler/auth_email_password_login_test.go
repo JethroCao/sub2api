@@ -96,3 +96,23 @@ func TestEnsureEmailPasswordLoginAllowsUser_RejectsAdminWhenFallbackDisabled(t *
 	require.Error(t, err)
 	require.Equal(t, "EMAIL_PASSWORD_LOGIN_DISABLED", infraerrors.Reason(err))
 }
+
+func TestEnsureEmailPasswordRegistrationAllowed_DefaultAllows(t *testing.T) {
+	h := newAuthHandlerWithEmailPasswordSettings(map[string]string{})
+
+	err := h.ensureEmailPasswordRegistrationAllowed(context.Background())
+
+	require.NoError(t, err)
+}
+
+func TestEnsureEmailPasswordRegistrationAllowed_RejectsWhenEmailLoginDisabled(t *testing.T) {
+	h := newAuthHandlerWithEmailPasswordSettings(map[string]string{
+		service.SettingKeyEmailPasswordLoginEnabled:      "false",
+		service.SettingKeyAdminEmailLoginFallbackEnabled: "true",
+	})
+
+	err := h.ensureEmailPasswordRegistrationAllowed(context.Background())
+
+	require.Error(t, err)
+	require.Equal(t, "EMAIL_PASSWORD_LOGIN_DISABLED", infraerrors.Reason(err))
+}

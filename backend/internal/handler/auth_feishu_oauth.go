@@ -34,7 +34,6 @@ const (
 	feishuOAuthCookieMaxAgeSec    = 10 * 60
 	feishuOAuthDefaultRedirectTo  = "/dashboard"
 	feishuOAuthDefaultFrontendCB  = "/auth/feishu/callback"
-	feishuOAuthProviderKey        = "feishu"
 )
 
 type feishuOAuthTokenResponse struct {
@@ -233,6 +232,11 @@ func (h *AuthHandler) FeishuOAuthCallback(c *gin.Context) {
 		redirectOAuthError(c, frontendCallback, "missing_subject", "missing feishu identity subject", "")
 		return
 	}
+	providerKey := strings.TrimSpace(identity.User.TenantKey)
+	if providerKey == "" {
+		redirectOAuthError(c, frontendCallback, "missing_tenant", "missing feishu tenant key", "")
+		return
+	}
 
 	email := feishuPrimaryEmail(identity.User)
 	syntheticEmail := buildFeishuSyntheticEmail(providerSubject)
@@ -243,7 +247,7 @@ func (h *AuthHandler) FeishuOAuthCallback(c *gin.Context) {
 	username := firstNonEmpty(identity.User.Name, identity.User.EnName, feishuFallbackUsername(providerSubject))
 	identityRef := service.PendingAuthIdentityKey{
 		ProviderType:    "feishu",
-		ProviderKey:     feishuOAuthProviderKey,
+		ProviderKey:     providerKey,
 		ProviderSubject: providerSubject,
 	}
 	upstreamClaims := buildFeishuUpstreamClaims(identity, resolvedEmail, syntheticEmail, username)
@@ -296,30 +300,17 @@ func (h *AuthHandler) FeishuOAuthCallback(c *gin.Context) {
 
 	signupBlocked := h.isFeishuSignupBlocked(c.Request.Context(), cfg)
 	if signupBlocked {
-		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
-			Intent:                 oauthIntentLogin,
-			Identity:               identityRef,
-			ResolvedEmail:          resolvedEmail,
-			RedirectTo:             redirectTo,
-			BrowserSessionKey:      browserSessionKey,
-			UpstreamIdentityClaims: upstreamClaims,
-			CompletionResponse: map[string]any{
-				"step":                      "bind_login_required",
-				"existing_account_bindable": true,
-				"create_account_allowed":    false,
-				"redirect":                  redirectTo,
-			},
-		}); err != nil {
-			redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
-			return
-		}
-		redirectToFrontendCallback(c, frontendCallback)
+		redirectOAuthError(c, frontendCallback, "identity_unbound", "feishu identity is not bound to a local user", "")
 		return
 	}
 
 	compatEmailUser, err := h.findFeishuCompatEmailUser(c.Request.Context(), email)
 	if err != nil {
 		redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
+		return
+	}
+	if compatEmailUser != nil {
+		redirectOAuthError(c, frontendCallback, "identity_unbound", "feishu identity is not bound to a local user", "")
 		return
 	}
 	emailVerificationRequired := h != nil && h.authService != nil && h.authService.IsEmailVerifyEnabled(c.Request.Context())
@@ -494,7 +485,7 @@ func feishuFetchUserInfo(ctx context.Context, cfg feishuOAuthConfig, accessToken
 }
 
 func feishuProviderSubject(user feishuUserInfo) string {
-	return strings.TrimSpace(firstNonEmpty(user.UnionID, user.OpenID, user.UserID))
+	return strings.TrimSpace(user.OpenID)
 }
 
 func feishuPrimaryEmail(user feishuUserInfo) string {

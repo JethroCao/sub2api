@@ -299,6 +299,7 @@ type PublicSettings struct {
 	LinuxDoOAuthEnabled            bool
 	DingTalkOAuthEnabled           bool
 	FeishuOAuthEnabled             bool
+	FeishuOrgSyncEnabled           bool
 	EmailPasswordLoginEnabled      bool
 	AdminEmailLoginFallbackEnabled bool
 	WeChatOAuthEnabled             bool

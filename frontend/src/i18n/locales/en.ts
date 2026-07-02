@@ -406,6 +406,8 @@ export default {
     profile: 'Profile',
     users: 'Users',
     groups: 'Groups',
+    feishuOrg: 'Feishu Org Permissions',
+    orgManager: 'Department Authorization',
     channels: 'Channels',
     availableChannels: 'Available Channels',
     subscriptions: 'Subscriptions',
@@ -1484,6 +1486,10 @@ export default {
 
   // Admin
   admin: {
+    feishuOrg: {
+      title: 'Feishu Organization Permissions',
+      description: 'Configure Feishu department group pools and employee grants'
+    },
     // Dashboard
     dashboard: {
       title: 'Admin Dashboard',

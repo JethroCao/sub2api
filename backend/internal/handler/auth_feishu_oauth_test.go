@@ -62,7 +62,7 @@ func TestFeishuOAuthStartRedirectsWithClientIDAndScope(t *testing.T) {
 	require.NotNil(t, findCookie(recorder.Result().Cookies(), oauthPendingBrowserCookieName))
 }
 
-func TestFeishuOAuthCallbackUsesExistingUnionIdentityWithoutEmail(t *testing.T) {
+func TestFeishuOAuthCallbackUsesExistingOpenIDIdentityWithoutEmail(t *testing.T) {
 	originalFetch := fetchFeishuOAuthIdentity
 	fetchFeishuOAuthIdentity = func(ctx context.Context, cfg feishuOAuthConfig, code string) (*feishuOAuthIdentity, error) {
 		return &feishuOAuthIdentity{
@@ -95,8 +95,8 @@ func TestFeishuOAuthCallbackUsesExistingUnionIdentityWithoutEmail(t *testing.T) 
 	_, err = client.AuthIdentity.Create().
 		SetUserID(existingUser.ID).
 		SetProviderType("feishu").
-		SetProviderKey("feishu").
-		SetProviderSubject("on_union_id").
+		SetProviderKey("tenant_test").
+		SetProviderSubject("ou_open_id").
 		SetMetadata(map[string]any{"open_id": "ou_open_id"}).
 		Save(ctx)
 	require.NoError(t, err)
@@ -123,12 +123,13 @@ func TestFeishuOAuthCallbackUsesExistingUnionIdentityWithoutEmail(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, oauthIntentLogin, session.Intent)
 	require.Equal(t, "feishu", session.ProviderType)
-	require.Equal(t, "feishu", session.ProviderKey)
-	require.Equal(t, "on_union_id", session.ProviderSubject)
+	require.Equal(t, "tenant_test", session.ProviderKey)
+	require.Equal(t, "ou_open_id", session.ProviderSubject)
 	require.NotNil(t, session.TargetUserID)
 	require.Equal(t, existingUser.ID, *session.TargetUserID)
 	require.Equal(t, existingUser.Email, session.ResolvedEmail)
 	require.Equal(t, "ou_open_id", session.UpstreamIdentityClaims["open_id"])
+	require.Equal(t, "ou_open_id", session.UpstreamIdentityClaims["subject"])
 	require.Equal(t, "feishu_user_id", session.UpstreamIdentityClaims["user_id"])
 
 	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
@@ -176,7 +177,7 @@ func TestFeishuOAuthCallbackAutoCreatesSyntheticUserWithFeishuSource(t *testing.
 
 	ctx := context.Background()
 	createdUser, err := client.User.Query().
-		Where(dbuser.EmailEQ("feishu-on_new_union@feishu-connect.invalid")).
+		Where(dbuser.EmailEQ("feishu-ou_new_open@feishu-connect.invalid")).
 		Only(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "feishu", createdUser.SignupSource)
@@ -184,11 +185,70 @@ func TestFeishuOAuthCallbackAutoCreatesSyntheticUserWithFeishuSource(t *testing.
 	identity, err := client.AuthIdentity.Query().
 		Where(
 			authidentity.ProviderTypeEQ("feishu"),
-			authidentity.ProviderKeyEQ("feishu"),
-			authidentity.ProviderSubjectEQ("on_new_union"),
+			authidentity.ProviderKeyEQ("tenant_test"),
+			authidentity.ProviderSubjectEQ("ou_new_open"),
 		).
 		Only(ctx)
 	require.NoError(t, err)
 	require.Equal(t, createdUser.ID, identity.UserID)
 	require.Equal(t, "ou_new_open", identity.Metadata["open_id"])
+}
+
+func TestFeishuOAuthCallbackRejectsUnboundExistingEmail(t *testing.T) {
+	originalFetch := fetchFeishuOAuthIdentity
+	fetchFeishuOAuthIdentity = func(ctx context.Context, cfg feishuOAuthConfig, code string) (*feishuOAuthIdentity, error) {
+		return &feishuOAuthIdentity{
+			Token: feishuOAuthTokenResponse{Scope: "contact:user.base:readonly contact:user.email:readonly"},
+			User: feishuUserInfo{
+				Name:            "已有员工",
+				OpenID:          "ou_unbound_open",
+				UnionID:         "on_unbound_union",
+				UserID:          "feishu_unbound_user",
+				TenantKey:       "tenant_test",
+				EnterpriseEmail: "existing@example.com",
+			},
+		}, nil
+	}
+	t.Cleanup(func() { fetchFeishuOAuthIdentity = originalFetch })
+
+	handler, client := newFeishuOAuthTestHandler(t, nil)
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx := context.Background()
+	_, err := client.User.Create().
+		SetEmail("existing@example.com").
+		SetUsername("existing").
+		SetPasswordHash("hash").
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/feishu/callback?code=feishu-code&state=state-existing", nil)
+	req.AddCookie(encodedCookie(feishuOAuthStateCookieName, "state-existing"))
+	req.AddCookie(encodedCookie(feishuOAuthRedirectCookieName, "/dashboard"))
+	req.AddCookie(encodedCookie(feishuOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-existing"))
+	c.Request = req
+
+	handler.FeishuOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	fragment := parseOAuthRedirectFragment(t, recorder.Header().Get("Location"))
+	require.Equal(t, "identity_unbound", fragment.Get("error"))
+	require.Contains(t, fragment.Get("error_message"), "feishu identity is not bound")
+	require.Empty(t, fragment.Get("access_token"))
+	require.Nil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
+
+	count, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("feishu"),
+			authidentity.ProviderKeyEQ("tenant_test"),
+			authidentity.ProviderSubjectEQ("ou_unbound_open"),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, count)
 }

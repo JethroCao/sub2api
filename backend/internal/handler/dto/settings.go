@@ -328,6 +328,7 @@ type PublicSettings struct {
 	AdminEmailLoginFallbackEnabled   bool                     `json:"admin_email_login_fallback_enabled"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
 	FeishuOAuthEnabled               bool                     `json:"feishu_oauth_enabled"`
+	FeishuOrgSyncEnabled             bool                     `json:"feishu_org_sync_enabled"`
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
 	WeChatOAuthOpenEnabled           bool                     `json:"wechat_oauth_open_enabled"`

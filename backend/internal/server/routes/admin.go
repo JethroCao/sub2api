@@ -115,6 +115,10 @@ func RegisterAdminRoutes(
 func registerFeishuOrgAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	feishuOrg := admin.Group("/feishu-org")
 	{
+		feishuOrg.GET("/departments", h.FeishuOrg.ListDepartments)
+		feishuOrg.GET("/users", h.FeishuOrg.ListUsers)
+		feishuOrg.GET("/sync-runs", h.FeishuOrg.ListSyncRuns)
+		feishuOrg.POST("/sync-runs", h.FeishuOrg.RunManualReconcile)
 		feishuOrg.PUT("/departments/:department_id/groups", h.FeishuOrg.SetDepartmentGroupPool)
 		feishuOrg.PUT("/users/:id/overrides", h.FeishuOrg.SetUserOverrideGroupGrants)
 	}

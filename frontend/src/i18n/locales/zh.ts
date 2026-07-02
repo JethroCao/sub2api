@@ -406,6 +406,8 @@ export default {
     profile: '个人资料',
     users: '用户管理',
     groups: '分组管理',
+    feishuOrg: '飞书组织权限',
+    orgManager: '部门成员授权',
     channels: '渠道管理',
     availableChannels: '可用渠道',
     subscriptions: '订阅管理',
@@ -1488,6 +1490,10 @@ export default {
 
   // Admin
   admin: {
+    feishuOrg: {
+      title: '飞书组织权限',
+      description: '配置飞书部门分组池与员工授权'
+    },
     // Dashboard
     dashboard: {
       title: '管理控制台',

@@ -155,6 +155,17 @@ func (h *AuthHandler) ensureEmailPasswordLoginAllowsUser(ctx context.Context, us
 	return infraerrors.Forbidden("EMAIL_PASSWORD_LOGIN_DISABLED", "Email password login is disabled.")
 }
 
+func (h *AuthHandler) ensureEmailPasswordRegistrationAllowed(ctx context.Context) error {
+	if h == nil || h.settingSvc == nil {
+		return nil
+	}
+	settings, err := h.settingSvc.GetPublicSettings(ctx)
+	if err != nil || settings == nil || settings.EmailPasswordLoginEnabled {
+		return nil
+	}
+	return infraerrors.Forbidden("EMAIL_PASSWORD_LOGIN_DISABLED", "Email password registration is disabled.")
+}
+
 func (h *AuthHandler) ensureBackendModeAllowsNewUserLogin(ctx context.Context) error {
 	if h == nil || !h.isBackendModeEnabled(ctx) {
 		return nil
@@ -179,6 +190,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := h.ensureEmailPasswordRegistrationAllowed(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 
@@ -211,6 +226,10 @@ func (h *AuthHandler) SendVerifyCode(c *gin.Context) {
 	var req SendVerifyCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := h.ensureEmailPasswordRegistrationAllowed(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 

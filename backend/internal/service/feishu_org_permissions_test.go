@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
@@ -249,6 +250,286 @@ func TestFeishuOrgPermissionServiceSetDepartmentGroupPoolRevokesInvalidManagerGr
 	require.NoError(t, err)
 	require.Equal(t, []int64{11}, result.GroupIDs)
 	require.Equal(t, []int64{42, 43}, result.RevokedUserIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceListDepartmentsIncludesAssignableGroups(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	syncedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT d.tenant_key").
+		WithArgs("tenant-a", 50, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"tenant_key",
+			"open_department_id",
+			"parent_open_department_id",
+			"name",
+			"path",
+			"status",
+			"leader_open_ids",
+			"last_synced_at",
+			"employee_count",
+			"manager_count",
+			"assignable_groups",
+		}).AddRow(
+			"tenant-a",
+			"dept-a",
+			"",
+			"研发部",
+			"/研发部",
+			"active",
+			`["ou_manager"]`,
+			syncedAt,
+			int64(3),
+			int64(1),
+			`[{"id":11,"name":"Claude Code","platform":"anthropic","subscription_type":"pro"}]`,
+		))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	result, err := svc.ListDepartments(context.Background(), FeishuOrgListInput{
+		TenantKey: "tenant-a",
+		Limit:     50,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	dept := result.Items[0]
+	require.Equal(t, "dept-a", dept.OpenDepartmentID)
+	require.Equal(t, []string{"ou_manager"}, dept.LeaderOpenIDs)
+	require.Equal(t, int64(3), dept.EmployeeCount)
+	require.Equal(t, int64(1), dept.ManagerCount)
+	require.Equal(t, int64(11), dept.AssignableGroups[0].ID)
+	require.Equal(t, "Claude Code", dept.AssignableGroups[0].Name)
+	require.NotNil(t, dept.LastSyncedAt)
+	require.Equal(t, syncedAt, *dept.LastSyncedAt)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceListManagerUsersIncludesAssignableGroups(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("WITH RECURSIVE manager_roots").
+		WithArgs(int64(7), 50, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"user_id",
+			"local_email",
+			"local_username",
+			"local_status",
+			"tenant_key",
+			"open_id",
+			"union_id",
+			"feishu_user_id",
+			"name",
+			"email",
+			"employee_no",
+			"status",
+			"primary_open_department_id",
+			"primary_department_name",
+			"primary_department_path",
+			"department_open_ids",
+			"department_manager_group_ids",
+			"super_admin_override_group_ids",
+			"effective_group_ids",
+			"assignable_groups",
+			"last_synced_at",
+		}).AddRow(
+			int64(42),
+			"a@example.com",
+			"员工A",
+			"active",
+			"tenant-a",
+			"ou_a",
+			"on_a",
+			"u_a",
+			"员工A",
+			"a@example.com",
+			"E001",
+			"active",
+			"dept-a",
+			"研发部",
+			"/研发部",
+			`["dept-a","dept-side"]`,
+			`[11]`,
+			`[77]`,
+			`[11,77]`,
+			`[{"id":11,"name":"Claude Code","platform":"anthropic","subscription_type":"pro"}]`,
+			nil,
+		))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	result, err := svc.ListManagerUsers(context.Background(), 7, FeishuOrgListInput{Limit: 50})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	user := result.Items[0]
+	require.Equal(t, int64(42), user.UserID)
+	require.Equal(t, "dept-a", user.PrimaryOpenDepartmentID)
+	require.Equal(t, []string{"dept-a", "dept-side"}, user.DepartmentOpenIDs)
+	require.Equal(t, []int64{11}, user.DepartmentManagerGroupIDs)
+	require.Equal(t, []int64{77}, user.SuperAdminOverrideGroupIDs)
+	require.Equal(t, []int64{11, 77}, user.EffectiveGroupIDs)
+	require.Equal(t, int64(11), user.AssignableGroups[0].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceListSyncRuns(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	startedAt := time.Date(2026, 7, 3, 13, 0, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 7, 3, 13, 1, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT id, status, started_at").
+		WithArgs(20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"status",
+			"started_at",
+			"finished_at",
+			"departments_synced",
+			"users_synced",
+			"managers_synced",
+			"users_to_create",
+			"users_to_disable",
+			"bindings_missing",
+			"review_required",
+			"error_message",
+			"triggered_by_user_id",
+		}).AddRow(
+			int64(9),
+			"success",
+			startedAt,
+			finishedAt,
+			3,
+			12,
+			2,
+			1,
+			0,
+			4,
+			false,
+			"",
+			int64(1),
+		))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	result, err := svc.ListSyncRuns(context.Background(), FeishuOrgListInput{Limit: 20})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	run := result.Items[0]
+	require.Equal(t, int64(9), run.ID)
+	require.Equal(t, "success", run.Status)
+	require.Equal(t, 12, run.UsersSynced)
+	require.Equal(t, 4, run.BindingsMissing)
+	require.NotNil(t, run.FinishedAt)
+	require.Equal(t, finishedAt, *run.FinishedAt)
+	require.Equal(t, int64(1), run.TriggeredByUserID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceRunManualReconcileAutoDisablesDepartedUsers(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	startedAt := time.Date(2026, 7, 3, 14, 0, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 7, 3, 14, 1, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM feishu_org_users").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(100))
+	mock.ExpectQuery("SELECT DISTINCT org_user.user_id").
+		WithArgs(StatusActive, RoleAdmin).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(int64(42)).AddRow(int64(43)))
+	mock.ExpectExec("UPDATE users").
+		WithArgs(StatusDisabled, sqlmock.AnyArg(), RoleAdmin).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec("INSERT INTO feishu_org_permission_audit_logs").
+		WithArgs(int64(7), int64(42), "", "", "auto_disable_user", "feishu_departure_auto_disable").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO feishu_org_permission_audit_logs").
+		WithArgs(int64(7), int64(43), "", "", "auto_disable_user", "feishu_departure_auto_disable").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("INSERT INTO feishu_org_sync_runs").
+		WithArgs("success", 2, false, "", int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"status",
+			"started_at",
+			"finished_at",
+			"departments_synced",
+			"users_synced",
+			"managers_synced",
+			"users_to_create",
+			"users_to_disable",
+			"bindings_missing",
+			"review_required",
+			"error_message",
+			"triggered_by_user_id",
+		}).AddRow(int64(10), "success", startedAt, finishedAt, 0, 0, 0, 0, 2, 0, false, "", int64(7)))
+
+	invalidator := &feishuOrgPermissionInvalidatorStub{}
+	svc := NewFeishuOrgPermissionService(db, invalidator)
+	result, err := svc.RunManualReconcile(context.Background(), 7, FeishuDeparturePolicy{
+		Action:           FeishuDepartedUserActionAutoDisable,
+		ThresholdCount:   10,
+		ThresholdPercent: 20,
+	})
+
+	require.NoError(t, err)
+	require.True(t, result.Decision.AutoDisable)
+	require.Equal(t, []int64{42, 43}, result.Decision.UserIDs)
+	require.Equal(t, int64(10), result.SyncRun.ID)
+	require.Equal(t, []int64{42, 43}, invalidator.userIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceRunManualReconcileRequiresReviewWhenThresholdExceeded(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	startedAt := time.Date(2026, 7, 3, 14, 0, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 7, 3, 14, 1, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM feishu_org_users").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(10))
+	mock.ExpectQuery("SELECT DISTINCT org_user.user_id").
+		WithArgs(StatusActive, RoleAdmin).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(int64(42)).AddRow(int64(43)).AddRow(int64(44)))
+	mock.ExpectExec("INSERT INTO feishu_org_permission_audit_logs").
+		WithArgs(int64(7), int64(0), "", "", "sync_blocked_for_review", "FEISHU_DEPARTURE_THRESHOLD_EXCEEDED").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("INSERT INTO feishu_org_sync_runs").
+		WithArgs("partial_failed", 3, true, "FEISHU_DEPARTURE_THRESHOLD_EXCEEDED", int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"status",
+			"started_at",
+			"finished_at",
+			"departments_synced",
+			"users_synced",
+			"managers_synced",
+			"users_to_create",
+			"users_to_disable",
+			"bindings_missing",
+			"review_required",
+			"error_message",
+			"triggered_by_user_id",
+		}).AddRow(int64(11), "partial_failed", startedAt, finishedAt, 0, 0, 0, 0, 3, 0, true, "FEISHU_DEPARTURE_THRESHOLD_EXCEEDED", int64(7)))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	result, err := svc.RunManualReconcile(context.Background(), 7, FeishuDeparturePolicy{
+		Action:           FeishuDepartedUserActionAutoDisable,
+		ThresholdCount:   10,
+		ThresholdPercent: 20,
+	})
+
+	require.NoError(t, err)
+	require.True(t, result.Decision.RequiresReview)
+	require.Equal(t, "FEISHU_DEPARTURE_THRESHOLD_EXCEEDED", result.Decision.Reason)
+	require.Equal(t, "partial_failed", result.SyncRun.Status)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

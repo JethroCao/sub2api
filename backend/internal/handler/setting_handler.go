@@ -77,6 +77,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		AdminEmailLoginFallbackEnabled:   settings.AdminEmailLoginFallbackEnabled,
 		DingTalkOAuthEnabled:             settings.DingTalkOAuthEnabled,
 		FeishuOAuthEnabled:               settings.FeishuOAuthEnabled,
+		FeishuOrgSyncEnabled:             settings.FeishuOrgSyncEnabled,
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		WeChatOAuthEnabled:               settings.WeChatOAuthEnabled,
 		WeChatOAuthOpenEnabled:           settings.WeChatOAuthOpenEnabled,
