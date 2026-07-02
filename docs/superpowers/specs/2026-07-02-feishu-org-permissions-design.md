@@ -9,6 +9,7 @@
 最终效果：
 
 - 员工用飞书登录。
+- 超管可以分别控制飞书登录、邮箱密码登录、开放注册。
 - 超管给部门配置“可分配的模型分组池”。
 - 部门负责人只能给自己部门内员工分配部门池子里的组。
 - 超管仍然可以给任意员工单独额外授权其他组。
@@ -49,6 +50,49 @@
 - 超管个人额外授权的组。
 
 为了兼容当前 API Key 和路由检查逻辑，所有带来源的授权变化都要重新计算员工的有效专属分组，并同步到现有 `user_allowed_groups` 表。
+
+## 登录入口开关与安全策略
+
+### 开关模型
+
+新增或使用以下开关：
+
+- `feishu_connect_enabled`：是否启用飞书登录。关闭后不显示飞书入口，后端飞书 OAuth 接口也拒绝请求。
+- `email_password_login_enabled`：是否启用邮箱密码登录。关闭后普通用户不能用邮箱和密码登录。
+- `admin_email_login_fallback_enabled`：邮箱密码登录关闭时，是否保留超管邮箱备用登录。默认建议开启，避免飞书配置异常时超管被锁在系统外。
+- `registration_enabled`：沿用现有开放注册开关，控制新用户是否可自行注册。
+- `feishu_connect_bypass_registration`：在飞书企业限制为 `internal_only` 时，是否允许本企业飞书用户绕过全局 `registration_enabled=false` 自动创建本地账号。
+
+推荐的公司内配置：
+
+```text
+启用飞书登录：开
+启用邮箱密码登录：关
+保留超管邮箱备用登录：开
+开放注册：关
+飞书企业限制：仅本企业
+允许本企业飞书用户绕过关闭注册自动创建账号：开
+```
+
+### 登录页显示规则
+
+- `email_password_login_enabled=true` 时，显示现有邮箱密码表单。
+- `email_password_login_enabled=false` 且 `admin_email_login_fallback_enabled=true` 时，不显示普通邮箱登录表单，只显示弱化的“管理员邮箱登录”入口。
+- `email_password_login_enabled=false` 且 `admin_email_login_fallback_enabled=false` 时，完全隐藏邮箱密码登录入口。
+- `feishu_connect_enabled=true` 时显示飞书登录入口。
+- 当只启用飞书登录时，飞书按钮作为主登录动作，不需要显示“其他方式登录”的分割线。
+- 注册入口只有在 `registration_enabled=true` 且 `email_password_login_enabled=true` 时才显示。
+- 忘记密码入口只有在邮箱密码登录可用，或当前处于管理员邮箱备用登录界面时才显示。
+
+### 后端拒绝规则
+
+- `/api/v1/auth/login` 必须检查 `email_password_login_enabled`。
+- 邮箱密码登录关闭且超管备用登录关闭时，`/api/v1/auth/login` 直接返回邮箱登录已关闭。
+- 邮箱密码登录关闭但超管备用登录开启时，后端只允许 `role=admin` 的用户通过邮箱密码登录；普通用户即使密码正确也拒绝。
+- `/api/v1/auth/register` 必须同时满足 `registration_enabled=true` 和 `email_password_login_enabled=true`，否则拒绝邮箱注册。
+- `/api/v1/auth/oauth/feishu/*` 必须检查 `feishu_connect_enabled`。
+- 飞书自动创建账号仅在 `feishu_connect_bypass_registration=true` 且企业限制策略为 `internal_only` 时允许绕过全局关闭注册。
+- 后端 public settings 需要暴露 `email_password_login_enabled`、`admin_email_login_fallback_enabled`、`feishu_oauth_enabled`，供登录页决定显示状态。
 
 ## 数据模型
 
@@ -149,6 +193,7 @@
 
 - 在后端认证 provider 校验和前端 provider 类型中增加 `feishu`。
 - 增加飞书配置项：内部应用凭证、回调地址、租户限制、同步选项、是否自动创建用户。
+- 飞书登录区域参考钉钉登录区域，并包含 `feishu_connect_enabled` 总开关。
 - 增加这些接口：
   - `GET /api/v1/auth/oauth/feishu/start`
   - `GET /api/v1/auth/oauth/feishu/callback`
@@ -160,6 +205,16 @@
   - `provider_type=feishu`
   - `provider_key=<tenant_key>`
   - `provider_subject=<open_id 或 union_id>`
+
+### 邮箱密码登录
+
+新增邮箱密码登录总开关，和现有注册开关解耦：
+
+- `email_password_login_enabled=true`：保持现有邮箱密码登录行为。
+- `email_password_login_enabled=false`：普通用户不能通过邮箱密码登录。
+- `admin_email_login_fallback_enabled=true`：邮箱登录关闭时，仍允许超管用邮箱密码进入后台。
+
+该开关不能只做前端隐藏。后端登录接口必须强制校验，否则用户仍可直接调用 `/api/v1/auth/login`。
 
 ### 组织权限服务
 
@@ -200,6 +255,12 @@
 - 员工详情抽屉，支持个人额外授权。
 - 授权来源标签：部门负责人分配、超管个人额外授权。
 
+在“安全与认证”设置页补充：
+
+- 邮箱密码登录卡片：启用邮箱密码登录、保留超管邮箱备用登录。
+- 飞书登录卡片：启用飞书登录、App ID、App Secret、回调地址、企业限制策略、绕过关闭注册自动创建账号、同步姓名、同步企业邮箱、同步部门、同步组织架构。
+- 登录入口预览或提示：当邮箱密码登录关闭且飞书登录未正确配置时，提示可能锁定普通员工登录。
+
 ### 部门负责人后台
 
 新增“我的部门”页面：
@@ -231,6 +292,11 @@
 - 超管可以创建部门分组池和个人额外授权。
 - 员工转部门会撤销旧部门授权，并保留超管个人额外授权。
 - 重新计算有效分组后，`user_allowed_groups` 写入结果正确。
+- 邮箱密码登录关闭时，普通用户不能通过 `/auth/login` 登录。
+- 邮箱密码登录关闭但超管备用登录开启时，超管可以通过邮箱密码登录。
+- 开放注册开启但邮箱密码登录关闭时，邮箱注册仍被拒绝。
+- 飞书登录关闭时，飞书 OAuth start/callback/create-account/bind-login 接口都拒绝请求。
+- 飞书 `internal_only` + bypass registration 开启时，本企业飞书用户可以在关闭注册的情况下自动创建账号。
 
 ### 后端集成测试
 
@@ -245,17 +311,21 @@
 - 部门负责人页面只渲染权限范围内的部门、员工和分组。
 - 部门负责人保存时，只发送部门负责人授权变化。
 - 超管个人额外授权标签是只读的，不能被部门负责人切换。
+- 登录页根据邮箱密码登录、超管备用登录、飞书登录开关显示正确入口。
+- 只启用飞书登录时，飞书按钮作为主登录动作。
 
 ## 落地顺序
 
 1. 增加 schema、迁移、服务接口和测试。
-2. 增加飞书 OAuth 配置和登录/绑定流程。
-3. 增加手动组织同步，以及部门/用户只读接口。
-4. 增加部门分组池和部门负责人管理接口。
-5. 增加员工授权接口，以及 `user_allowed_groups` 有效权限重算。
-6. 增加超管组织权限页面。
-7. 增加部门负责人页面和 scoped routes。
-8. 跑后端和前端测试；用真实飞书内部应用做一次手动冒烟测试。
+2. 增加登录入口开关：邮箱密码登录、超管邮箱备用登录、飞书登录开关。
+3. 增加飞书 OAuth 配置和登录/绑定流程。
+4. 增加登录页显示规则和 public settings 暴露。
+5. 增加手动组织同步，以及部门/用户只读接口。
+6. 增加部门分组池和部门负责人管理接口。
+7. 增加员工授权接口，以及 `user_allowed_groups` 有效权限重算。
+8. 增加超管组织权限页面。
+9. 增加部门负责人页面和 scoped routes。
+10. 跑后端和前端测试；用真实飞书内部应用做一次手动冒烟测试。
 
 ## 实现假设
 
@@ -271,3 +341,4 @@
 - 当前运行时分组访问继续兼容 `user_allowed_groups`。
 - 带来源授权能区分部门分配和个人额外授权。
 - 员工转部门后的授权处理规则已经明确。
+- 登录入口开关已经区分：邮箱密码登录、开放注册、飞书登录、超管备用登录。
