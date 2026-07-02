@@ -24,6 +24,9 @@ type SystemSettings struct {
 	LoginAgreementMode               string
 	LoginAgreementUpdatedAt          string
 	LoginAgreementDocuments          []LoginAgreementDocument
+	EmailPasswordLoginEnabled        bool
+	AdminEmailLoginFallbackEnabled   bool
+	LoginEntrySettingsExplicit       bool
 
 	SMTPHost               string
 	SMTPPort               int
@@ -65,6 +68,23 @@ type SystemSettings struct {
 	DingTalkConnectSyncCorpEmailAttrName   string
 	DingTalkConnectSyncDisplayNameAttrName string
 	DingTalkConnectSyncDeptAttrName        string
+
+	// Feishu Connect OAuth 登录
+	FeishuConnectEnabled                 bool
+	FeishuConnectAppID                   string
+	FeishuConnectAppSecret               string
+	FeishuConnectAppSecretConfigured     bool
+	FeishuConnectRedirectURL             string
+	FeishuConnectTenantRestrictionPolicy string
+	FeishuConnectAllowedTenantKey        string
+	FeishuConnectBypassRegistration      bool
+	FeishuConnectSyncEmail               bool
+	FeishuConnectSyncDisplayName         bool
+	FeishuConnectSyncDepartment          bool
+	FeishuOrgSyncEnabled                 bool
+	FeishuDepartedUserAction             string
+	FeishuSyncDisableThresholdCount      int
+	FeishuSyncDisableThresholdPercent    int
 
 	// WeChat Connect OAuth 登录
 	WeChatConnectEnabled                   bool
@@ -276,19 +296,22 @@ type PublicSettings struct {
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 
-	LinuxDoOAuthEnabled      bool
-	DingTalkOAuthEnabled     bool
-	WeChatOAuthEnabled       bool
-	WeChatOAuthOpenEnabled   bool
-	WeChatOAuthMPEnabled     bool
-	WeChatOAuthMobileEnabled bool
-	BackendModeEnabled       bool
-	PaymentEnabled           bool
-	OIDCOAuthEnabled         bool
-	OIDCOAuthProviderName    string
-	GitHubOAuthEnabled       bool
-	GoogleOAuthEnabled       bool
-	Version                  string
+	LinuxDoOAuthEnabled            bool
+	DingTalkOAuthEnabled           bool
+	FeishuOAuthEnabled             bool
+	EmailPasswordLoginEnabled      bool
+	AdminEmailLoginFallbackEnabled bool
+	WeChatOAuthEnabled             bool
+	WeChatOAuthOpenEnabled         bool
+	WeChatOAuthMPEnabled           bool
+	WeChatOAuthMobileEnabled       bool
+	BackendModeEnabled             bool
+	PaymentEnabled                 bool
+	OIDCOAuthEnabled               bool
+	OIDCOAuthProviderName          string
+	GitHubOAuthEnabled             bool
+	GoogleOAuthEnabled             bool
+	Version                        string
 
 	BalanceLowNotifyEnabled     bool
 	AccountQuotaNotifyEnabled   bool

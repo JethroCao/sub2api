@@ -45,6 +45,24 @@ func coerceDeprecatedDingTalkCorpPolicy(policy string) string {
 	return policy
 }
 
+func NormalizeFeishuTenantRestrictionPolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case FeishuTenantRestrictionNone:
+		return FeishuTenantRestrictionNone
+	default:
+		return FeishuTenantRestrictionInternalOnly
+	}
+}
+
+func normalizeFeishuDepartedUserAction(action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case FeishuDepartedUserActionAutoDisable:
+		return FeishuDepartedUserActionAutoDisable
+	default:
+		return FeishuDepartedUserActionAutoDisable
+	}
+}
+
 var (
 	ErrRegistrationDisabled   = infraerrors.Forbidden("REGISTRATION_DISABLED", "registration is currently disabled")
 	ErrSettingNotFound        = infraerrors.NotFound("SETTING_NOT_FOUND", "setting not found")
@@ -793,6 +811,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyLoginAgreementMode,
 		SettingKeyLoginAgreementUpdatedAt,
 		SettingKeyLoginAgreementDocuments,
+		SettingKeyEmailPasswordLoginEnabled,
+		SettingKeyAdminEmailLoginFallbackEnabled,
 		SettingKeyTurnstileEnabled,
 		SettingKeyTurnstileSiteKey,
 		SettingKeyAPIKeyACLTrustForwardedIP,
@@ -812,6 +832,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyCustomEndpoints,
 		SettingKeyLinuxDoConnectEnabled,
 		SettingKeyDingTalkConnectEnabled,
+		SettingKeyFeishuConnectEnabled,
 		SettingKeyWeChatConnectEnabled,
 		SettingKeyWeChatConnectAppID,
 		SettingKeyWeChatConnectAppSecret,
@@ -866,6 +887,20 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		dingTalkEnabled = raw == "true"
 	} else {
 		dingTalkEnabled = s.cfg != nil && s.cfg.DingTalk.Enabled
+	}
+	feishuEnabled := false
+	if raw, ok := settings[SettingKeyFeishuConnectEnabled]; ok {
+		feishuEnabled = raw == "true"
+	} else {
+		feishuEnabled = s.cfg != nil && s.cfg.Feishu.Enabled
+	}
+	emailPasswordLoginEnabled := true
+	if raw, ok := settings[SettingKeyEmailPasswordLoginEnabled]; ok {
+		emailPasswordLoginEnabled = raw != "false"
+	}
+	adminEmailLoginFallbackEnabled := true
+	if raw, ok := settings[SettingKeyAdminEmailLoginFallbackEnabled]; ok {
+		adminEmailLoginFallbackEnabled = raw != "false"
 	}
 	oidcEnabled := false
 	if raw, ok := settings[SettingKeyOIDCConnectEnabled]; ok {
@@ -935,8 +970,11 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		TablePageSizeOptions:             tablePageSizeOptions,
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		EmailPasswordLoginEnabled:        emailPasswordLoginEnabled,
+		AdminEmailLoginFallbackEnabled:   adminEmailLoginFallbackEnabled,
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		DingTalkOAuthEnabled:             dingTalkEnabled,
+		FeishuOAuthEnabled:               feishuEnabled,
 		WeChatOAuthEnabled:               weChatEnabled,
 		WeChatOAuthOpenEnabled:           weChatOpenEnabled,
 		WeChatOAuthMPEnabled:             weChatMPEnabled,
@@ -1459,8 +1497,11 @@ type PublicSettingsInjectionPayload struct {
 	TablePageSizeOptions             []int                    `json:"table_page_size_options"`
 	CustomMenuItems                  json.RawMessage          `json:"custom_menu_items"`
 	CustomEndpoints                  json.RawMessage          `json:"custom_endpoints"`
+	EmailPasswordLoginEnabled        bool                     `json:"email_password_login_enabled"`
+	AdminEmailLoginFallbackEnabled   bool                     `json:"admin_email_login_fallback_enabled"`
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
+	FeishuOAuthEnabled               bool                     `json:"feishu_oauth_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
 	WeChatOAuthOpenEnabled           bool                     `json:"wechat_oauth_open_enabled"`
 	WeChatOAuthMPEnabled             bool                     `json:"wechat_oauth_mp_enabled"`
@@ -1528,8 +1569,11 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		TablePageSizeOptions:             settings.TablePageSizeOptions,
 		CustomMenuItems:                  filterUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                  safeRawJSONArray(settings.CustomEndpoints),
+		EmailPasswordLoginEnabled:        settings.EmailPasswordLoginEnabled,
+		AdminEmailLoginFallbackEnabled:   settings.AdminEmailLoginFallbackEnabled,
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		DingTalkOAuthEnabled:             settings.DingTalkOAuthEnabled,
+		FeishuOAuthEnabled:               settings.FeishuOAuthEnabled,
 		WeChatOAuthEnabled:               settings.WeChatOAuthEnabled,
 		WeChatOAuthOpenEnabled:           settings.WeChatOAuthOpenEnabled,
 		WeChatOAuthMPEnabled:             settings.WeChatOAuthMPEnabled,
@@ -1963,6 +2007,14 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if settings.GoogleOAuthFrontendRedirectURL == "" {
 		settings.GoogleOAuthFrontendRedirectURL = defaultGoogleOAuthFrontend
 	}
+	normalizeFeishuSystemSettings(settings)
+	if !settings.LoginEntrySettingsExplicit {
+		settings.EmailPasswordLoginEnabled = true
+		settings.AdminEmailLoginFallbackEnabled = true
+	}
+	if err := s.ValidateLoginEntryAvailability(ctx, settings); err != nil {
+		return nil, err
+	}
 
 	updates := make(map[string]string)
 
@@ -1992,6 +2044,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyLoginAgreementMode] = settings.LoginAgreementMode
 	updates[SettingKeyLoginAgreementUpdatedAt] = settings.LoginAgreementUpdatedAt
 	updates[SettingKeyLoginAgreementDocuments] = loginAgreementDocumentsJSON
+	updates[SettingKeyEmailPasswordLoginEnabled] = strconv.FormatBool(settings.EmailPasswordLoginEnabled)
+	updates[SettingKeyAdminEmailLoginFallbackEnabled] = strconv.FormatBool(settings.AdminEmailLoginFallbackEnabled)
 
 	// 邮件服务设置（只有非空才更新密码）
 	updates[SettingKeySMTPHost] = settings.SMTPHost
@@ -2039,6 +2093,24 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyDingTalkConnectSyncCorpEmailAttrName] = settings.DingTalkConnectSyncCorpEmailAttrName
 	updates[SettingKeyDingTalkConnectSyncDisplayNameAttrName] = settings.DingTalkConnectSyncDisplayNameAttrName
 	updates[SettingKeyDingTalkConnectSyncDeptAttrName] = settings.DingTalkConnectSyncDeptAttrName
+
+	// Feishu Connect OAuth 登录
+	updates[SettingKeyFeishuConnectEnabled] = strconv.FormatBool(settings.FeishuConnectEnabled)
+	updates[SettingKeyFeishuConnectAppID] = settings.FeishuConnectAppID
+	updates[SettingKeyFeishuConnectRedirectURL] = settings.FeishuConnectRedirectURL
+	if settings.FeishuConnectAppSecret != "" {
+		updates[SettingKeyFeishuConnectAppSecret] = settings.FeishuConnectAppSecret
+	}
+	updates[SettingKeyFeishuConnectTenantRestrictionPolicy] = settings.FeishuConnectTenantRestrictionPolicy
+	updates[SettingKeyFeishuConnectAllowedTenantKey] = settings.FeishuConnectAllowedTenantKey
+	updates[SettingKeyFeishuConnectBypassRegistration] = strconv.FormatBool(settings.FeishuConnectBypassRegistration)
+	updates[SettingKeyFeishuConnectSyncEmail] = strconv.FormatBool(settings.FeishuConnectSyncEmail)
+	updates[SettingKeyFeishuConnectSyncDisplayName] = strconv.FormatBool(settings.FeishuConnectSyncDisplayName)
+	updates[SettingKeyFeishuConnectSyncDepartment] = strconv.FormatBool(settings.FeishuConnectSyncDepartment)
+	updates[SettingKeyFeishuOrgSyncEnabled] = strconv.FormatBool(settings.FeishuOrgSyncEnabled)
+	updates[SettingKeyFeishuDepartedUserAction] = settings.FeishuDepartedUserAction
+	updates[SettingKeyFeishuSyncDisableThresholdCount] = strconv.Itoa(settings.FeishuSyncDisableThresholdCount)
+	updates[SettingKeyFeishuSyncDisableThresholdPercent] = strconv.Itoa(settings.FeishuSyncDisableThresholdPercent)
 
 	// Generic OIDC OAuth 登录
 	updates[SettingKeyOIDCConnectEnabled] = strconv.FormatBool(settings.OIDCConnectEnabled)
@@ -2263,6 +2335,215 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyAllowUserViewErrorRequests] = strconv.FormatBool(settings.AllowUserViewErrorRequests)
 
 	return updates, nil
+}
+
+func normalizeFeishuSystemSettings(settings *SystemSettings) {
+	if settings == nil {
+		return
+	}
+	settings.FeishuConnectAppID = strings.TrimSpace(settings.FeishuConnectAppID)
+	settings.FeishuConnectAppSecret = strings.TrimSpace(settings.FeishuConnectAppSecret)
+	settings.FeishuConnectRedirectURL = strings.TrimSpace(settings.FeishuConnectRedirectURL)
+	settings.FeishuConnectTenantRestrictionPolicy = NormalizeFeishuTenantRestrictionPolicy(settings.FeishuConnectTenantRestrictionPolicy)
+	settings.FeishuConnectAllowedTenantKey = strings.TrimSpace(settings.FeishuConnectAllowedTenantKey)
+	settings.FeishuDepartedUserAction = normalizeFeishuDepartedUserAction(settings.FeishuDepartedUserAction)
+	if settings.FeishuSyncDisableThresholdCount <= 0 {
+		settings.FeishuSyncDisableThresholdCount = FeishuDefaultDisableThresholdCount
+	}
+	if settings.FeishuSyncDisableThresholdPercent <= 0 {
+		settings.FeishuSyncDisableThresholdPercent = FeishuDefaultDisableThresholdPct
+	}
+	if settings.FeishuConnectTenantRestrictionPolicy != FeishuTenantRestrictionInternalOnly {
+		settings.FeishuConnectBypassRegistration = false
+		settings.FeishuOrgSyncEnabled = false
+	}
+}
+
+func (s *SettingService) ValidateLoginEntryAvailability(ctx context.Context, settings *SystemSettings) error {
+	if settings == nil {
+		return nil
+	}
+	normalizeFeishuSystemSettings(settings)
+
+	if settings.FeishuConnectEnabled && !feishuConnectConfigComplete(settings) {
+		return infraerrors.BadRequest(
+			"FEISHU_CONFIG_INCOMPLETE",
+			"feishu login requires app id, app secret, redirect url, and tenant restriction policy",
+		)
+	}
+
+	hasUserLoginEntry := settings.EmailPasswordLoginEnabled ||
+		settings.LinuxDoConnectEnabled ||
+		settings.DingTalkConnectEnabled ||
+		settings.FeishuConnectEnabled ||
+		settings.WeChatConnectEnabled ||
+		settings.OIDCConnectEnabled ||
+		settings.GitHubOAuthEnabled ||
+		settings.GoogleOAuthEnabled
+	if !hasUserLoginEntry {
+		return infraerrors.BadRequest(
+			"LOGIN_ENTRY_UNAVAILABLE",
+			"at least one user login entry must remain available",
+		)
+	}
+	if !settings.EmailPasswordLoginEnabled && !settings.AdminEmailLoginFallbackEnabled {
+		return infraerrors.BadRequest(
+			"ADMIN_LOGIN_FALLBACK_REQUIRED",
+			"admin email fallback login must remain enabled when normal email login is disabled",
+		)
+	}
+	return nil
+}
+
+func feishuConnectConfigComplete(settings *SystemSettings) bool {
+	if settings == nil {
+		return false
+	}
+	return strings.TrimSpace(settings.FeishuConnectAppID) != "" &&
+		strings.TrimSpace(settings.FeishuConnectAppSecret) != "" &&
+		strings.TrimSpace(settings.FeishuConnectRedirectURL) != "" &&
+		strings.TrimSpace(settings.FeishuConnectTenantRestrictionPolicy) != ""
+}
+
+func defaultFeishuConnectConfig(base config.FeishuConnectConfig) config.FeishuConnectConfig {
+	if strings.TrimSpace(base.AuthorizeURL) == "" {
+		base.AuthorizeURL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
+	}
+	if strings.TrimSpace(base.TokenURL) == "" {
+		base.TokenURL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
+	}
+	if strings.TrimSpace(base.UserInfoURL) == "" {
+		base.UserInfoURL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+	}
+	if strings.TrimSpace(base.Scopes) == "" {
+		base.Scopes = "contact:user.base:readonly contact:user.email:readonly contact:user.employee_id:readonly"
+	}
+	if strings.TrimSpace(base.FrontendRedirectURL) == "" {
+		base.FrontendRedirectURL = "/auth/feishu/callback"
+	}
+	base.TenantRestrictionPolicy = NormalizeFeishuTenantRestrictionPolicy(base.TenantRestrictionPolicy)
+	base.DepartedUserAction = normalizeFeishuDepartedUserAction(base.DepartedUserAction)
+	if base.DisableThresholdCount <= 0 {
+		base.DisableThresholdCount = FeishuDefaultDisableThresholdCount
+	}
+	if base.DisableThresholdPercent <= 0 {
+		base.DisableThresholdPercent = FeishuDefaultDisableThresholdPct
+	}
+	return base
+}
+
+type FeishuPreflightCapability struct {
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type FeishuPreflightWarning struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+type FeishuPreflightResult struct {
+	OK                bool                      `json:"ok"`
+	Login             FeishuPreflightCapability `json:"login"`
+	Email             FeishuPreflightCapability `json:"email"`
+	OrgSync           FeishuPreflightCapability `json:"org_sync"`
+	DepartedDetection FeishuPreflightCapability `json:"departed_detection"`
+	ManagerRelation   FeishuPreflightCapability `json:"manager_relation"`
+	Warnings          []FeishuPreflightWarning  `json:"warnings"`
+}
+
+func (s *SettingService) CheckFeishuPreflight(ctx context.Context) (*FeishuPreflightResult, error) {
+	settings, err := s.GetAllSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	authDefaults, err := s.GetAuthSourceDefaultSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &FeishuPreflightResult{
+		OK: true,
+		Login: FeishuPreflightCapability{
+			Status:  "ok",
+			Message: "feishu login configuration is complete",
+		},
+		Email: FeishuPreflightCapability{
+			Status:  "disabled",
+			Message: "email sync is disabled",
+		},
+		OrgSync: FeishuPreflightCapability{
+			Status:  "disabled",
+			Message: "feishu org sync is disabled",
+		},
+		DepartedDetection: FeishuPreflightCapability{
+			Status:  "disabled",
+			Message: "departed user detection requires org sync",
+		},
+		ManagerRelation: FeishuPreflightCapability{
+			Status:  "disabled",
+			Message: "manager relation sync requires org sync",
+		},
+	}
+	if !settings.FeishuConnectEnabled {
+		result.OK = false
+		result.Login = FeishuPreflightCapability{
+			Status:  "disabled",
+			Reason:  "FEISHU_DISABLED",
+			Message: "feishu login is disabled",
+		}
+		return result, nil
+	}
+	if !feishuConnectConfigComplete(settings) {
+		result.OK = false
+		result.Login = FeishuPreflightCapability{
+			Status:  "error",
+			Reason:  "FEISHU_CONFIG_INCOMPLETE",
+			Message: "feishu app id, app secret, redirect url, or tenant restriction policy is missing",
+		}
+	}
+	if settings.FeishuConnectSyncEmail {
+		result.Email = FeishuPreflightCapability{
+			Status:  "warning",
+			Reason:  "FEISHU_EMAIL_SCOPE_UNVERIFIED",
+			Message: "email sync is enabled; runtime verification still depends on Feishu scope and tenant email availability",
+		}
+	}
+	if settings.FeishuOrgSyncEnabled {
+		result.OrgSync = FeishuPreflightCapability{
+			Status:  "warning",
+			Reason:  "FEISHU_ORG_SCOPE_UNVERIFIED",
+			Message: "org sync is enabled; runtime verification still depends on Feishu contact scopes",
+		}
+		if settings.FeishuDepartedUserAction == FeishuDepartedUserActionAutoDisable {
+			result.DepartedDetection = FeishuPreflightCapability{
+				Status:  "warning",
+				Reason:  "FEISHU_DEPARTED_SCOPE_UNVERIFIED",
+				Message: "departed users will auto-disable locally after org sync verifies access",
+			}
+		}
+		result.ManagerRelation = FeishuPreflightCapability{
+			Status:  "warning",
+			Reason:  "FEISHU_MANAGER_SCOPE_UNVERIFIED",
+			Message: "manager relation sync depends on Feishu employee data scope",
+		}
+	}
+	if authDefaults == nil || !feishuDefaultGrantConfigured(authDefaults.Feishu) {
+		result.Warnings = append(result.Warnings, FeishuPreflightWarning{
+			Reason:  "FEISHU_DEFAULT_GRANT_UNCONFIGURED",
+			Message: "feishu source default grant is not configured; auto-created Feishu users will fall back to system defaults",
+		})
+	}
+	return result, nil
+}
+
+func feishuDefaultGrantConfigured(settings ProviderDefaultGrantSettings) bool {
+	return settings.Balance > 0 ||
+		len(settings.Subscriptions) > 0 ||
+		settings.GrantOnSignup ||
+		settings.GrantOnFirstBind ||
+		len(settings.PlatformQuotas) > 0
 }
 
 // validateDefaultPlatformQuotaMap 校验 platform quota map 的合法性：
@@ -3067,6 +3348,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyLoginAgreementMode:                        defaultLoginAgreementMode,
 		SettingKeyLoginAgreementUpdatedAt:                   defaultLoginAgreementDate,
 		SettingKeyLoginAgreementDocuments:                   loginAgreementDocumentsJSON,
+		SettingKeyEmailPasswordLoginEnabled:                 "true",
+		SettingKeyAdminEmailLoginFallbackEnabled:            "true",
 		SettingKeyAPIKeyACLTrustForwardedIP:                 "false",
 		SettingKeySiteName:                                  "Sub2API",
 		SettingKeySiteLogo:                                  "",
@@ -3124,6 +3407,20 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOIDCConnectUserInfoEmailPath:              "",
 		SettingKeyOIDCConnectUserInfoIDPath:                 "",
 		SettingKeyOIDCConnectUserInfoUsernamePath:           "",
+		SettingKeyFeishuConnectEnabled:                      "false",
+		SettingKeyFeishuConnectAppID:                        "",
+		SettingKeyFeishuConnectAppSecret:                    "",
+		SettingKeyFeishuConnectRedirectURL:                  "",
+		SettingKeyFeishuConnectTenantRestrictionPolicy:      FeishuTenantRestrictionInternalOnly,
+		SettingKeyFeishuConnectAllowedTenantKey:             "",
+		SettingKeyFeishuConnectBypassRegistration:           "false",
+		SettingKeyFeishuConnectSyncEmail:                    "true",
+		SettingKeyFeishuConnectSyncDisplayName:              "true",
+		SettingKeyFeishuConnectSyncDepartment:               "true",
+		SettingKeyFeishuOrgSyncEnabled:                      "false",
+		SettingKeyFeishuDepartedUserAction:                  FeishuDepartedUserActionAutoDisable,
+		SettingKeyFeishuSyncDisableThresholdCount:           strconv.Itoa(FeishuDefaultDisableThresholdCount),
+		SettingKeyFeishuSyncDisableThresholdPercent:         strconv.Itoa(FeishuDefaultDisableThresholdPct),
 		SettingKeyDefaultConcurrency:                        strconv.Itoa(s.cfg.Default.UserConcurrency),
 		SettingKeyDefaultBalance:                            strconv.FormatFloat(s.cfg.Default.UserBalance, 'f', 8, 64),
 		SettingKeyAffiliateRebateRate:                       strconv.FormatFloat(AffiliateRebateRateDefault, 'f', 8, 64),
@@ -3266,6 +3563,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		LoginAgreementMode:               normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
 		LoginAgreementUpdatedAt:          loginAgreementUpdatedAt,
 		LoginAgreementDocuments:          loginAgreementDocuments,
+		EmailPasswordLoginEnabled:        true,
+		AdminEmailLoginFallbackEnabled:   true,
 		SMTPHost:                         settings[SettingKeySMTPHost],
 		SMTPUsername:                     settings[SettingKeySMTPUsername],
 		SMTPFrom:                         settings[SettingKeySMTPFrom],
@@ -3343,6 +3642,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	// 敏感信息直接返回，方便测试连接时使用
 	result.SMTPPassword = settings[SettingKeySMTPPassword]
 	result.TurnstileSecretKey = settings[SettingKeyTurnstileSecretKey]
+	if raw, ok := settings[SettingKeyEmailPasswordLoginEnabled]; ok {
+		result.EmailPasswordLoginEnabled = strings.TrimSpace(raw) != "false"
+	}
+	if raw, ok := settings[SettingKeyAdminEmailLoginFallbackEnabled]; ok {
+		result.AdminEmailLoginFallbackEnabled = strings.TrimSpace(raw) != "false"
+	}
 
 	// LinuxDo Connect 设置：
 	// - 兼容 config.yaml/env（避免老部署因为未迁移到数据库设置而被意外关闭）
@@ -3505,6 +3810,87 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 			result.DingTalkConnectSyncDeptAttrName = "钉钉部门"
 		}
 	}
+
+	// Feishu Connect 设置：
+	// - 兼容 config.yaml/env
+	// - 支持后台系统设置覆盖并持久化（存储于 DB）
+	feishuBase := defaultFeishuConnectConfig(config.FeishuConnectConfig{})
+	if s.cfg != nil {
+		feishuBase = defaultFeishuConnectConfig(s.cfg.Feishu)
+	}
+
+	if raw, ok := settings[SettingKeyFeishuConnectEnabled]; ok {
+		result.FeishuConnectEnabled = raw == "true"
+	} else {
+		result.FeishuConnectEnabled = feishuBase.Enabled
+	}
+	if v, ok := settings[SettingKeyFeishuConnectAppID]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectAppID = strings.TrimSpace(v)
+	} else {
+		result.FeishuConnectAppID = feishuBase.AppID
+	}
+	if v, ok := settings[SettingKeyFeishuConnectRedirectURL]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectRedirectURL = strings.TrimSpace(v)
+	} else {
+		result.FeishuConnectRedirectURL = feishuBase.RedirectURL
+	}
+	result.FeishuConnectAppSecret = strings.TrimSpace(settings[SettingKeyFeishuConnectAppSecret])
+	if result.FeishuConnectAppSecret == "" {
+		result.FeishuConnectAppSecret = strings.TrimSpace(feishuBase.AppSecret)
+	}
+	result.FeishuConnectAppSecretConfigured = result.FeishuConnectAppSecret != ""
+	if v, ok := settings[SettingKeyFeishuConnectTenantRestrictionPolicy]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectTenantRestrictionPolicy = strings.TrimSpace(v)
+	} else {
+		result.FeishuConnectTenantRestrictionPolicy = feishuBase.TenantRestrictionPolicy
+	}
+	result.FeishuConnectTenantRestrictionPolicy = NormalizeFeishuTenantRestrictionPolicy(result.FeishuConnectTenantRestrictionPolicy)
+	if v, ok := settings[SettingKeyFeishuConnectAllowedTenantKey]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectAllowedTenantKey = strings.TrimSpace(v)
+	} else {
+		result.FeishuConnectAllowedTenantKey = feishuBase.AllowedTenantKey
+	}
+	if v, ok := settings[SettingKeyFeishuConnectBypassRegistration]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectBypassRegistration = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuConnectBypassRegistration = feishuBase.BypassRegistration
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncEmail]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectSyncEmail = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuConnectSyncEmail = feishuBase.SyncEmail
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncDisplayName]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectSyncDisplayName = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuConnectSyncDisplayName = feishuBase.SyncDisplayName
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncDepartment]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectSyncDepartment = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuConnectSyncDepartment = feishuBase.SyncDepartment
+	}
+	if v, ok := settings[SettingKeyFeishuOrgSyncEnabled]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuOrgSyncEnabled = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuOrgSyncEnabled = feishuBase.OrgSyncEnabled
+	}
+	if v, ok := settings[SettingKeyFeishuDepartedUserAction]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuDepartedUserAction = strings.TrimSpace(v)
+	} else {
+		result.FeishuDepartedUserAction = feishuBase.DepartedUserAction
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyFeishuSyncDisableThresholdCount])); err == nil && v > 0 {
+		result.FeishuSyncDisableThresholdCount = v
+	} else {
+		result.FeishuSyncDisableThresholdCount = feishuBase.DisableThresholdCount
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyFeishuSyncDisableThresholdPercent])); err == nil && v > 0 {
+		result.FeishuSyncDisableThresholdPercent = v
+	} else {
+		result.FeishuSyncDisableThresholdPercent = feishuBase.DisableThresholdPercent
+	}
+	normalizeFeishuSystemSettings(result)
 
 	// Generic OIDC 设置：
 	// - 兼容 config.yaml/env
@@ -4404,6 +4790,125 @@ func (s *SettingService) GetDingTalkConnectOAuthConfig(ctx context.Context) (con
 
 	if err := config.ValidateDingTalkConfig(effective); err != nil {
 		return config.DingTalkConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", err.Error())
+	}
+
+	return effective, nil
+}
+
+func (s *SettingService) GetFeishuConnectOAuthConfig(ctx context.Context) (config.FeishuConnectConfig, error) {
+	if s == nil || s.cfg == nil {
+		return config.FeishuConnectConfig{}, infraerrors.ServiceUnavailable("CONFIG_NOT_READY", "config not loaded")
+	}
+
+	effective := defaultFeishuConnectConfig(s.cfg.Feishu)
+	keys := []string{
+		SettingKeyFeishuConnectEnabled,
+		SettingKeyFeishuConnectAppID,
+		SettingKeyFeishuConnectAppSecret,
+		SettingKeyFeishuConnectRedirectURL,
+		SettingKeyFeishuConnectTenantRestrictionPolicy,
+		SettingKeyFeishuConnectAllowedTenantKey,
+		SettingKeyFeishuConnectBypassRegistration,
+		SettingKeyFeishuConnectSyncEmail,
+		SettingKeyFeishuConnectSyncDisplayName,
+		SettingKeyFeishuConnectSyncDepartment,
+		SettingKeyFeishuOrgSyncEnabled,
+		SettingKeyFeishuDepartedUserAction,
+		SettingKeyFeishuSyncDisableThresholdCount,
+		SettingKeyFeishuSyncDisableThresholdPercent,
+	}
+	settings, err := s.settingRepo.GetMultiple(ctx, keys)
+	if err != nil {
+		return config.FeishuConnectConfig{}, fmt.Errorf("get feishu connect settings: %w", err)
+	}
+
+	if raw, ok := settings[SettingKeyFeishuConnectEnabled]; ok {
+		effective.Enabled = raw == "true"
+	}
+	if v, ok := settings[SettingKeyFeishuConnectAppID]; ok && strings.TrimSpace(v) != "" {
+		effective.AppID = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyFeishuConnectAppSecret]; ok && strings.TrimSpace(v) != "" {
+		effective.AppSecret = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyFeishuConnectRedirectURL]; ok && strings.TrimSpace(v) != "" {
+		effective.RedirectURL = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyFeishuConnectTenantRestrictionPolicy]; ok && strings.TrimSpace(v) != "" {
+		effective.TenantRestrictionPolicy = strings.TrimSpace(v)
+	}
+	effective.TenantRestrictionPolicy = NormalizeFeishuTenantRestrictionPolicy(effective.TenantRestrictionPolicy)
+	if v, ok := settings[SettingKeyFeishuConnectAllowedTenantKey]; ok && strings.TrimSpace(v) != "" {
+		effective.AllowedTenantKey = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyFeishuConnectBypassRegistration]; ok && strings.TrimSpace(v) != "" {
+		effective.BypassRegistration = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncEmail]; ok && strings.TrimSpace(v) != "" {
+		effective.SyncEmail = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncDisplayName]; ok && strings.TrimSpace(v) != "" {
+		effective.SyncDisplayName = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncDepartment]; ok && strings.TrimSpace(v) != "" {
+		effective.SyncDepartment = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuOrgSyncEnabled]; ok && strings.TrimSpace(v) != "" {
+		effective.OrgSyncEnabled = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuDepartedUserAction]; ok && strings.TrimSpace(v) != "" {
+		effective.DepartedUserAction = normalizeFeishuDepartedUserAction(v)
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyFeishuSyncDisableThresholdCount])); err == nil && v > 0 {
+		effective.DisableThresholdCount = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyFeishuSyncDisableThresholdPercent])); err == nil && v > 0 {
+		effective.DisableThresholdPercent = v
+	}
+	effective = defaultFeishuConnectConfig(effective)
+	if effective.TenantRestrictionPolicy != FeishuTenantRestrictionInternalOnly {
+		effective.BypassRegistration = false
+		effective.OrgSyncEnabled = false
+	}
+
+	if !effective.Enabled {
+		return config.FeishuConnectConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "feishu oauth login is disabled")
+	}
+	if strings.TrimSpace(effective.AppID) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth app id not configured")
+	}
+	if strings.TrimSpace(effective.AppSecret) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth app secret not configured")
+	}
+	if strings.TrimSpace(effective.AuthorizeURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth authorize url not configured")
+	}
+	if strings.TrimSpace(effective.TokenURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth token url not configured")
+	}
+	if strings.TrimSpace(effective.UserInfoURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth userinfo url not configured")
+	}
+	if strings.TrimSpace(effective.RedirectURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth redirect url not configured")
+	}
+	if strings.TrimSpace(effective.FrontendRedirectURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth frontend redirect url not configured")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.AuthorizeURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth authorize url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.TokenURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth token url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.UserInfoURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth userinfo url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.RedirectURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth redirect url invalid")
+	}
+	if err := config.ValidateFrontendRedirectURL(effective.FrontendRedirectURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth frontend redirect url invalid")
 	}
 
 	return effective, nil

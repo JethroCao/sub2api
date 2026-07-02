@@ -74,6 +74,7 @@ type Config struct {
 	WeChat                  WeChatConnectConfig           `mapstructure:"wechat_connect"`
 	OIDC                    OIDCConnectConfig             `mapstructure:"oidc_connect"`
 	DingTalk                DingTalkConnectConfig         `mapstructure:"dingtalk_connect"`
+	Feishu                  FeishuConnectConfig           `mapstructure:"feishu_connect"`
 	GitHubOAuth             EmailOAuthProviderConfig      `mapstructure:"github_oauth"`
 	GoogleOAuth             EmailOAuthProviderConfig      `mapstructure:"google_oauth"`
 	Default                 DefaultConfig                 `mapstructure:"default"`
@@ -285,6 +286,29 @@ type DingTalkConnectConfig struct {
 	AttributeSyncOverwritePolicy string   `mapstructure:"attribute_sync_overwrite_policy"`
 }
 
+type FeishuConnectConfig struct {
+	Enabled             bool   `mapstructure:"enabled"`
+	AppID               string `mapstructure:"app_id"`
+	AppSecret           string `mapstructure:"app_secret"`
+	AuthorizeURL        string `mapstructure:"authorize_url"`
+	TokenURL            string `mapstructure:"token_url"`
+	UserInfoURL         string `mapstructure:"userinfo_url"`
+	Scopes              string `mapstructure:"scopes"`
+	RedirectURL         string `mapstructure:"redirect_url"`
+	FrontendRedirectURL string `mapstructure:"frontend_redirect_url"`
+
+	TenantRestrictionPolicy string `mapstructure:"tenant_restriction_policy"` // none | internal_only
+	AllowedTenantKey        string `mapstructure:"allowed_tenant_key"`
+	BypassRegistration      bool   `mapstructure:"bypass_registration"`
+	SyncEmail               bool   `mapstructure:"sync_email"`
+	SyncDisplayName         bool   `mapstructure:"sync_display_name"`
+	SyncDepartment          bool   `mapstructure:"sync_department"`
+	OrgSyncEnabled          bool   `mapstructure:"org_sync_enabled"`
+	DepartedUserAction      string `mapstructure:"departed_user_action"` // auto_disable
+	DisableThresholdCount   int    `mapstructure:"sync_disable_threshold_count"`
+	DisableThresholdPercent int    `mapstructure:"sync_disable_threshold_percent"`
+}
+
 type EmailOAuthProviderConfig struct {
 	Enabled             bool   `mapstructure:"enabled"`
 	ClientID            string `mapstructure:"client_id"`
@@ -302,6 +326,11 @@ const (
 	defaultWeChatConnectMode             = "open"
 	defaultWeChatConnectScopes           = "snsapi_login"
 	defaultWeChatConnectFrontendRedirect = "/auth/wechat/callback"
+	defaultFeishuConnectAuthorizeURL     = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
+	defaultFeishuConnectTokenURL         = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
+	defaultFeishuConnectUserInfoURL      = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+	defaultFeishuConnectScopes           = "contact:user.base:readonly contact:user.email:readonly contact:user.employee_id:readonly"
+	defaultFeishuConnectFrontendRedirect = "/auth/feishu/callback"
 )
 
 func firstNonEmptyString(values ...string) string {
@@ -1701,6 +1730,27 @@ func setDefaults() {
 	viper.SetDefault("dingtalk_connect.corp_restriction_policy", "none")
 	viper.SetDefault("dingtalk_connect.require_email", true)
 	viper.SetDefault("dingtalk_connect.username_overwrite_policy", "if_empty")
+
+	// Feishu Connect OAuth 登录
+	viper.SetDefault("feishu_connect.enabled", false)
+	viper.SetDefault("feishu_connect.app_id", "")
+	viper.SetDefault("feishu_connect.app_secret", "")
+	viper.SetDefault("feishu_connect.authorize_url", defaultFeishuConnectAuthorizeURL)
+	viper.SetDefault("feishu_connect.token_url", defaultFeishuConnectTokenURL)
+	viper.SetDefault("feishu_connect.userinfo_url", defaultFeishuConnectUserInfoURL)
+	viper.SetDefault("feishu_connect.scopes", defaultFeishuConnectScopes)
+	viper.SetDefault("feishu_connect.redirect_url", "")
+	viper.SetDefault("feishu_connect.frontend_redirect_url", defaultFeishuConnectFrontendRedirect)
+	viper.SetDefault("feishu_connect.tenant_restriction_policy", "internal_only")
+	viper.SetDefault("feishu_connect.allowed_tenant_key", "")
+	viper.SetDefault("feishu_connect.bypass_registration", false)
+	viper.SetDefault("feishu_connect.sync_email", true)
+	viper.SetDefault("feishu_connect.sync_display_name", true)
+	viper.SetDefault("feishu_connect.sync_department", true)
+	viper.SetDefault("feishu_connect.org_sync_enabled", false)
+	viper.SetDefault("feishu_connect.departed_user_action", "auto_disable")
+	viper.SetDefault("feishu_connect.sync_disable_threshold_count", 10)
+	viper.SetDefault("feishu_connect.sync_disable_threshold_percent", 20)
 
 	// Database
 	viper.SetDefault("database.host", "localhost")
