@@ -871,6 +871,8 @@ func authSourceSignupSettings(defaults *AuthSourceDefaultSettings, signupSource 
 		return defaults.Google, true
 	case "dingtalk":
 		return defaults.DingTalk, true
+	case "feishu":
+		return defaults.Feishu, true
 	default:
 		return ProviderDefaultGrantSettings{}, false
 	}

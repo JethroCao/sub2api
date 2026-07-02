@@ -242,6 +242,7 @@ type AuthSourceDefaultSettings struct {
 	GitHub                       ProviderDefaultGrantSettings
 	Google                       ProviderDefaultGrantSettings
 	DingTalk                     ProviderDefaultGrantSettings
+	Feishu                       ProviderDefaultGrantSettings
 	ForceEmailOnThirdPartySignup bool
 }
 
@@ -320,6 +321,15 @@ var (
 		grantOnSignup:    SettingKeyAuthSourceDefaultDingTalkGrantOnSignup,
 		grantOnFirstBind: SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind,
 		platformQuotas:   SettingKeyAuthSourcePlatformQuotas("dingtalk"),
+	}
+	feishuAuthSourceDefaultKeys = authSourceDefaultKeySet{
+		source:           "feishu",
+		balance:          SettingKeyAuthSourceDefaultFeishuBalance,
+		concurrency:      SettingKeyAuthSourceDefaultFeishuConcurrency,
+		subscriptions:    SettingKeyAuthSourceDefaultFeishuSubscriptions,
+		grantOnSignup:    SettingKeyAuthSourceDefaultFeishuGrantOnSignup,
+		grantOnFirstBind: SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind,
+		platformQuotas:   SettingKeyAuthSourcePlatformQuotas("feishu"),
 	}
 )
 
@@ -2288,6 +2298,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 		settings.GitHub.Subscriptions,
 		settings.Google.Subscriptions,
 		settings.DingTalk.Subscriptions,
+		settings.Feishu.Subscriptions,
 	} {
 		if err := s.validateDefaultSubscriptionGroups(ctx, subscriptions); err != nil {
 			return nil, err
@@ -2306,6 +2317,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 		{"github", settings.GitHub.PlatformQuotas},
 		{"google", settings.Google.PlatformQuotas},
 		{"dingtalk", settings.DingTalk.PlatformQuotas},
+		{"feishu", settings.Feishu.PlatformQuotas},
 	} {
 		if pgs.pq != nil {
 			if err := validateDefaultPlatformQuotaMap(pgs.pq); err != nil {
@@ -2314,7 +2326,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 		}
 	}
 
-	updates := make(map[string]string, 36)
+	updates := make(map[string]string, 42)
 	writeProviderDefaultGrantUpdates(updates, emailAuthSourceDefaultKeys, settings.Email)
 	writeProviderDefaultGrantUpdates(updates, linuxDoAuthSourceDefaultKeys, settings.LinuxDo)
 	writeProviderDefaultGrantUpdates(updates, oidcAuthSourceDefaultKeys, settings.OIDC)
@@ -2322,6 +2334,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 	writeProviderDefaultGrantUpdates(updates, gitHubAuthSourceDefaultKeys, settings.GitHub)
 	writeProviderDefaultGrantUpdates(updates, googleAuthSourceDefaultKeys, settings.Google)
 	writeProviderDefaultGrantUpdates(updates, dingTalkAuthSourceDefaultKeys, settings.DingTalk)
+	writeProviderDefaultGrantUpdates(updates, feishuAuthSourceDefaultKeys, settings.Feishu)
 	updates[SettingKeyForceEmailOnThirdPartySignup] = strconv.FormatBool(settings.ForceEmailOnThirdPartySignup)
 	return updates, nil
 }
@@ -2940,6 +2953,11 @@ func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*Aut
 		SettingKeyAuthSourceDefaultDingTalkSubscriptions,
 		SettingKeyAuthSourceDefaultDingTalkGrantOnSignup,
 		SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind,
+		SettingKeyAuthSourceDefaultFeishuBalance,
+		SettingKeyAuthSourceDefaultFeishuConcurrency,
+		SettingKeyAuthSourceDefaultFeishuSubscriptions,
+		SettingKeyAuthSourceDefaultFeishuGrantOnSignup,
+		SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind,
 		SettingKeyAuthSourcePlatformQuotas("email"),
 		SettingKeyAuthSourcePlatformQuotas("linuxdo"),
 		SettingKeyAuthSourcePlatformQuotas("oidc"),
@@ -2947,6 +2965,7 @@ func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*Aut
 		SettingKeyAuthSourcePlatformQuotas("github"),
 		SettingKeyAuthSourcePlatformQuotas("google"),
 		SettingKeyAuthSourcePlatformQuotas("dingtalk"),
+		SettingKeyAuthSourcePlatformQuotas("feishu"),
 		SettingKeyForceEmailOnThirdPartySignup,
 	}
 
@@ -2963,6 +2982,7 @@ func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*Aut
 		GitHub:                       parseProviderDefaultGrantSettings(settings, gitHubAuthSourceDefaultKeys),
 		Google:                       parseProviderDefaultGrantSettings(settings, googleAuthSourceDefaultKeys),
 		DingTalk:                     parseProviderDefaultGrantSettings(settings, dingTalkAuthSourceDefaultKeys),
+		Feishu:                       parseProviderDefaultGrantSettings(settings, feishuAuthSourceDefaultKeys),
 		ForceEmailOnThirdPartySignup: settings[SettingKeyForceEmailOnThirdPartySignup] == "true",
 	}, nil
 }
@@ -3147,6 +3167,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAuthSourceDefaultDingTalkSubscriptions:    "[]",
 		SettingKeyAuthSourceDefaultDingTalkGrantOnSignup:    "false",
 		SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind: "false",
+		SettingKeyAuthSourceDefaultFeishuBalance:            "0",
+		SettingKeyAuthSourceDefaultFeishuConcurrency:        "5",
+		SettingKeyAuthSourceDefaultFeishuSubscriptions:      "[]",
+		SettingKeyAuthSourceDefaultFeishuGrantOnSignup:      "false",
+		SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind:   "false",
 		SettingKeyForceEmailOnThirdPartySignup:              "false",
 		SettingKeySMTPPort:                                  "587",
 		SettingKeySMTPUseTLS:                                "false",

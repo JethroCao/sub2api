@@ -21,7 +21,10 @@ func (s *authSourceDefaultsRepoStub) Get(ctx context.Context, key string) (*Sett
 }
 
 func (s *authSourceDefaultsRepoStub) GetValue(ctx context.Context, key string) (string, error) {
-	panic("unexpected GetValue call")
+	if value, ok := s.values[key]; ok {
+		return value, nil
+	}
+	return "", ErrSettingNotFound
 }
 
 func (s *authSourceDefaultsRepoStub) Set(ctx context.Context, key, value string) error {
@@ -85,9 +88,37 @@ func TestSettingService_GetAuthSourceDefaultSettings_ParsesValuesAndDefaults(t *
 	require.True(t, got.LinuxDo.GrantOnFirstBind)
 	require.Equal(t, 5, got.OIDC.Concurrency)
 	require.Equal(t, 5, got.WeChat.Concurrency)
+	require.Equal(t, 5, got.Feishu.Concurrency)
 	require.False(t, got.OIDC.GrantOnSignup)
 	require.False(t, got.WeChat.GrantOnSignup)
+	require.False(t, got.Feishu.GrantOnSignup)
 	require.True(t, got.ForceEmailOnThirdPartySignup)
+}
+
+func TestAuthSourceDefaultSettingsIncludesFeishu(t *testing.T) {
+	repo := &authSourceDefaultsRepoStub{
+		values: map[string]string{
+			SettingKeyAuthSourceDefaultFeishuBalance:          "18.75",
+			SettingKeyAuthSourceDefaultFeishuConcurrency:      "9",
+			SettingKeyAuthSourceDefaultFeishuSubscriptions:    `[{"group_id":77,"validity_days":45}]`,
+			SettingKeyAuthSourceDefaultFeishuGrantOnSignup:    "true",
+			SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind: "true",
+			SettingKeyAuthSourcePlatformQuotas("feishu"):      `{"openai":{"daily":1.5}}`,
+		},
+	}
+	svc := NewSettingService(repo, &config.Config{})
+
+	got, err := svc.GetAuthSourceDefaultSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 18.75, got.Feishu.Balance)
+	require.Equal(t, 9, got.Feishu.Concurrency)
+	require.Equal(t, []DefaultSubscriptionSetting{{GroupID: 77, ValidityDays: 45}}, got.Feishu.Subscriptions)
+	require.True(t, got.Feishu.GrantOnSignup)
+	require.True(t, got.Feishu.GrantOnFirstBind)
+	require.NotNil(t, got.Feishu.PlatformQuotas)
+	require.NotNil(t, got.Feishu.PlatformQuotas["openai"])
+	require.NotNil(t, got.Feishu.PlatformQuotas["openai"].DailyLimitUSD)
+	require.Equal(t, 1.5, *got.Feishu.PlatformQuotas["openai"].DailyLimitUSD)
 }
 
 func TestSettingService_UpdateAuthSourceDefaultSettings_PersistsAllKeys(t *testing.T) {
@@ -123,6 +154,16 @@ func TestSettingService_UpdateAuthSourceDefaultSettings_PersistsAllKeys(t *testi
 			GrantOnSignup:    false,
 			GrantOnFirstBind: false,
 		},
+		Feishu: ProviderDefaultGrantSettings{
+			Balance:          8.5,
+			Concurrency:      10,
+			Subscriptions:    []DefaultSubscriptionSetting{{GroupID: 88, ValidityDays: 120}},
+			GrantOnSignup:    true,
+			GrantOnFirstBind: true,
+			PlatformQuotas: map[string]*DefaultPlatformQuotaSetting{
+				"openai": {DailyLimitUSD: floatPtrForAuthSourceDefaultsTest(2.25)},
+			},
+		},
 		ForceEmailOnThirdPartySignup: true,
 	})
 	require.NoError(t, err)
@@ -135,4 +176,56 @@ func TestSettingService_UpdateAuthSourceDefaultSettings_PersistsAllKeys(t *testi
 	var got []DefaultSubscriptionSetting
 	require.NoError(t, json.Unmarshal([]byte(repo.updates[SettingKeyAuthSourceDefaultWeChatSubscriptions]), &got))
 	require.Equal(t, []DefaultSubscriptionSetting{{GroupID: 24, ValidityDays: 90}}, got)
+
+	var feishuSubscriptions []DefaultSubscriptionSetting
+	require.NoError(t, json.Unmarshal([]byte(repo.updates[SettingKeyAuthSourceDefaultFeishuSubscriptions]), &feishuSubscriptions))
+	require.Equal(t, []DefaultSubscriptionSetting{{GroupID: 88, ValidityDays: 120}}, feishuSubscriptions)
+	require.Equal(t, "8.50000000", repo.updates[SettingKeyAuthSourceDefaultFeishuBalance])
+	require.Equal(t, "10", repo.updates[SettingKeyAuthSourceDefaultFeishuConcurrency])
+	require.Equal(t, "true", repo.updates[SettingKeyAuthSourceDefaultFeishuGrantOnSignup])
+	require.Equal(t, "true", repo.updates[SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind])
+	require.JSONEq(t, `{"openai":{"daily":2.25,"weekly":null,"monthly":null}}`, repo.updates[SettingKeyAuthSourcePlatformQuotas("feishu")])
+}
+
+func TestUpdateAuthSourceDefaultSettingsPersistsFeishu(t *testing.T) {
+	repo := &authSourceDefaultsRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateAuthSourceDefaultSettings(context.Background(), &AuthSourceDefaultSettings{
+		Feishu: ProviderDefaultGrantSettings{
+			Balance:          31.5,
+			Concurrency:      11,
+			Subscriptions:    []DefaultSubscriptionSetting{{GroupID: 93, ValidityDays: 12}},
+			GrantOnSignup:    true,
+			GrantOnFirstBind: false,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "31.50000000", repo.updates[SettingKeyAuthSourceDefaultFeishuBalance])
+	require.Equal(t, "11", repo.updates[SettingKeyAuthSourceDefaultFeishuConcurrency])
+	require.Equal(t, "true", repo.updates[SettingKeyAuthSourceDefaultFeishuGrantOnSignup])
+	require.Equal(t, "false", repo.updates[SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind])
+	require.JSONEq(t, `[{"group_id":93,"validity_days":12}]`, repo.updates[SettingKeyAuthSourceDefaultFeishuSubscriptions])
+}
+
+func TestResolveAuthSourceDefaultsFallsBackWhenFeishuUnset(t *testing.T) {
+	repo := &authSourceDefaultsRepoStub{
+		values: map[string]string{
+			SettingKeyDefaultBalance:       "6.5",
+			SettingKeyDefaultConcurrency:   "4",
+			SettingKeyDefaultSubscriptions: `[{"group_id":12,"validity_days":7}]`,
+		},
+	}
+	svc := NewSettingService(repo, &config.Config{Default: config.DefaultConfig{UserBalance: 6.5, UserConcurrency: 4}})
+
+	got, enabled, err := svc.ResolveAuthSourceGrantSettings(context.Background(), "feishu", false)
+	require.NoError(t, err)
+	require.False(t, enabled)
+	require.Equal(t, 6.5, got.Balance)
+	require.Equal(t, 4, got.Concurrency)
+	require.Equal(t, []DefaultSubscriptionSetting{{GroupID: 12, ValidityDays: 7}}, got.Subscriptions)
+}
+
+func floatPtrForAuthSourceDefaultsTest(v float64) *float64 {
+	return &v
 }

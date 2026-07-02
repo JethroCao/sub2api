@@ -123,6 +123,21 @@ const WeChatConnectSyntheticEmailDomain = "@wechat-connect.invalid"
 // DingTalkConnectSyntheticEmailDomain 是 DingTalk Connect 用户的合成邮箱后缀（RFC 保留域名）。
 const DingTalkConnectSyntheticEmailDomain = "@dingtalk-connect.invalid"
 
+// FeishuConnectSyntheticEmailDomain 是 Feishu Connect 用户的合成邮箱后缀（RFC 保留域名）。
+const FeishuConnectSyntheticEmailDomain = "@feishu-connect.invalid"
+
+// Auth source constants
+const (
+	AuthSourceEmail    = "email"
+	AuthSourceLinuxDo  = "linuxdo"
+	AuthSourceOIDC     = "oidc"
+	AuthSourceWeChat   = "wechat"
+	AuthSourceGitHub   = "github"
+	AuthSourceGoogle   = "google"
+	AuthSourceDingTalk = "dingtalk"
+	AuthSourceFeishu   = "feishu"
+)
+
 // Setting keys
 const (
 	// 注册设置
@@ -303,6 +318,11 @@ const (
 	SettingKeyAuthSourceDefaultDingTalkSubscriptions    = "auth_source_default_dingtalk_subscriptions"
 	SettingKeyAuthSourceDefaultDingTalkGrantOnSignup    = "auth_source_default_dingtalk_grant_on_signup"
 	SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind = "auth_source_default_dingtalk_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultFeishuBalance            = "auth_source_default_feishu_balance"
+	SettingKeyAuthSourceDefaultFeishuConcurrency        = "auth_source_default_feishu_concurrency"
+	SettingKeyAuthSourceDefaultFeishuSubscriptions      = "auth_source_default_feishu_subscriptions"
+	SettingKeyAuthSourceDefaultFeishuGrantOnSignup      = "auth_source_default_feishu_grant_on_signup"
+	SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind   = "auth_source_default_feishu_grant_on_first_bind"
 	SettingKeyForceEmailOnThirdPartySignup              = "force_email_on_third_party_signup"
 
 	// 管理员 API Key
