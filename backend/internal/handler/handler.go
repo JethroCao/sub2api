@@ -58,6 +58,7 @@ type Handlers struct {
 	Payment          *PaymentHandler
 	PaymentWebhook   *PaymentWebhookHandler
 	AvailableChannel *AvailableChannelHandler
+	FeishuOrg        *FeishuOrgHandler
 }
 
 // BuildInfo contains build-time information

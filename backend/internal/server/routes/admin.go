@@ -106,6 +106,17 @@ func RegisterAdminRoutes(
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
+
+		// 飞书组织权限
+		registerFeishuOrgAdminRoutes(admin, h)
+	}
+}
+
+func registerFeishuOrgAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	feishuOrg := admin.Group("/feishu-org")
+	{
+		feishuOrg.PUT("/departments/:department_id/groups", h.FeishuOrg.SetDepartmentGroupPool)
+		feishuOrg.PUT("/users/:id/overrides", h.FeishuOrg.SetUserOverrideGroupGrants)
 	}
 }
 
