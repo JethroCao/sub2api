@@ -2410,7 +2410,7 @@ func defaultFeishuConnectConfig(base config.FeishuConnectConfig) config.FeishuCo
 		base.AuthorizeURL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
 	}
 	if strings.TrimSpace(base.TokenURL) == "" {
-		base.TokenURL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
+		base.TokenURL = "https://accounts.feishu.cn/oauth/v3/token"
 	}
 	if strings.TrimSpace(base.UserInfoURL) == "" {
 		base.UserInfoURL = "https://open.feishu.cn/open-apis/authen/v1/user_info"

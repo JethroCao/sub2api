@@ -327,7 +327,7 @@ const (
 	defaultWeChatConnectScopes           = "snsapi_login"
 	defaultWeChatConnectFrontendRedirect = "/auth/wechat/callback"
 	defaultFeishuConnectAuthorizeURL     = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
-	defaultFeishuConnectTokenURL         = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
+	defaultFeishuConnectTokenURL         = "https://accounts.feishu.cn/oauth/v3/token"
 	defaultFeishuConnectUserInfoURL      = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 	defaultFeishuConnectScopes           = "contact:user.base:readonly contact:user.email:readonly contact:user.employee_id:readonly"
 	defaultFeishuConnectFrontendRedirect = "/auth/feishu/callback"

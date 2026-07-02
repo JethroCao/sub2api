@@ -208,6 +208,14 @@ func RegisterAuthRoutes(
 			}),
 			h.Auth.CreateDingTalkOAuthAccount,
 		)
+		auth.GET("/oauth/feishu/start", h.Auth.FeishuOAuthStart)
+		auth.GET("/oauth/feishu/bind/start", func(c *gin.Context) {
+			query := c.Request.URL.Query()
+			query.Set("intent", "bind_current_user")
+			c.Request.URL.RawQuery = query.Encode()
+			h.Auth.FeishuOAuthStart(c)
+		})
+		auth.GET("/oauth/feishu/callback", h.Auth.FeishuOAuthCallback)
 	}
 
 	// 公开设置（无需认证）
