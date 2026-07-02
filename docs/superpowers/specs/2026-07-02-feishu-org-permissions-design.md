@@ -1,255 +1,273 @@
-# Feishu Org Permissions Design
+# 飞书组织权限设计
 
-> **Status:** Draft spec for user review. Approved product direction from conversation: department group pools + department manager assignment + super-admin personal override.
+> **状态：** 待用户评审。当前方向来自前面对话：部门分组池 + 部门负责人分配 + 超管个人额外授权。
 
-## Goal
+## 目标
 
-Add a Feishu/Lark internal-company identity and organization permission layer so company users can log in through a Feishu internal app, be mapped to the company org structure, and receive model group access through controlled department delegation.
+为公司内部使用场景增加飞书/Lark 企业身份和组织权限层。公司员工通过飞书内部应用登录后，系统能识别员工所在部门、同步组织架构，并按部门授权规则给员工分配可用模型分组。
 
-## Non-Goals
+最终效果：
 
-- Do not add Volcengine Ark provider routing in this feature.
-- Do not add payment or billing changes in this feature.
-- Do not turn department managers into global admins.
-- Do not replace the existing `user_allowed_groups` behavior for runtime group access; this feature adds source-aware grants and syncs effective access into the existing access path.
+- 员工用飞书登录。
+- 超管给部门配置“可分配的模型分组池”。
+- 部门负责人只能给自己部门内员工分配部门池子里的组。
+- 超管仍然可以给任意员工单独额外授权其他组。
 
-## Product Model
+## 不做什么
 
-### Roles
+- 本功能不接火山方舟。
+- 本功能不改支付和计费逻辑。
+- 不把部门负责人变成全局 `admin`。
+- 不直接替换现有 `user_allowed_groups` 运行时机制；本功能新增“带来源的授权记录”，再把最终有效权限同步到现有访问路径里。
 
-- **Super Admin:** Existing `admin` role. Can configure Feishu, sync org data, assign department group pools, appoint department managers, and grant personal user overrides.
-- **Department Manager:** A normal user with scoped org permissions. Can manage employees only inside departments they manage, and can assign only groups that the super admin allowed for those departments.
-- **Employee:** A normal user. Uses API keys and model groups granted through department manager assignment, super-admin override, or existing public group behavior.
+## 产品模型
 
-### Permission Rules
+### 角色
 
-A department manager may grant or revoke group `G` for employee `A` only when all conditions hold:
+- **超管：** 现有 `admin` 角色。可以配置飞书、同步组织架构、给部门配置分组池、设置部门负责人、给员工做个人额外授权。
+- **部门负责人：** 普通用户，但拥有受限的组织管理权限。只能管理自己负责部门里的员工，只能分配超管授权给该部门的分组。
+- **员工：** 普通用户。使用 API Key 和模型分组，分组来源可以是部门负责人分配、超管个人额外授权，或现有公开分组规则。
 
-1. The manager is active and is configured as a manager for `A`'s current primary department or one of its managed ancestor scopes.
-2. `A` is active and belongs to a department the manager can manage.
-3. `G` is active and belongs to the department's configured group pool.
-4. The grant being modified was created by a department-manager source, not by super-admin override.
+### 权限规则
 
-Super admins can grant and revoke any department policy, manager assignment, and personal override.
+部门负责人 `B` 想给员工 `A` 分配或取消分组 `G`，必须同时满足：
 
-### Effective Group Access
+1. `B` 是有效用户，并且被配置为 `A` 所在主部门的负责人，或负责包含 `A` 所在部门的上级部门范围。
+2. `A` 是有效用户，并且属于 `B` 可管理的部门范围。
+3. `G` 是有效分组，并且属于该部门被超管配置的分组池。
+4. 本次修改的授权来源是“部门负责人分配”，不是“超管个人额外授权”。
 
-Effective user groups are the union of:
+超管不受这些限制。超管可以管理任意部门池、负责人关系和员工个人额外授权。
 
-- Existing non-exclusive public groups, unchanged.
-- Existing direct `user_allowed_groups` rows.
-- Department-manager grants.
-- Super-admin personal overrides.
+### 员工最终可用分组
 
-For compatibility with current API key and routing checks, source-aware grant changes must keep `user_allowed_groups` synchronized as the effective exclusive-group access list.
+员工最终可用分组由以下来源合并：
 
-## Data Model
+- 现有非专属公开分组，保持不变。
+- 现有直接写入的 `user_allowed_groups`。
+- 部门负责人分配的组。
+- 超管个人额外授权的组。
+
+为了兼容当前 API Key 和路由检查逻辑，所有带来源的授权变化都要重新计算员工的有效专属分组，并同步到现有 `user_allowed_groups` 表。
+
+## 数据模型
 
 ### `feishu_departments`
 
-Stores Feishu organization departments.
+保存飞书部门信息。
 
 - `id`
-- `tenant_key`
-- `department_id`
-- `parent_department_id`
-- `name`
-- `path`
-- `status`
-- `synced_at`
-- timestamps
+- `tenant_key`：飞书租户标识。
+- `department_id`：飞书部门 ID。
+- `parent_department_id`：父部门 ID。
+- `name`：部门名。
+- `path`：完整部门路径。
+- `status`：部门状态。
+- `synced_at`：最近同步时间。
+- 创建和更新时间。
 
-Unique key: `(tenant_key, department_id)`.
+唯一键：`(tenant_key, department_id)`。
 
 ### `feishu_user_profiles`
 
-Maps local users to Feishu users and current org placement.
+保存本地用户和飞书用户、部门关系的映射。
 
 - `id`
-- `user_id`
+- `user_id`：本地用户 ID。
 - `tenant_key`
 - `open_id`
 - `union_id`
-- `user_id_in_tenant`
+- `user_id_in_tenant`：飞书企业内用户 ID。
 - `email`
 - `name`
-- `primary_department_id`
-- `department_ids` as JSON array
-- `status`
-- `manager_open_id`
+- `primary_department_id`：主部门 ID。
+- `department_ids`：用户所属部门 ID 数组，使用 JSON 保存。
+- `status`：飞书用户状态。
+- `manager_open_id`：飞书侧直属上级。
 - `synced_at`
-- timestamps
+- 创建和更新时间。
 
-Unique keys: `(tenant_key, open_id)`, `(user_id)`.
+唯一键：`(tenant_key, open_id)`、`(user_id)`。
 
 ### `department_group_policies`
 
-Defines which groups a department manager is allowed to assign inside a department.
+定义“某个部门可以分配哪些分组”。
 
 - `id`
 - `department_id`
 - `group_id`
 - `enabled`
-- `created_by_user_id`
-- timestamps
+- `created_by_user_id`：由哪个超管创建。
+- 创建和更新时间。
 
-Unique key: `(department_id, group_id)`.
+唯一键：`(department_id, group_id)`。
 
 ### `department_managers`
 
-Defines scoped managers for departments.
+定义部门负责人。
 
 - `id`
 - `department_id`
 - `manager_user_id`
-- `source` enum: `feishu`, `manual`
-- `scope` enum: `department_only`, `include_subdepartments`
+- `source`：`feishu` 或 `manual`。
+- `scope`：`department_only` 或 `include_subdepartments`。
 - `enabled`
 - `created_by_user_id`
-- timestamps
+- 创建和更新时间。
 
-Unique key: `(department_id, manager_user_id)`.
+唯一键：`(department_id, manager_user_id)`。
 
 ### `user_group_grants`
 
-Source-aware grants for individual users.
+保存带来源的员工分组授权。
 
 - `id`
 - `user_id`
 - `group_id`
-- `source` enum: `department_manager`, `super_admin_override`
-- `source_department_id`
-- `granted_by_user_id`
-- `revoked_at`
-- timestamps
+- `source`：`department_manager` 或 `super_admin_override`。
+- `source_department_id`：如果是部门负责人分配，记录来源部门。
+- `granted_by_user_id`：授权人。
+- `revoked_at`：撤销时间，空表示当前有效。
+- 创建和更新时间。
 
-Active unique key: `(user_id, group_id, source, source_department_id)` where `revoked_at IS NULL`.
+有效授权唯一键：`(user_id, group_id, source, source_department_id)`，仅对 `revoked_at IS NULL` 的记录生效。
 
-## Org Sync Rules
+## 组织同步规则
 
-1. Feishu login creates or binds a local user through `auth_identities` with provider type `feishu`.
-2. On login, fetch the Feishu user snapshot and update `feishu_user_profiles`.
-3. Admin can run a manual org sync to refresh departments and selected users.
-4. Later webhook sync can be added for user department changes and departures.
-5. When a user's primary department changes, active `department_manager` grants from the previous department are revoked, and `super_admin_override` grants remain active.
-6. When a Feishu user is disabled or removed, the local user should be disabled or marked for admin review according to a setting.
+1. 飞书登录会创建或绑定本地用户，并在 `auth_identities` 中记录 `provider_type=feishu`。
+2. 用户每次飞书登录时，刷新一次飞书用户快照，更新 `feishu_user_profiles`。
+3. 超管可以手动触发组织同步，刷新部门和用户数据。
+4. 第一版先做手动同步和登录时同步；飞书事件回调可以后续再做。
+5. 员工主部门变化时，旧部门来源的 `department_manager` 授权自动撤销；`super_admin_override` 保留。
+6. 飞书用户离职、禁用或移除时，本地用户按配置自动禁用，或进入待超管确认状态。
 
-## Backend Design
+## 后端设计
 
-### Auth
+### 飞书登录
 
-Add Feishu as a first-class OAuth provider, following the existing DingTalk/OIDC patterns:
+把飞书作为一等 OAuth 登录方式接入，整体参考现有 DingTalk/OIDC 的结构：
 
-- Add `feishu` to auth provider validators and frontend provider types.
-- Add Feishu config keys for internal app credentials, redirect URL, tenant restriction, sync settings, and auto-provision behavior.
-- Add `/api/v1/auth/oauth/feishu/start`, `/callback`, `/bind/start`, `/complete-registration`, `/create-account`, and `/bind-login`.
-- Store canonical identity in `auth_identities` using `provider_type=feishu`, `provider_key=<tenant_key>`, and `provider_subject=<open_id or union_id>`.
+- 在后端认证 provider 校验和前端 provider 类型中增加 `feishu`。
+- 增加飞书配置项：内部应用凭证、回调地址、租户限制、同步选项、是否自动创建用户。
+- 增加这些接口：
+  - `GET /api/v1/auth/oauth/feishu/start`
+  - `GET /api/v1/auth/oauth/feishu/callback`
+  - `GET /api/v1/auth/oauth/feishu/bind/start`
+  - `POST /api/v1/auth/oauth/feishu/complete-registration`
+  - `POST /api/v1/auth/oauth/feishu/create-account`
+  - `POST /api/v1/auth/oauth/feishu/bind-login`
+- `auth_identities` 中使用：
+  - `provider_type=feishu`
+  - `provider_key=<tenant_key>`
+  - `provider_subject=<open_id 或 union_id>`
 
-### Org Permission Service
+### 组织权限服务
 
-Create a focused service responsible for:
+新增一个聚焦的组织权限服务，负责：
 
-- Listing departments and department employees.
-- Managing department group pools.
-- Managing department managers.
-- Managing source-aware user group grants.
-- Recomputing effective `user_allowed_groups` after every grant/policy/org change.
-- Checking whether the current user can mutate a target employee's department grant.
+- 查询部门和部门员工。
+- 管理部门分组池。
+- 管理部门负责人。
+- 管理带来源的员工分组授权。
+- 每次授权、部门策略或组织关系变化后，重新计算并同步 `user_allowed_groups`。
+- 判断当前用户是否有权限修改某个员工的部门授权。
 
-### Routes
+### 路由设计
 
-Keep super-admin routes under `/api/v1/admin/feishu-org`.
+超管接口放在：
 
-Expose scoped department-manager routes outside global admin middleware, guarded by JWT + scoped org permission middleware:
+- `/api/v1/admin/feishu-org`
+
+部门负责人接口不要走全局 admin middleware，而是使用 JWT + 组织权限中间件：
 
 - `GET /api/v1/org-manager/departments`
 - `GET /api/v1/org-manager/departments/:id/users`
 - `GET /api/v1/org-manager/departments/:id/groups`
 - `PUT /api/v1/org-manager/users/:id/group-grants`
 
-The scoped middleware must not use `AdminAuthMiddleware`, because that middleware requires `user.IsAdmin()` and would force managers into global admin.
+这里不能复用 `AdminAuthMiddleware`，因为它要求 `user.IsAdmin()`，会迫使部门负责人变成全局管理员，权限会过大。
 
-## Frontend Design
+## 前端设计
 
-### Super Admin
+### 超管后台
 
-Add an "Org Permissions" admin page:
+新增“组织权限”页面：
 
-- Feishu connection status and sync action.
-- Department tree with employee count and sync timestamp.
-- Department group pool editor.
-- Department manager editor.
-- User detail drawer with personal override editor.
-- Audit-friendly display of grant source tags: department manager, super-admin override.
+- 飞书连接状态和同步按钮。
+- 部门树，展示员工数量和最近同步时间。
+- 部门分组池编辑器。
+- 部门负责人编辑器。
+- 员工详情抽屉，支持个人额外授权。
+- 授权来源标签：部门负责人分配、超管个人额外授权。
 
-### Department Manager
+### 部门负责人后台
 
-Add a scoped "My Department" page:
+新增“我的部门”页面：
 
-- Shows only departments the manager controls.
-- Shows employees in those departments.
-- Shows only assignable groups from each department pool.
-- Allows grant/revoke for department-manager grants only.
-- Displays super-admin override grants as read-only badges.
+- 只显示当前负责人可管理的部门。
+- 只显示这些部门内员工。
+- 只显示该部门池子里的可分配分组。
+- 只能新增或撤销“部门负责人分配”的授权。
+- 超管个人额外授权以只读标签展示，不能被部门负责人修改。
 
-### Employee
+### 员工侧
 
-In profile or key creation flows, show effective available groups without exposing admin-only controls. Source badges are useful but can be compact.
+在个人资料或 API Key 创建流程里，展示员工最终可用分组。来源标签可以做得紧凑，不需要暴露管理入口。
 
-## UX Constraints
+## 交互约束
 
-- Department managers should never see all groups by default.
-- Department managers should never see users outside their managed department scope.
-- Personal override must be visually distinct from department grants.
-- When a user changes department, the UI should show which department grants were auto-revoked in audit/history.
+- 部门负责人默认不能看到全量分组。
+- 部门负责人不能看到自己管理范围外的员工。
+- 超管个人额外授权必须和部门授权在视觉上区分清楚。
+- 员工转部门时，界面和审计记录要能看到哪些部门授权被自动撤销。
 
-## Testing Strategy
+## 测试策略
 
-### Backend Unit Tests
+### 后端单元测试
 
-- Manager cannot assign a group outside the department group pool.
-- Manager cannot assign a group to a user outside managed departments.
-- Manager cannot revoke a super-admin override.
-- Super admin can create department policies and personal overrides.
-- Department change revokes old department grants and preserves super-admin overrides.
-- Effective group recomputation writes the expected `user_allowed_groups` rows.
+- 部门负责人不能分配部门池外的组。
+- 部门负责人不能给管理范围外的员工分配组。
+- 部门负责人不能撤销超管个人额外授权。
+- 超管可以创建部门分组池和个人额外授权。
+- 员工转部门会撤销旧部门授权，并保留超管个人额外授权。
+- 重新计算有效分组后，`user_allowed_groups` 写入结果正确。
 
-### Backend Integration Tests
+### 后端集成测试
 
-- Migrations create all org permission tables and indexes.
-- Feishu auth identity can be bound without breaking existing providers.
-- Existing admin user update still updates `user_allowed_groups`.
-- API key auth cache is invalidated when effective groups change.
+- 迁移能创建所有组织权限表和索引。
+- 飞书身份能绑定到本地用户，不影响现有 provider。
+- 现有超管更新用户时，仍然能更新 `user_allowed_groups`。
+- 有效分组变化时，API Key auth cache 会失效。
 
-### Frontend Tests
+### 前端测试
 
-- Admin org page limits group editor state correctly.
-- Manager page renders only scoped departments/users/groups.
-- Manager save request sends only department-manager grant changes.
-- Read-only super-admin override badges cannot be toggled by managers.
+- 超管组织权限页面能正确限制部门分组池编辑状态。
+- 部门负责人页面只渲染权限范围内的部门、员工和分组。
+- 部门负责人保存时，只发送部门负责人授权变化。
+- 超管个人额外授权标签是只读的，不能被部门负责人切换。
 
-## Rollout Plan
+## 落地顺序
 
-1. Add schema, migrations, service interfaces, and tests.
-2. Add Feishu OAuth config and login/bind flow.
-3. Add manual org sync and department/user read APIs.
-4. Add department group pool and manager assignment APIs.
-5. Add user grant APIs and effective `user_allowed_groups` recomputation.
-6. Add admin org permissions UI.
-7. Add department-manager UI and scoped routes.
-8. Run backend and frontend tests; manually smoke Feishu login with a real internal app.
+1. 增加 schema、迁移、服务接口和测试。
+2. 增加飞书 OAuth 配置和登录/绑定流程。
+3. 增加手动组织同步，以及部门/用户只读接口。
+4. 增加部门分组池和部门负责人管理接口。
+5. 增加员工授权接口，以及 `user_allowed_groups` 有效权限重算。
+6. 增加超管组织权限页面。
+7. 增加部门负责人页面和 scoped routes。
+8. 跑后端和前端测试；用真实飞书内部应用做一次手动冒烟测试。
 
-## Open Implementation Assumptions
+## 实现假设
 
-- Primary department is the first Feishu department unless a later Feishu field gives a stronger primary-department signal.
-- Department grants follow primary department for authorization; multi-department users can be supported later by allowing any active department membership.
-- Department transfer auto-revokes old department-manager grants immediately; super-admin overrides remain.
-- Initial release uses manual sync plus login-time user refresh; webhook sync can be a follow-up.
+- 第一版把飞书返回的第一个部门当作主部门；如果后续飞书接口能提供更明确的主部门字段，再切换。
+- 授权判断按主部门执行；多部门员工后续可以扩展为任意有效部门成员关系。
+- 员工转部门时，旧部门负责人发放的授权立即自动撤销；超管个人额外授权保留。
+- 第一版使用手动同步 + 登录时刷新用户信息；飞书事件回调作为后续增强。
 
-## Self-Review
+## 自查结论
 
-- No unrelated Ark/payment work is included.
-- Department manager is scoped, not global admin.
-- Existing runtime group access stays compatible through `user_allowed_groups`.
-- Source-aware grants distinguish department assignments from personal overrides.
-- Employee transfer behavior is explicit.
+- 没有包含火山方舟和支付改动。
+- 部门负责人是 scoped manager，不是全局 admin。
+- 当前运行时分组访问继续兼容 `user_allowed_groups`。
+- 带来源授权能区分部门分配和个人额外授权。
+- 员工转部门后的授权处理规则已经明确。
