@@ -138,6 +138,23 @@ func (h *AuthHandler) ensureBackendModeAllowsUser(ctx context.Context, user *ser
 	return infraerrors.Forbidden("BACKEND_MODE_ADMIN_ONLY", "Backend mode is active. Only admin login is allowed.")
 }
 
+func (h *AuthHandler) ensureEmailPasswordLoginAllowsUser(ctx context.Context, user *service.User) error {
+	if user == nil {
+		return infraerrors.Unauthorized("INVALID_USER", "user not found")
+	}
+	if h == nil || h.settingSvc == nil {
+		return nil
+	}
+	settings, err := h.settingSvc.GetPublicSettings(ctx)
+	if err != nil || settings == nil || settings.EmailPasswordLoginEnabled {
+		return nil
+	}
+	if settings.AdminEmailLoginFallbackEnabled && user.IsAdmin() {
+		return nil
+	}
+	return infraerrors.Forbidden("EMAIL_PASSWORD_LOGIN_DISABLED", "Email password login is disabled.")
+}
+
 func (h *AuthHandler) ensureBackendModeAllowsNewUserLogin(ctx context.Context) error {
 	if h == nil || !h.isBackendModeEnabled(ctx) {
 		return nil
@@ -236,6 +253,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	_ = token // token 由 authService.Login 返回但此处由 respondWithTokenPair 重新生成
+
+	if err := h.ensureEmailPasswordLoginAllowsUser(c.Request.Context(), user); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
 		response.ErrorFrom(c, err)

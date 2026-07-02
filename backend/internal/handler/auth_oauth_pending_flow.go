@@ -1640,6 +1640,10 @@ func (h *AuthHandler) bindPendingOAuthLogin(c *gin.Context, provider string) {
 		response.ErrorFrom(c, infraerrors.Conflict("PENDING_AUTH_TARGET_USER_MISMATCH", "pending oauth session must be completed by the targeted user"))
 		return
 	}
+	if err := h.ensureEmailPasswordLoginAllowsUser(c.Request.Context(), user); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
 		response.ErrorFrom(c, err)
 		return

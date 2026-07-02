@@ -1381,6 +1381,46 @@
                 <Toggle v-model="form.registration_enabled" />
               </div>
 
+              <!-- Email Password Login -->
+              <div
+                class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
+              >
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ localText("邮箱密码登录", "Email password login") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{
+                      localText(
+                        "控制普通用户是否可以在登录页使用邮箱和密码登录。",
+                        "Controls whether regular users can sign in with email and password.",
+                      )
+                    }}
+                  </p>
+                </div>
+                <Toggle v-model="form.email_password_login_enabled" />
+              </div>
+
+              <div
+                v-if="!form.email_password_login_enabled"
+                class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
+              >
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ localText("保留超管邮箱兜底", "Keep admin email fallback") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{
+                      localText(
+                        "关闭普通邮箱登录时，建议保留超管邮箱入口，避免第三方登录异常时无法进入后台。",
+                        "When regular email login is disabled, keep an admin fallback so administrators are not locked out.",
+                      )
+                    }}
+                  </p>
+                </div>
+                <Toggle v-model="form.admin_email_login_fallback_enabled" />
+              </div>
+
               <!-- Email Verification -->
               <div
                 class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
@@ -2637,6 +2677,326 @@
                     <p v-if="form.dingtalk_connect_sync_dept" class="text-xs text-gray-400 dark:text-gray-500">
                       {{ t("admin.settings.dingtalk.syncDeptTargetHint") }}
                     </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Feishu Connect OAuth 登录 -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ localText("飞书登录", "Feishu Login") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{
+                  localText(
+                    "配置飞书企业自建应用登录，并为后续组织架构同步、部门授权和离职禁用提供身份来源。",
+                    "Configure Feishu app login as the identity source for org sync, department grants, and departure handling.",
+                  )
+                }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ localText("启用飞书登录", "Enable Feishu login") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{
+                      localText(
+                        "开启后登录页显示飞书入口，用户通过飞书 OAuth 完成登录或绑定。",
+                        "Shows Feishu on the login page and lets users sign in or bind through Feishu OAuth.",
+                      )
+                    }}
+                  </p>
+                </div>
+                <Toggle v-model="form.feishu_connect_enabled" />
+              </div>
+
+              <div
+                v-if="form.feishu_connect_enabled"
+                class="space-y-6 border-t border-gray-100 pt-4 dark:border-dark-700"
+              >
+                <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Client ID / App ID
+                    </label>
+                    <input
+                      v-model="form.feishu_connect_app_id"
+                      type="text"
+                      class="input font-mono text-sm"
+                      placeholder="cli_xxxxxxxxxxxxxxxx"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ localText("飞书开放平台企业自建应用的 App ID。", "The App ID of the Feishu internal app.") }}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Client Secret / App Secret
+                    </label>
+                    <input
+                      v-model="form.feishu_connect_app_secret"
+                      type="password"
+                      class="input font-mono text-sm"
+                      :placeholder="
+                        form.feishu_connect_app_secret_configured
+                          ? localText('密钥已配置，留空以保留当前值。', 'Secret configured. Leave empty to keep the current value.')
+                          : 'app secret'
+                      "
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ localText("后端回调地址", "Backend Callback URL") }}
+                  </label>
+                  <input
+                    v-model="form.feishu_connect_redirect_url"
+                    type="url"
+                    class="input font-mono text-sm"
+                    placeholder="https://your-domain.com/api/v1/auth/oauth/feishu/callback"
+                  />
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      localText(
+                        "需要与飞书开发者后台的重定向 URL 完全一致。",
+                        "Must exactly match the redirect URL configured in the Feishu developer console.",
+                      )
+                    }}
+                  </p>
+                </div>
+
+                <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ localText("企业限制策略", "Tenant restriction") }}
+                  </label>
+                  <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      localText(
+                        "公司内用建议保持“仅本企业”。如果放开限制，组织同步和离职禁用会自动关闭。",
+                        "For internal use, keep this restricted to your tenant. Org sync and departure handling are disabled when unrestricted.",
+                      )
+                    }}
+                  </p>
+                  <div class="space-y-2">
+                    <label class="flex cursor-pointer items-center gap-3">
+                      <input
+                        v-model="form.feishu_connect_tenant_restriction_policy"
+                        type="radio"
+                        value="internal_only"
+                        class="h-4 w-4 text-primary-600"
+                      />
+                      <span class="text-sm text-gray-700 dark:text-gray-300">
+                        {{ localText("仅本企业", "Internal tenant only") }}
+                      </span>
+                    </label>
+                    <label class="flex cursor-pointer items-center gap-3">
+                      <input
+                        v-model="form.feishu_connect_tenant_restriction_policy"
+                        type="radio"
+                        value="none"
+                        class="h-4 w-4 text-primary-600"
+                      />
+                      <span class="text-sm text-gray-700 dark:text-gray-300">
+                        {{ localText("不限制", "No restriction") }}
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                <div
+                  v-if="form.feishu_connect_tenant_restriction_policy === 'internal_only'"
+                  class="grid grid-cols-1 gap-6 lg:grid-cols-2"
+                >
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ localText("允许的 Tenant Key（可选）", "Allowed Tenant Key (optional)") }}
+                    </label>
+                    <input
+                      v-model="form.feishu_connect_allowed_tenant_key"
+                      type="text"
+                      class="input font-mono text-sm"
+                      placeholder="13ed4d0111cf175e"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        localText(
+                          "留空时只依赖飞书授权来源；填入后会强校验 tenant_key。",
+                          "Leave empty to rely on Feishu authorization source; fill it to strictly check tenant_key.",
+                        )
+                      }}
+                    </p>
+                  </div>
+                  <div class="flex items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ localText("绕过关闭注册", "Bypass registration toggle") }}
+                      </label>
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{
+                          localText(
+                            "本企业飞书用户可在关闭注册时创建或绑定账号。",
+                            "Internal Feishu users may create or bind accounts even when registration is disabled.",
+                          )
+                        }}
+                      </p>
+                    </div>
+                    <Toggle v-model="form.feishu_connect_bypass_registration" />
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 border-t border-gray-100 pt-4 dark:border-dark-700 lg:grid-cols-3">
+                  <div class="flex items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ localText("同步邮箱", "Sync email") }}
+                      </label>
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{ localText("依赖飞书邮箱权限和企业邮箱字段。", "Depends on Feishu email scope and tenant email availability.") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="form.feishu_connect_sync_email" />
+                  </div>
+                  <div class="flex items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ localText("同步姓名", "Sync name") }}
+                      </label>
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{ localText("登录时更新本地展示名。", "Updates local display name on login.") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="form.feishu_connect_sync_display_name" />
+                  </div>
+                  <div class="flex items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ localText("同步部门", "Sync department") }}
+                      </label>
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{ localText("多部门员工按主部门参与授权。", "Multi-department users are authorized by primary department.") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="form.feishu_connect_sync_department" />
+                  </div>
+                </div>
+
+                <div
+                  v-if="form.feishu_connect_tenant_restriction_policy === 'internal_only'"
+                  class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ localText("启用飞书组织同步", "Enable Feishu org sync") }}
+                      </label>
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{
+                          localText(
+                            "组织架构从飞书同步，本地只保存镜像和授权关系，不手工维护部门树。",
+                            "The org chart is synced from Feishu. This app stores only the mirror and permission grants.",
+                          )
+                        }}
+                      </p>
+                    </div>
+                    <Toggle v-model="form.feishu_org_sync_enabled" />
+                  </div>
+
+                  <div v-if="form.feishu_org_sync_enabled" class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ localText("离职/禁用处理", "Departed user action") }}
+                      </label>
+                      <select v-model="form.feishu_departed_user_action" class="input text-sm">
+                        <option value="auto_disable">
+                          {{ localText("自动禁用本地用户", "Auto-disable local user") }}
+                        </option>
+                        <option value="review">
+                          {{ localText("进入待确认列表", "Require admin review") }}
+                        </option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ localText("单次禁用人数阈值", "Disable count threshold") }}
+                      </label>
+                      <input
+                        v-model.number="form.feishu_sync_disable_threshold_count"
+                        type="number"
+                        min="1"
+                        class="input text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ localText("单次禁用比例阈值（%）", "Disable percent threshold (%)") }}
+                      </label>
+                      <input
+                        v-model.number="form.feishu_sync_disable_threshold_percent"
+                        type="number"
+                        min="1"
+                        max="100"
+                        class="input text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        {{ localText("飞书配置预检", "Feishu preflight") }}
+                      </label>
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{ localText("检查登录、邮箱、组织同步和负责人关系需要的配置状态。", "Checks login, email, org sync, and manager relation readiness.") }}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm w-fit"
+                      :disabled="feishuPreflightLoading"
+                      @click="runFeishuPreflight"
+                    >
+                      {{ feishuPreflightLoading ? t("common.loading") : localText("运行预检", "Run preflight") }}
+                    </button>
+                  </div>
+                  <div v-if="feishuPreflightResult" class="mt-4 space-y-3">
+                    <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                      <div
+                        v-for="item in feishuPreflightItems"
+                        :key="item.key"
+                        class="rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-700"
+                      >
+                        <div class="flex items-center justify-between gap-3">
+                          <span class="font-medium text-gray-900 dark:text-white">{{ item.label }}</span>
+                          <span :class="feishuPreflightStatusClass(item.status)">
+                            {{ item.status }}
+                          </span>
+                        </div>
+                        <p class="mt-1 text-gray-500 dark:text-gray-400">{{ item.message }}</p>
+                      </div>
+                    </div>
+                    <div
+                      v-if="feishuPreflightResult.warnings?.length"
+                      class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-300"
+                    >
+                      <p
+                        v-for="warning in feishuPreflightResult.warnings"
+                        :key="warning.code"
+                      >
+                        {{ warning.message }}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -7234,6 +7594,7 @@ import type {
   OpenAIFastPolicyRule,
   WeChatConnectMode,
   WebSearchEmulationConfig,
+  FeishuPreflightResult,
   WebSearchProviderConfig,
   WebSearchTestResult,
 } from "@/api/admin/settings";
@@ -7390,6 +7751,8 @@ const adminApiKeyMasked = ref("");
 const adminApiKeyOperating = ref(false);
 const newAdminApiKey = ref("");
 const subscriptionGroups = ref<AdminGroup[]>([]);
+const feishuPreflightLoading = ref(false);
+const feishuPreflightResult = ref<FeishuPreflightResult | null>(null);
 
 // Overload Cooldown (529) 状态
 const overloadCooldownLoading = ref(true);
@@ -7891,6 +8254,7 @@ type SettingsForm = Omit<
   turnstile_secret_key: string;
   linuxdo_connect_client_secret: string;
   dingtalk_connect_client_secret: string;
+  feishu_connect_app_secret: string;
   wechat_connect_app_secret: string;
   wechat_connect_open_app_secret: string;
   wechat_connect_mp_app_secret: string;
@@ -7920,6 +8284,8 @@ const form = reactive<SettingsForm>({
   login_agreement_mode: "modal",
   login_agreement_updated_at: "2026-03-31",
   login_agreement_documents: defaultLoginAgreementDocuments(),
+  email_password_login_enabled: true,
+  admin_email_login_fallback_enabled: true,
   default_balance: 0,
   default_platform_quotas: normalizePlatformQuotasMap() as DefaultPlatformQuotasMap,
   affiliate_rebate_rate: 20,
@@ -8017,6 +8383,21 @@ const form = reactive<SettingsForm>({
   dingtalk_connect_sync_corp_email_attr_name: localText("钉钉企业邮箱", "DingTalk Corporate Email"),
   dingtalk_connect_sync_display_name_attr_name: localText("钉钉姓名", "DingTalk Name"),
   dingtalk_connect_sync_dept_attr_name: localText("钉钉部门", "DingTalk Department"),
+  feishu_connect_enabled: false,
+  feishu_connect_app_id: "",
+  feishu_connect_app_secret: "",
+  feishu_connect_app_secret_configured: false,
+  feishu_connect_redirect_url: "",
+  feishu_connect_tenant_restriction_policy: "internal_only",
+  feishu_connect_allowed_tenant_key: "",
+  feishu_connect_bypass_registration: false,
+  feishu_connect_sync_email: true,
+  feishu_connect_sync_display_name: true,
+  feishu_connect_sync_department: true,
+  feishu_org_sync_enabled: false,
+  feishu_departed_user_action: "auto_disable",
+  feishu_sync_disable_threshold_count: 10,
+  feishu_sync_disable_threshold_percent: 20,
   wechat_connect_enabled: false,
   wechat_connect_app_id: "",
   wechat_connect_app_secret: "",
@@ -8131,6 +8512,43 @@ const form = reactive<SettingsForm>({
   allow_user_view_error_requests: false,
 });
 
+const feishuPreflightItems = computed(() => {
+  const result = feishuPreflightResult.value;
+  if (!result) return [];
+  return [
+    {
+      key: "login",
+      label: localText("登录", "Login"),
+      status: result.login.status,
+      message: result.login.message,
+    },
+    {
+      key: "email",
+      label: localText("邮箱", "Email"),
+      status: result.email.status,
+      message: result.email.message,
+    },
+    {
+      key: "org_sync",
+      label: localText("组织同步", "Org sync"),
+      status: result.org_sync.status,
+      message: result.org_sync.message,
+    },
+    {
+      key: "departed_detection",
+      label: localText("离职检测", "Departed detection"),
+      status: result.departed_detection.status,
+      message: result.departed_detection.message,
+    },
+    {
+      key: "manager_relation",
+      label: localText("负责人关系", "Manager relation"),
+      status: result.manager_relation.status,
+      message: result.manager_relation.message,
+    },
+  ];
+});
+
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
   buildAuthSourceDefaultsState({}),
 );
@@ -8180,6 +8598,14 @@ const authSourceDefaultsMeta = computed(() => [
       "Applied on first signup or first bind through DingTalk.",
     ),
   },
+  {
+    source: "feishu" as AuthSourceType,
+    title: t("auth.feishuProviderName"),
+    description: localText(
+      "通过飞书首次注册或首次绑定时应用。",
+      "Applied on first signup or first bind through Feishu.",
+    ),
+  },
 ]);
 
 // Proxies for web search emulation ProxySelector
@@ -8203,6 +8629,36 @@ const wsTestDialogOpen = ref(false);
 function openTestDialog() {
   wsTestResult.value = null;
   wsTestDialogOpen.value = true;
+}
+
+function feishuPreflightStatusClass(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === "ready") {
+    return "rounded bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300";
+  }
+  if (normalized === "warning") {
+    return "rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-300";
+  }
+  if (normalized === "disabled") {
+    return "rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-gray-300";
+  }
+  return "rounded bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/20 dark:text-red-300";
+}
+
+async function runFeishuPreflight() {
+  feishuPreflightLoading.value = true;
+  try {
+    feishuPreflightResult.value = await adminAPI.settings.checkFeishuPreflight();
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(
+        error,
+        localText("飞书预检失败", "Feishu preflight failed"),
+      ),
+    );
+  } finally {
+    feishuPreflightLoading.value = false;
+  }
 }
 
 function toggleProviderExpand(idx: number) {
@@ -8845,6 +9301,7 @@ async function loadSettings() {
     form.turnstile_secret_key = "";
     form.linuxdo_connect_client_secret = "";
     form.dingtalk_connect_client_secret = "";
+    form.feishu_connect_app_secret = "";
     form.github_oauth_client_secret = "";
     form.google_oauth_client_secret = "";
     form.wechat_connect_app_secret = "";
@@ -9111,6 +9568,60 @@ async function saveSettings() {
       }
     }
 
+    const hasUserLoginEntry =
+      form.email_password_login_enabled ||
+      form.linuxdo_connect_enabled ||
+      form.dingtalk_connect_enabled ||
+      form.feishu_connect_enabled ||
+      form.wechat_connect_enabled ||
+      form.oidc_connect_enabled ||
+      form.github_oauth_enabled ||
+      form.google_oauth_enabled;
+    if (!hasUserLoginEntry) {
+      appStore.showError(
+        localText(
+          "至少需要保留一个普通用户登录入口。",
+          "At least one regular user login entry must remain available.",
+        ),
+      );
+      return;
+    }
+    if (!form.email_password_login_enabled && !form.admin_email_login_fallback_enabled) {
+      appStore.showError(
+        localText(
+          "关闭邮箱密码登录时，必须保留超管邮箱兜底入口。",
+          "Admin email fallback must remain enabled when email password login is disabled.",
+        ),
+      );
+      return;
+    }
+    if (form.feishu_connect_enabled) {
+      if (!form.feishu_connect_app_id.trim()) {
+        appStore.showError(localText("启用飞书登录时必须填写 App ID。", "Feishu App ID is required when Feishu login is enabled."));
+        return;
+      }
+      if (!form.feishu_connect_redirect_url.trim()) {
+        appStore.showError(localText("启用飞书登录时必须填写后端回调地址。", "Feishu backend callback URL is required when Feishu login is enabled."));
+        return;
+      }
+      if (!form.feishu_connect_app_secret.trim() && !form.feishu_connect_app_secret_configured) {
+        appStore.showError(localText("启用飞书登录时必须填写 App Secret。", "Feishu App Secret is required when Feishu login is enabled."));
+        return;
+      }
+    }
+    if (form.feishu_connect_tenant_restriction_policy !== "internal_only") {
+      form.feishu_connect_bypass_registration = false;
+      form.feishu_org_sync_enabled = false;
+    }
+    form.feishu_sync_disable_threshold_count = Math.max(
+      1,
+      Math.floor(Number(form.feishu_sync_disable_threshold_count) || 10),
+    );
+    form.feishu_sync_disable_threshold_percent = Math.min(
+      100,
+      Math.max(1, Math.floor(Number(form.feishu_sync_disable_threshold_percent) || 20)),
+    );
+
     if (form.wechat_connect_mp_enabled && form.wechat_connect_mobile_enabled) {
       appStore.showError(
         localText(
@@ -9162,6 +9673,8 @@ async function saveSettings() {
       login_agreement_mode: form.login_agreement_mode,
       login_agreement_updated_at: form.login_agreement_updated_at,
       login_agreement_documents: form.login_agreement_documents,
+      email_password_login_enabled: form.email_password_login_enabled,
+      admin_email_login_fallback_enabled: form.admin_email_login_fallback_enabled,
       default_balance: form.default_balance,
       affiliate_rebate_rate: Math.min(
         100,
@@ -9222,6 +9735,23 @@ async function saveSettings() {
       dingtalk_connect_sync_corp_email_attr_name: form.dingtalk_connect_sync_corp_email_attr_name,
       dingtalk_connect_sync_display_name_attr_name: form.dingtalk_connect_sync_display_name_attr_name,
       dingtalk_connect_sync_dept_attr_name: form.dingtalk_connect_sync_dept_attr_name,
+      feishu_connect_enabled: form.feishu_connect_enabled,
+      feishu_connect_app_id: form.feishu_connect_app_id,
+      feishu_connect_app_secret: form.feishu_connect_app_secret || undefined,
+      feishu_connect_redirect_url: form.feishu_connect_redirect_url,
+      feishu_connect_tenant_restriction_policy:
+        form.feishu_connect_tenant_restriction_policy,
+      feishu_connect_allowed_tenant_key: form.feishu_connect_allowed_tenant_key,
+      feishu_connect_bypass_registration: form.feishu_connect_bypass_registration,
+      feishu_connect_sync_email: form.feishu_connect_sync_email,
+      feishu_connect_sync_display_name: form.feishu_connect_sync_display_name,
+      feishu_connect_sync_department: form.feishu_connect_sync_department,
+      feishu_org_sync_enabled: form.feishu_org_sync_enabled,
+      feishu_departed_user_action: form.feishu_departed_user_action,
+      feishu_sync_disable_threshold_count:
+        form.feishu_sync_disable_threshold_count,
+      feishu_sync_disable_threshold_percent:
+        form.feishu_sync_disable_threshold_percent,
       wechat_connect_enabled: form.wechat_connect_enabled,
       wechat_connect_app_id:
         form.wechat_connect_open_app_id ||
@@ -9437,6 +9967,7 @@ async function saveSettings() {
     form.turnstile_secret_key = "";
     form.linuxdo_connect_client_secret = "";
     form.dingtalk_connect_client_secret = "";
+    form.feishu_connect_app_secret = "";
     form.github_oauth_client_secret = "";
     form.google_oauth_client_secret = "";
     form.wechat_connect_app_secret = "";
@@ -10677,6 +11208,16 @@ watch(
       if (form.dingtalk_connect_sync_corp_email) form.dingtalk_connect_sync_corp_email = false;
       if (form.dingtalk_connect_sync_display_name) form.dingtalk_connect_sync_display_name = false;
       if (form.dingtalk_connect_sync_dept) form.dingtalk_connect_sync_dept = false;
+    }
+  },
+);
+
+watch(
+  () => form.feishu_connect_tenant_restriction_policy,
+  (policy) => {
+    if (policy !== "internal_only") {
+      if (form.feishu_connect_bypass_registration) form.feishu_connect_bypass_registration = false;
+      if (form.feishu_org_sync_enabled) form.feishu_org_sync_enabled = false;
     }
   },
 );

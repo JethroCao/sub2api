@@ -463,8 +463,11 @@ export default {
     passwordRequired: 'Password is required',
     passwordMinLength: 'Password must be at least 6 characters',
     loginFailed: 'Login failed. Please check your credentials and try again.',
+    adminEmailFallbackOnly: 'Email password login is disabled. Only the admin email fallback can use this form.',
+    emailLoginUnavailable: 'Email password login is currently unavailable. Please use another sign-in method.',
     errors: {
       USER_NOT_ACTIVE: 'Account has been disabled.',
+      EMAIL_PASSWORD_LOGIN_DISABLED: 'Email password login is disabled. Please use Feishu or another sign-in method.',
     },
     registrationFailed: 'Registration failed. Please try again.',
     emailSuffixNotAllowed: 'This email domain is not allowed for registration.',
@@ -557,6 +560,19 @@ export default {
         retry: 'Retry Login'
       }
     },
+    feishu: {
+      signIn: 'Continue with Feishu',
+      callbackTitle: 'Signing you in with Feishu',
+      callbackProcessing: 'Completing Feishu login, please wait...',
+      callbackHint: 'If you are not redirected automatically, go back to the login page and try again.',
+      callbackMissingToken: 'Missing login token, please try again.',
+      backToLogin: 'Back to Login',
+      invitationRequired: 'This Feishu account is not yet registered. The site requires an invitation code — please enter one to complete registration.',
+      invalidPendingToken: 'The registration token has expired. Please sign in with Feishu again.',
+      completeRegistration: 'Complete Registration',
+      completing: 'Completing registration...',
+      completeRegistrationFailed: 'Registration failed. Please check your invitation code and try again.'
+    },
     emailOAuth: {
       signIn: 'Continue with {providerName}'
     },
@@ -607,6 +623,8 @@ export default {
     linuxdoCallbackPageTitle: 'LinuxDo Sign-In Callback',
     dingtalkCallbackPageTitle: 'DingTalk Sign-In Callback',
     dingtalkProviderName: 'DingTalk',
+    feishuCallbackPageTitle: 'Feishu Sign-In Callback',
+    feishuProviderName: 'Feishu',
     oidcCallbackPageTitle: 'OIDC Sign-In Callback',
     oauthCallbackPageTitle: 'OAuth Callback',
     wechatProviderName: 'WeChat',
