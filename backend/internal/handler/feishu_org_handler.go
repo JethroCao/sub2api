@@ -73,25 +73,22 @@ func (h *FeishuOrgHandler) RunManualReconcile(c *gin.Context) {
 		response.InternalError(c, "Feishu organization permission service is not configured")
 		return
 	}
+	if h.settingSvc == nil {
+		response.InternalError(c, "Feishu settings service is not configured")
+		return
+	}
 	subject, _ := middleware.GetAuthSubjectFromContext(c)
+	cfg, err := h.settingSvc.GetFeishuConnectOAuthConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	policy := service.FeishuDeparturePolicy{
-		Action:           service.FeishuDepartedUserActionAutoDisable,
-		ThresholdCount:   service.FeishuDefaultDisableThresholdCount,
-		ThresholdPercent: service.FeishuDefaultDisableThresholdPct,
+		Action:           cfg.DepartedUserAction,
+		ThresholdCount:   cfg.DisableThresholdCount,
+		ThresholdPercent: cfg.DisableThresholdPercent,
 	}
-	if h.settingSvc != nil {
-		settings, err := h.settingSvc.GetAllSettings(c.Request.Context())
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-		policy = service.FeishuDeparturePolicy{
-			Action:           settings.FeishuDepartedUserAction,
-			ThresholdCount:   settings.FeishuSyncDisableThresholdCount,
-			ThresholdPercent: settings.FeishuSyncDisableThresholdPercent,
-		}
-	}
-	result, err := h.orgService.RunManualReconcile(c.Request.Context(), subject.UserID, policy)
+	result, err := h.orgService.RunFeishuOrgSync(c.Request.Context(), subject.UserID, cfg, policy)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -533,6 +534,94 @@ func TestFeishuOrgPermissionServiceRunManualReconcileRequiresReviewWhenThreshold
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFeishuOrgDirectorySnapshotNormalizesRawFields(t *testing.T) {
+	snapshot := normalizeFeishuDirectorySnapshot(&FeishuOrgDirectorySnapshot{
+		TenantKey: "tenant-a",
+		Departments: []FeishuOrgDirectoryDepartment{
+			parseFeishuDirectoryDepartment(map[string]any{
+				"department_id":        "od-a",
+				"parent_department_id": "0",
+				"name":                 "Engineering",
+				"leaders": []any{
+					map[string]any{"open_id": "ou-manager"},
+				},
+			}),
+		},
+		Users: []FeishuOrgDirectoryUser{
+			parseFeishuDirectoryUser(map[string]any{
+				"open_id":          "ou-a",
+				"union_id":         "on-a",
+				"user_id":          "ou-a",
+				"name":             "Alice",
+				"enterprise_email": "alice@example.com",
+				"employee_no":      "E001",
+				"department_ids":   []any{"od-b", "od-a"},
+				"status": map[string]any{
+					"is_frozen": true,
+				},
+			}),
+		},
+	})
+
+	require.Len(t, snapshot.Departments, 1)
+	require.Equal(t, "tenant-a", snapshot.Departments[0].TenantKey)
+	require.Equal(t, "od-a", snapshot.Departments[0].OpenDepartmentID)
+	require.Equal(t, []string{"ou-manager"}, snapshot.Departments[0].LeaderOpenIDs)
+	require.Equal(t, "Engineering", snapshot.Departments[0].Path)
+	require.Len(t, snapshot.Users, 1)
+	require.Equal(t, "tenant-a", snapshot.Users[0].TenantKey)
+	require.Equal(t, "disabled", snapshot.Users[0].Status)
+	require.Equal(t, "od-a", snapshot.Users[0].PrimaryOpenDepartmentID)
+	require.Equal(t, []string{"od-a", "od-b"}, snapshot.Users[0].DepartmentOpenIDs)
+}
+
+func TestFeishuOrgDirectoryHTTPClientRequiresTenantKey(t *testing.T) {
+	_, err := NewFeishuOrgDirectoryHTTPClient(config.FeishuConnectConfig{
+		AppID:     "cli_test",
+		AppSecret: "secret",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tenant key")
+}
+
+func TestFeishuOrgPermissionServiceRunFeishuSyncRejectsEmptyUserSnapshot(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	startedAt := time.Date(2026, 7, 3, 14, 0, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 7, 3, 14, 1, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM feishu_org_users").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+	mock.ExpectQuery("INSERT INTO feishu_org_sync_runs").
+		WithArgs("failed", 0, 0, 0, 0, 0, false, "feishu org sync returned no users", int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"status",
+			"started_at",
+			"finished_at",
+			"departments_synced",
+			"users_synced",
+			"managers_synced",
+			"users_to_create",
+			"users_to_disable",
+			"bindings_missing",
+			"review_required",
+			"error_message",
+			"triggered_by_user_id",
+		}).AddRow(int64(12), "failed", startedAt, finishedAt, 0, 0, 0, 0, 0, 0, false, "feishu org sync returned no users", int64(7)))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	_, err = svc.RunFeishuOrgSyncWithClient(context.Background(), 7, feishuOrgDirectoryClientStub{
+		snapshot: &FeishuOrgDirectorySnapshot{TenantKey: "tenant-a"},
+	}, FeishuDeparturePolicy{Action: FeishuDepartedUserActionAutoDisable})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no users")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestEvaluateFeishuDepartureDecisionAutoDisablesWithinThreshold(t *testing.T) {
 	got := EvaluateFeishuDepartureDecision(100, []int64{1, 2}, FeishuDeparturePolicy{
 		Action:           FeishuDepartedUserActionAutoDisable,
@@ -559,6 +648,15 @@ func TestEvaluateFeishuDepartureDecisionRequiresReviewWhenThresholdExceeded(t *t
 
 type feishuOrgPermissionInvalidatorStub struct {
 	userIDs []int64
+}
+
+type feishuOrgDirectoryClientStub struct {
+	snapshot *FeishuOrgDirectorySnapshot
+	err      error
+}
+
+func (s feishuOrgDirectoryClientStub) FetchSnapshot(context.Context) (*FeishuOrgDirectorySnapshot, error) {
+	return s.snapshot, s.err
 }
 
 func (s *feishuOrgPermissionInvalidatorStub) InvalidateAuthCacheByKey(context.Context, string) {}

@@ -10,7 +10,7 @@
         </div>
         <div class="flex gap-2">
           <button v-if="activeTab === 'sync'" class="btn btn-primary" :disabled="reconciling" @click="runManualReconcile">
-            {{ reconciling ? '处理中' : '本地 Reconcile' }}
+            {{ reconciling ? '同步中' : '立即同步飞书' }}
           </button>
           <button class="btn btn-secondary" :disabled="loading" @click="reloadCurrentTab">
             {{ loading ? '刷新中' : '刷新' }}
@@ -275,10 +275,10 @@ async function runManualReconcile() {
   reconciling.value = true
   try {
     await feishuOrgAPI.runManualReconcile()
-    appStore.showSuccess('本地 reconcile 已完成')
+    appStore.showSuccess('飞书组织同步已完成')
     await loadSyncRuns()
   } catch (error: any) {
-    appStore.showError(error?.message || '本地 reconcile 失败')
+    appStore.showError(error?.message || '飞书组织同步失败')
   } finally {
     reconciling.value = false
   }
