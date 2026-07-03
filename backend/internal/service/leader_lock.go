@@ -66,3 +66,32 @@ func tryAcquireSingletonLeaderLock(ctx context.Context, cache LeaderLockCache, d
 	// No coordination backend available: run without gating.
 	return func() {}, true
 }
+
+// tryAcquireStrictSingletonLeaderLock is for jobs where duplicate execution is
+// worse than skipping one cycle. If Redis is configured but errors, it skips
+// instead of falling through to a different backend, avoiding split-brain when a
+// peer may already hold the Redis lock.
+func tryAcquireStrictSingletonLeaderLock(ctx context.Context, cache LeaderLockCache, db *sql.DB, key, owner string, ttl time.Duration) (func(), bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if cache != nil {
+		ok, err := cache.TryAcquireLeaderLock(ctx, key, owner, ttl)
+		if err != nil || !ok {
+			return nil, false
+		}
+		release := func() {
+			ctx2, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = cache.ReleaseLeaderLock(ctx2, key, owner)
+		}
+		return release, true
+	}
+
+	if db != nil {
+		return tryAcquireDBAdvisoryLock(ctx, db, hashAdvisoryLockID(key))
+	}
+
+	return func() {}, true
+}

@@ -86,6 +86,13 @@ func TestTryAcquireSingletonLeaderLock_CacheErrorFallsThrough(t *testing.T) {
 	require.NotPanics(t, release)
 }
 
+func TestTryAcquireStrictSingletonLeaderLock_CacheErrorSkips(t *testing.T) {
+	cache := &fakeLeaderLockCache{acquireErr: context.DeadlineExceeded}
+	release, ok := tryAcquireStrictSingletonLeaderLock(context.Background(), cache, nil, "k", "inst", time.Minute)
+	require.False(t, ok, "strict lock must skip instead of running ungated when cache errors")
+	require.Nil(t, release)
+}
+
 func TestSubscriptionExpiryService_ReminderSkipsScanWhenNotLeader(t *testing.T) {
 	cache := &fakeLeaderLockCache{}
 	// A peer already holds the reminder leader lock.

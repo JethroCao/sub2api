@@ -15,6 +15,7 @@ This directory contains files for deploying Sub2API on Linux servers.
 |------|-------------|
 | `docker-compose.yml` | Docker Compose configuration (named volumes) |
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
+| `docker-compose.standalone.yml` | App-only Compose configuration for external PostgreSQL/Redis and multi-instance deployment |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
 | `.env.example` | Docker environment variables template |
 | `DOCKER.md` | Docker Hub documentation |
@@ -105,6 +106,21 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 | **docker-compose.yml** | Named volumes (/var/lib/docker/volumes/) | ⚠️ Requires docker commands | Simple setup, don't need migration |
 
 **Recommendation:** Use `docker-compose.local.yml` (deployed by `docker-deploy.sh`) for easier data management and migration.
+
+### Multi-Instance Deployment
+
+For two or more Sub2API app instances behind a load balancer, use `docker-compose.standalone.yml` on each app server and provide shared external PostgreSQL and Redis.
+
+Requirements:
+
+- Use the same image tag on every app server; pin a version tag instead of `latest` for production rollouts.
+- Use the same `.env` values for `JWT_SECRET`, `TOTP_ENCRYPTION_KEY`, OAuth client secrets, and other encryption/signing secrets.
+- Point every instance to the same PostgreSQL database and Redis database.
+- Size PostgreSQL for the total pool budget: `instance_count * DATABASE_MAX_OPEN_CONNS`, plus headroom.
+- Put the load balancer health check on `GET /health`.
+- Treat `/app/data` as node-local. Do not rely on runtime-edited local pages/static overrides unless they are deployed identically to every app server or moved to shared storage.
+
+The app stores shared state in PostgreSQL and uses Redis-backed, fail-closed leader locks for duplicate-sensitive background work, including scheduled tests, channel monitor checks, backup/restore operations, subscription expiry reminders, dashboard aggregation, and payment order expiry. Treat Redis as required for multi-instance deployments; PostgreSQL advisory locking is only a fallback for jobs that are explicitly wired without a Redis lock backend.
 
 ### How Auto-Setup Works
 

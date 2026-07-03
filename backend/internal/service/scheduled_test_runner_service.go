@@ -2,15 +2,21 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 )
 
-const scheduledTestDefaultMaxWorkers = 10
+const (
+	scheduledTestDefaultMaxWorkers   = 10
+	scheduledTestRunnerLeaderLockKey = "scheduled_test:runner:leader"
+	scheduledTestRunnerLeaderLockTTL = 6 * time.Minute
+)
 
 // ScheduledTestRunnerService periodically scans due test plans and executes them.
 type ScheduledTestRunnerService struct {
@@ -19,6 +25,10 @@ type ScheduledTestRunnerService struct {
 	accountTestSvc *AccountTestService
 	rateLimitSvc   *RateLimitService
 	cfg            *config.Config
+
+	lockCache  LeaderLockCache
+	db         *sql.DB
+	instanceID string
 
 	cron      *cron.Cron
 	startOnce sync.Once
@@ -39,7 +49,19 @@ func NewScheduledTestRunnerService(
 		accountTestSvc: accountTestSvc,
 		rateLimitSvc:   rateLimitSvc,
 		cfg:            cfg,
+		instanceID:     uuid.NewString(),
 	}
+}
+
+// SetLeaderLock injects the distributed lock backend used to ensure only one
+// instance scans and runs due plans each minute. With no backend, the runner
+// keeps single-instance/test behavior and runs ungated.
+func (s *ScheduledTestRunnerService) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
+	if s == nil {
+		return
+	}
+	s.lockCache = lockCache
+	s.db = db
 }
 
 // Start begins the cron ticker (every minute).
@@ -85,11 +107,23 @@ func (s *ScheduledTestRunnerService) Stop() {
 }
 
 func (s *ScheduledTestRunnerService) runScheduled() {
+	s.runScheduledCycle(10 * time.Second)
+}
+
+func (s *ScheduledTestRunnerService) runScheduledCycle(delay time.Duration) {
 	// Delay 10s so execution lands at ~:10 of each minute instead of :00.
-	time.Sleep(10 * time.Second)
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+
+	release, ok := tryAcquireStrictSingletonLeaderLock(ctx, s.lockCache, s.db, scheduledTestRunnerLeaderLockKey, s.instanceID, scheduledTestRunnerLeaderLockTTL)
+	if !ok {
+		return
+	}
+	defer release()
 
 	now := time.Now()
 	plans, err := s.planRepo.ListDue(ctx, now)

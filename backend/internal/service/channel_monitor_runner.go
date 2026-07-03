@@ -2,12 +2,21 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"math/rand/v2"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/alitto/pond/v2"
+	"github.com/google/uuid"
+)
+
+const (
+	channelMonitorRunLeaderLockTTL  = monitorRequestTimeout + monitorPingTimeout + monitorRunOneBuffer + 30*time.Second
+	channelMonitorReconcileInterval = time.Minute
+	channelMonitorReconcileTimeout  = monitorStartupLoadTimeout
 )
 
 // MonitorScheduler 调度器接口，供 ChannelMonitorService 在 CRUD 时回调，
@@ -28,7 +37,7 @@ type MonitorScheduler interface {
 // 避免依赖完整的 repo + encryptor 链路。生产实现 *ChannelMonitorService 自然满足。
 type monitorRunnerSvc interface {
 	ListEnabledMonitors(ctx context.Context) ([]*ChannelMonitor, error)
-	RunCheck(ctx context.Context, id int64) ([]*CheckResult, error)
+	RunScheduledCheck(ctx context.Context, id int64) ([]*CheckResult, error)
 }
 
 // ChannelMonitorRunner 渠道监控调度器。
@@ -62,6 +71,10 @@ type ChannelMonitorRunner struct {
 	// 防止单次检测耗时 > interval 时同一 monitor 被并发执行。
 	inFlight   map[int64]struct{}
 	inFlightMu sync.Mutex
+
+	lockCache  LeaderLockCache
+	db         *sql.DB
+	instanceID string
 }
 
 // scheduledMonitor 单个监控的运行时上下文。
@@ -108,7 +121,23 @@ func newChannelMonitorRunner(svc monitorRunnerSvc, settingService *SettingServic
 		parentCancel:   cancel,
 		tasks:          make(map[int64]*scheduledMonitor),
 		inFlight:       make(map[int64]struct{}),
+		instanceID:     uuid.NewString(),
 	}
+}
+
+// SetLeaderLock injects the distributed lock backend used to ensure a monitor ID
+// is checked by at most one app instance at a time. With no backend, checks keep
+// single-instance/test behavior and run ungated.
+func (r *ChannelMonitorRunner) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
+	if r == nil {
+		return
+	}
+	r.lockCache = lockCache
+	r.db = db
+}
+
+func channelMonitorRunLeaderLockKey(id int64) string {
+	return "channel_monitor:run:" + strconv.FormatInt(id, 10)
 }
 
 // Start 加载所有 enabled monitor 并为每个建立独立定时任务。
@@ -130,12 +159,101 @@ func (r *ChannelMonitorRunner) Start() {
 	enabled, err := r.svc.ListEnabledMonitors(ctx)
 	if err != nil {
 		slog.Error("channel_monitor: load enabled monitors failed at startup", "error", err)
+		r.startReconcileLoop(channelMonitorReconcileInterval)
+		slog.Info("channel_monitor: runner started", "scheduled_tasks", 0)
 		return
 	}
 	for _, m := range enabled {
 		r.Schedule(m)
 	}
+	r.startReconcileLoop(channelMonitorReconcileInterval)
 	slog.Info("channel_monitor: runner started", "scheduled_tasks", len(enabled))
+}
+
+func (r *ChannelMonitorRunner) startReconcileLoop(interval time.Duration) {
+	if r == nil || interval <= 0 {
+		return
+	}
+	r.wg.Add(1)
+	go r.runReconcileLoop(r.parentCtx, interval)
+}
+
+func (r *ChannelMonitorRunner) runReconcileLoop(ctx context.Context, interval time.Duration) {
+	defer r.wg.Done()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reconcileCtx, cancel := context.WithTimeout(ctx, channelMonitorReconcileTimeout)
+			if err := r.reconcileEnabledMonitors(reconcileCtx); err != nil {
+				slog.Warn("channel_monitor: reconcile enabled monitors failed", "error", err)
+			}
+			cancel()
+		}
+	}
+}
+
+func (r *ChannelMonitorRunner) reconcileEnabledMonitors(ctx context.Context) error {
+	if r == nil || r.svc == nil {
+		return nil
+	}
+	enabled, err := r.svc.ListEnabledMonitors(ctx)
+	if err != nil {
+		return err
+	}
+
+	desired := make(map[int64]*ChannelMonitor, len(enabled))
+	for _, m := range enabled {
+		if m == nil || !m.Enabled {
+			continue
+		}
+		desired[m.ID] = m
+		if r.needsScheduleRefresh(m) {
+			r.Schedule(m)
+		}
+	}
+
+	var staleIDs []int64
+	r.mu.Lock()
+	if !r.stopped {
+		for id := range r.tasks {
+			if _, ok := desired[id]; !ok {
+				staleIDs = append(staleIDs, id)
+			}
+		}
+	}
+	r.mu.Unlock()
+	for _, id := range staleIDs {
+		r.Unschedule(id)
+	}
+	return nil
+}
+
+func (r *ChannelMonitorRunner) needsScheduleRefresh(m *ChannelMonitor) bool {
+	if r == nil || m == nil || !m.Enabled {
+		return false
+	}
+	interval := time.Duration(m.IntervalSeconds) * time.Second
+	jitter := time.Duration(m.JitterSeconds) * time.Second
+	if jitter < 0 {
+		jitter = 0
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped || !r.started {
+		return false
+	}
+	existing, ok := r.tasks[m.ID]
+	if !ok {
+		return true
+	}
+	return existing.name != m.Name ||
+		existing.interval != interval ||
+		existing.jitter != jitter
 }
 
 // Schedule 为指定监控创建（或重置）独立定时任务。
@@ -308,7 +426,15 @@ func (r *ChannelMonitorRunner) runOne(id int64, name string) {
 		}
 	}()
 
-	if _, err := r.svc.RunCheck(ctx, id); err != nil {
+	release, ok := tryAcquireStrictSingletonLeaderLock(ctx, r.lockCache, r.db, channelMonitorRunLeaderLockKey(id), r.instanceID, channelMonitorRunLeaderLockTTL)
+	if !ok {
+		slog.Debug("channel_monitor: skip monitor check, lock held by peer",
+			"monitor_id", id, "name", name)
+		return
+	}
+	defer release()
+
+	if _, err := r.svc.RunScheduledCheck(ctx, id); err != nil {
 		slog.Warn("channel_monitor: run check failed",
 			"monitor_id", id, "name", name, "error", err)
 	}
