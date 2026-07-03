@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"testing"
 	"time"
@@ -583,6 +586,61 @@ func TestFeishuOrgDirectoryHTTPClientRequiresTenantKey(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "tenant key")
+}
+
+func TestFeishuOrgDirectoryHTTPClientUsesFeishuPageSizeLimit(t *testing.T) {
+	var departmentPageSizes []string
+	var userPageSizes []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code":                0,
+				"tenant_access_token": "tenant-token",
+			})
+		case "/open-apis/contact/v3/departments":
+			departmentPageSizes = append(departmentPageSizes, r.URL.Query().Get("page_size"))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 0,
+				"data": map[string]any{
+					"items": []map[string]any{
+						{
+							"department_id":        "od-a",
+							"parent_department_id": "0",
+							"name":                 "Engineering",
+						},
+					},
+					"has_more": false,
+				},
+			})
+		case "/open-apis/contact/v3/users/find_by_department":
+			userPageSizes = append(userPageSizes, r.URL.Query().Get("page_size"))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 0,
+				"data": map[string]any{
+					"items":    []map[string]any{},
+					"has_more": false,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewFeishuOrgDirectoryHTTPClient(config.FeishuConnectConfig{
+		AppID:            "cli_test",
+		AppSecret:        "secret",
+		AllowedTenantKey: "tenant-a",
+		UserInfoURL:      server.URL,
+	})
+	require.NoError(t, err)
+
+	_, err = client.FetchSnapshot(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"50"}, departmentPageSizes)
+	require.Equal(t, []string{"50", "50"}, userPageSizes)
 }
 
 func TestFeishuOrgPermissionServiceRunFeishuSyncRejectsEmptyUserSnapshot(t *testing.T) {

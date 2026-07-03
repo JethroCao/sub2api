@@ -23,7 +23,7 @@ const (
 	feishuOpenAPIBaseURL          = "https://open.feishu.cn"
 	feishuRootDepartmentID        = "0"
 	feishuOrgSyncHTTPTimeout      = 20 * time.Second
-	feishuOrgSyncPageSize         = 100
+	feishuOrgSyncPageSize         = 50
 	feishuOrgSyncResponseBodySize = 4 << 20
 )
 
