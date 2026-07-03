@@ -164,6 +164,7 @@ func (c *FeishuOrgDirectoryHTTPClient) fetchDepartments(ctx context.Context, tok
 		query := url.Values{}
 		query.Set("department_id_type", "open_department_id")
 		query.Set("user_id_type", "open_id")
+		query.Set("parent_department_id", feishuRootDepartmentID)
 		query.Set("page_size", fmt.Sprintf("%d", feishuOrgSyncPageSize))
 		query.Set("fetch_child", "true")
 		if pageToken != "" {
@@ -238,6 +239,12 @@ func (c *FeishuOrgDirectoryHTTPClient) fetchUsers(ctx context.Context, token str
 				user.TenantKey = c.tenantKey
 				if user.OpenID == "" {
 					continue
+				}
+				if departmentID != feishuRootDepartmentID && len(user.DepartmentOpenIDs) == 0 {
+					user.DepartmentOpenIDs = []string{departmentID}
+					if user.PrimaryOpenDepartmentID == "" {
+						user.PrimaryOpenDepartmentID = departmentID
+					}
 				}
 				existing, ok := seenUsers[user.OpenID]
 				if ok {

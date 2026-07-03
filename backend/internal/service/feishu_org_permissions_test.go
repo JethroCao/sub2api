@@ -590,6 +590,8 @@ func TestFeishuOrgDirectoryHTTPClientRequiresTenantKey(t *testing.T) {
 
 func TestFeishuOrgDirectoryHTTPClientUsesFeishuPageSizeLimit(t *testing.T) {
 	var departmentPageSizes []string
+	var departmentParents []string
+	var userDepartmentIDs []string
 	var userPageSizes []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -601,6 +603,7 @@ func TestFeishuOrgDirectoryHTTPClientUsesFeishuPageSizeLimit(t *testing.T) {
 			})
 		case "/open-apis/contact/v3/departments":
 			departmentPageSizes = append(departmentPageSizes, r.URL.Query().Get("page_size"))
+			departmentParents = append(departmentParents, r.URL.Query().Get("parent_department_id"))
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"code": 0,
 				"data": map[string]any{
@@ -616,10 +619,20 @@ func TestFeishuOrgDirectoryHTTPClientUsesFeishuPageSizeLimit(t *testing.T) {
 			})
 		case "/open-apis/contact/v3/users/find_by_department":
 			userPageSizes = append(userPageSizes, r.URL.Query().Get("page_size"))
+			userDepartmentIDs = append(userDepartmentIDs, r.URL.Query().Get("department_id"))
+			items := []map[string]any{}
+			if r.URL.Query().Get("department_id") == "od-a" {
+				items = append(items, map[string]any{
+					"open_id":  "ou-a",
+					"union_id": "on-a",
+					"user_id":  "u-a",
+					"name":     "Alice",
+				})
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"code": 0,
 				"data": map[string]any{
-					"items":    []map[string]any{},
+					"items":    items,
 					"has_more": false,
 				},
 			})
@@ -637,10 +650,17 @@ func TestFeishuOrgDirectoryHTTPClientUsesFeishuPageSizeLimit(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = client.FetchSnapshot(context.Background())
+	snapshot, err := client.FetchSnapshot(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []string{"50"}, departmentPageSizes)
+	require.Equal(t, []string{"0"}, departmentParents)
+	require.Equal(t, []string{"0", "od-a"}, userDepartmentIDs)
 	require.Equal(t, []string{"50", "50"}, userPageSizes)
+	require.Len(t, snapshot.Departments, 1)
+	require.Equal(t, "od-a", snapshot.Departments[0].OpenDepartmentID)
+	require.Len(t, snapshot.Users, 1)
+	require.Equal(t, "od-a", snapshot.Users[0].PrimaryOpenDepartmentID)
+	require.Equal(t, []string{"od-a"}, snapshot.Users[0].DepartmentOpenIDs)
 }
 
 func TestFeishuOrgPermissionServiceRunFeishuSyncRejectsEmptyUserSnapshot(t *testing.T) {
