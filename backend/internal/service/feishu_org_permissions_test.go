@@ -48,6 +48,23 @@ func TestFeishuOrgPermissionSnapshotUsesPrimaryDepartmentForMultiDepartmentEmplo
 	require.False(t, snapshot.CanManagerAssignGroup(99))
 }
 
+func TestFeishuOrgPermissionServiceHasManagerScope(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	ok, err := svc.HasManagerScope(context.Background(), 7)
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFeishuOrgPermissionServiceSetDepartmentManagerGrantImportsLegacyAndRecalculates(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -263,6 +280,9 @@ func TestFeishuOrgPermissionServiceListDepartmentsIncludesAssignableGroups(t *te
 	defer func() { _ = db.Close() }()
 
 	syncedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM feishu_departments").
+		WithArgs("tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(123)))
 	mock.ExpectQuery("SELECT d.tenant_key").
 		WithArgs("tenant-a", 50, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -298,6 +318,7 @@ func TestFeishuOrgPermissionServiceListDepartmentsIncludesAssignableGroups(t *te
 	})
 
 	require.NoError(t, err)
+	require.Equal(t, int64(123), result.Total)
 	require.Len(t, result.Items, 1)
 	dept := result.Items[0]
 	require.Equal(t, "dept-a", dept.OpenDepartmentID)
@@ -311,11 +332,64 @@ func TestFeishuOrgPermissionServiceListDepartmentsIncludesAssignableGroups(t *te
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFeishuOrgPermissionServiceListDepartmentsSearchesNameAndPath(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("LOWER\\(COALESCE\\(d\\.name").
+		WithArgs("tenant-a", "工程").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectQuery("LOWER\\(COALESCE\\(d\\.name").
+		WithArgs("tenant-a", "工程", 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"tenant_key",
+			"open_department_id",
+			"parent_open_department_id",
+			"name",
+			"path",
+			"status",
+			"leader_open_ids",
+			"last_synced_at",
+			"employee_count",
+			"manager_count",
+			"assignable_groups",
+		}).AddRow(
+			"tenant-a",
+			"dept-engineering",
+			"",
+			"工程部",
+			"/技术中心/工程部",
+			"active",
+			`[]`,
+			nil,
+			int64(5),
+			int64(1),
+			`[]`,
+		))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	result, err := svc.ListDepartments(context.Background(), FeishuOrgListInput{
+		TenantKey: "tenant-a",
+		Query:     " 工程 ",
+		Limit:     20,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.Total)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "工程部", result.Items[0].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFeishuOrgPermissionServiceListManagerUsersIncludesAssignableGroups(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
+	mock.ExpectQuery("WITH RECURSIVE manager_roots").
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(321)))
 	mock.ExpectQuery("WITH RECURSIVE manager_roots").
 		WithArgs(int64(7), 50, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -368,6 +442,7 @@ func TestFeishuOrgPermissionServiceListManagerUsersIncludesAssignableGroups(t *t
 	result, err := svc.ListManagerUsers(context.Background(), 7, FeishuOrgListInput{Limit: 50})
 
 	require.NoError(t, err)
+	require.Equal(t, int64(321), result.Total)
 	require.Len(t, result.Items, 1)
 	user := result.Items[0]
 	require.Equal(t, int64(42), user.UserID)
@@ -380,6 +455,164 @@ func TestFeishuOrgPermissionServiceListManagerUsersIncludesAssignableGroups(t *t
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFeishuOrgPermissionServiceListManagerLocalUserIDsOnlyReturnsBoundManagedUsers(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("WITH RECURSIVE manager_roots").
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).
+			AddRow(int64(42)).
+			AddRow(int64(99)))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	ids, err := svc.ListManagerLocalUserIDs(context.Background(), 7)
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{42, 99}, ids)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceListUsersSearchesEmployeeAndDepartmentFields(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("LOWER\\(COALESCE\\(fu\\.name").
+		WithArgs("tenant-a", "jane").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectQuery("LOWER\\(COALESCE\\(fu\\.name").
+		WithArgs("tenant-a", "jane", 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"user_id",
+			"local_email",
+			"local_username",
+			"local_status",
+			"tenant_key",
+			"open_id",
+			"union_id",
+			"feishu_user_id",
+			"name",
+			"email",
+			"employee_no",
+			"status",
+			"primary_open_department_id",
+			"primary_department_name",
+			"primary_department_path",
+			"department_open_ids",
+			"department_manager_group_ids",
+			"super_admin_override_group_ids",
+			"effective_group_ids",
+			"assignable_groups",
+			"last_synced_at",
+		}).AddRow(
+			int64(42),
+			"jane@example.com",
+			"Jane",
+			"active",
+			"tenant-a",
+			"ou_jane",
+			"on_jane",
+			"u_jane",
+			"Jane",
+			"jane@example.com",
+			"E001",
+			"active",
+			"dept-a",
+			"工程部",
+			"/技术中心/工程部",
+			`["dept-a"]`,
+			`[]`,
+			`[]`,
+			`[]`,
+			`[]`,
+			nil,
+		))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	result, err := svc.ListUsers(context.Background(), FeishuOrgListInput{
+		TenantKey: "tenant-a",
+		Query:     " Jane ",
+		Limit:     20,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.Total)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "Jane", result.Items[0].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceListManagerUsersSearchesWithinManagedScope(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery("LOWER\\(COALESCE\\(fu\\.name").
+		WithArgs(int64(7), "jane").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectQuery("LOWER\\(COALESCE\\(fu\\.name").
+		WithArgs(int64(7), "jane", 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"user_id",
+			"local_email",
+			"local_username",
+			"local_status",
+			"tenant_key",
+			"open_id",
+			"union_id",
+			"feishu_user_id",
+			"name",
+			"email",
+			"employee_no",
+			"status",
+			"primary_open_department_id",
+			"primary_department_name",
+			"primary_department_path",
+			"department_open_ids",
+			"department_manager_group_ids",
+			"super_admin_override_group_ids",
+			"effective_group_ids",
+			"assignable_groups",
+			"last_synced_at",
+		}).AddRow(
+			int64(42),
+			"jane@example.com",
+			"Jane",
+			"active",
+			"tenant-a",
+			"ou_jane",
+			"on_jane",
+			"u_jane",
+			"Jane",
+			"jane@example.com",
+			"E001",
+			"active",
+			"dept-a",
+			"工程部",
+			"/技术中心/工程部",
+			`["dept-a"]`,
+			`[]`,
+			`[]`,
+			`[]`,
+			`[]`,
+			nil,
+		))
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	result, err := svc.ListManagerUsers(context.Background(), 7, FeishuOrgListInput{
+		Query: " Jane ",
+		Limit: 20,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.Total)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "Jane", result.Items[0].Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFeishuOrgPermissionServiceListSyncRuns(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -387,6 +620,8 @@ func TestFeishuOrgPermissionServiceListSyncRuns(t *testing.T) {
 
 	startedAt := time.Date(2026, 7, 3, 13, 0, 0, 0, time.UTC)
 	finishedAt := time.Date(2026, 7, 3, 13, 1, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM feishu_org_sync_runs").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(12)))
 	mock.ExpectQuery("SELECT id, status, started_at").
 		WithArgs(20, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -423,6 +658,7 @@ func TestFeishuOrgPermissionServiceListSyncRuns(t *testing.T) {
 	result, err := svc.ListSyncRuns(context.Background(), FeishuOrgListInput{Limit: 20})
 
 	require.NoError(t, err)
+	require.Equal(t, int64(12), result.Total)
 	require.Len(t, result.Items, 1)
 	run := result.Items[0]
 	require.Equal(t, int64(9), run.ID)
@@ -586,6 +822,18 @@ func TestFeishuOrgDirectoryHTTPClientRequiresTenantKey(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "tenant key")
+}
+
+func TestFeishuOrgDirectoryHTTPClientAllowsLongRunningSyncRequests(t *testing.T) {
+	client, err := NewFeishuOrgDirectoryHTTPClient(config.FeishuConnectConfig{
+		AppID:            "cli_test",
+		AppSecret:        "secret",
+		AllowedTenantKey: "tenant-a",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, client.http)
+	require.GreaterOrEqual(t, client.http.Timeout, time.Minute)
 }
 
 func TestFeishuOrgDirectoryHTTPClientUsesFeishuPageSizeLimit(t *testing.T) {

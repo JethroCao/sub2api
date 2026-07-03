@@ -32,6 +32,30 @@
         </button>
       </div>
 
+      <div v-if="activeTab === 'departments'" class="mb-4 flex flex-wrap items-center gap-2">
+        <input
+          v-model="departmentSearchDraft"
+          type="search"
+          class="input w-full sm:w-80"
+          placeholder="搜索部门名称、路径或部门 ID"
+          @keydown.enter.prevent="applyDepartmentSearch"
+        />
+        <button class="btn btn-secondary" :disabled="loading" @click="applyDepartmentSearch">搜索</button>
+        <button v-if="departmentSearch" class="btn btn-ghost" :disabled="loading" @click="clearDepartmentSearch">清空</button>
+      </div>
+
+      <div v-if="activeTab === 'users'" class="mb-4 flex flex-wrap items-center gap-2">
+        <input
+          v-model="userSearchDraft"
+          type="search"
+          class="input w-full sm:w-80"
+          placeholder="搜索姓名、邮箱、工号、部门或飞书 ID"
+          @keydown.enter.prevent="applyUserSearch"
+        />
+        <button class="btn btn-secondary" :disabled="loading" @click="applyUserSearch">搜索</button>
+        <button v-if="userSearch" class="btn btn-ghost" :disabled="loading" @click="clearUserSearch">清空</button>
+      </div>
+
       <section v-if="activeTab === 'departments'" class="overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200 dark:bg-dark-800 dark:ring-dark-700">
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-dark-700">
@@ -70,6 +94,14 @@
             </tbody>
           </table>
         </div>
+        <Pagination
+          v-if="departmentPagination.total > 0"
+          :page="departmentPagination.page"
+          :total="departmentPagination.total"
+          :page-size="departmentPagination.page_size"
+          @update:page="(page) => handlePageChange(departmentPagination, loadDepartments, page)"
+          @update:pageSize="(pageSize) => handlePageSizeChange(departmentPagination, loadDepartments, pageSize)"
+        />
       </section>
 
       <section v-if="activeTab === 'users'" class="overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200 dark:bg-dark-800 dark:ring-dark-700">
@@ -110,6 +142,14 @@
             </tbody>
           </table>
         </div>
+        <Pagination
+          v-if="userPagination.total > 0"
+          :page="userPagination.page"
+          :total="userPagination.total"
+          :page-size="userPagination.page_size"
+          @update:page="(page) => handlePageChange(userPagination, loadUsers, page)"
+          @update:pageSize="(pageSize) => handlePageSizeChange(userPagination, loadUsers, pageSize)"
+        />
       </section>
 
       <section v-if="activeTab === 'sync'" class="overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200 dark:bg-dark-800 dark:ring-dark-700">
@@ -142,6 +182,14 @@
             </tbody>
           </table>
         </div>
+        <Pagination
+          v-if="syncPagination.total > 0"
+          :page="syncPagination.page"
+          :total="syncPagination.total"
+          :page-size="syncPagination.page_size"
+          @update:page="(page) => handlePageChange(syncPagination, loadSyncRuns, page)"
+          @update:pageSize="(pageSize) => handlePageSizeChange(syncPagination, loadSyncRuns, pageSize)"
+        />
       </section>
     </div>
 
@@ -172,6 +220,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import Pagination from '@/components/common/Pagination.vue'
 import feishuOrgAPI, {
   type FeishuOrgDepartment,
   type FeishuOrgSyncRun,
@@ -182,6 +231,8 @@ import { useAppStore } from '@/stores'
 import type { AdminGroup } from '@/types'
 
 type TabKey = 'departments' | 'users' | 'sync'
+type PagerState = { page: number; page_size: number; total: number }
+type PageLoader = () => Promise<void>
 
 const appStore = useAppStore()
 const tabs: Array<{ key: TabKey; label: string }> = [
@@ -199,6 +250,13 @@ const users = ref<FeishuOrgUser[]>([])
 const syncRuns = ref<FeishuOrgSyncRun[]>([])
 const allGroups = ref<AdminGroup[]>([])
 const selectedGroupIds = ref<number[]>([])
+const departmentSearch = ref('')
+const departmentSearchDraft = ref('')
+const userSearch = ref('')
+const userSearchDraft = ref('')
+const departmentPagination = reactive<PagerState>({ page: 1, page_size: 20, total: 0 })
+const userPagination = reactive<PagerState>({ page: 1, page_size: 20, total: 0 })
+const syncPagination = reactive<PagerState>({ page: 1, page_size: 20, total: 0 })
 
 const editor = reactive<{
   visible: boolean
@@ -230,8 +288,13 @@ async function reloadCurrentTab() {
 async function loadDepartments() {
   loading.value = true
   try {
-    const result = await feishuOrgAPI.listDepartments({ limit: 200 })
+    const result = await feishuOrgAPI.listDepartments({
+      q: normalizeSearchParam(departmentSearch.value),
+      limit: departmentPagination.page_size,
+      offset: paginationOffset(departmentPagination)
+    })
     departments.value = result.items || []
+    departmentPagination.total = normalizeTotal(result.total, departments.value.length)
   } catch (error: any) {
     appStore.showError(error?.message || '加载飞书部门失败')
   } finally {
@@ -242,8 +305,13 @@ async function loadDepartments() {
 async function loadUsers() {
   loading.value = true
   try {
-    const result = await feishuOrgAPI.listUsers({ limit: 200 })
+    const result = await feishuOrgAPI.listUsers({
+      q: normalizeSearchParam(userSearch.value),
+      limit: userPagination.page_size,
+      offset: paginationOffset(userPagination)
+    })
     users.value = result.items || []
+    userPagination.total = normalizeTotal(result.total, users.value.length)
   } catch (error: any) {
     appStore.showError(error?.message || '加载飞书员工失败')
   } finally {
@@ -254,8 +322,12 @@ async function loadUsers() {
 async function loadSyncRuns() {
   loading.value = true
   try {
-    const result = await feishuOrgAPI.listSyncRuns({ limit: 50 })
+    const result = await feishuOrgAPI.listSyncRuns({
+      limit: syncPagination.page_size,
+      offset: paginationOffset(syncPagination)
+    })
     syncRuns.value = result.items || []
+    syncPagination.total = normalizeTotal(result.total, syncRuns.value.length)
   } catch (error: any) {
     appStore.showError(error?.message || '加载同步状态失败')
   } finally {
@@ -276,6 +348,7 @@ async function runManualReconcile() {
   try {
     await feishuOrgAPI.runManualReconcile()
     appStore.showSuccess('飞书组织同步已完成')
+    syncPagination.page = 1
     await loadSyncRuns()
   } catch (error: any) {
     appStore.showError(error?.message || '飞书组织同步失败')
@@ -308,6 +381,34 @@ function closeEditor() {
   editor.department = undefined
   editor.user = undefined
   selectedGroupIds.value = []
+}
+
+function applyDepartmentSearch() {
+  departmentSearch.value = departmentSearchDraft.value.trim()
+  departmentPagination.page = 1
+  void loadDepartments()
+}
+
+function clearDepartmentSearch() {
+  departmentSearchDraft.value = ''
+  if (!departmentSearch.value) return
+  departmentSearch.value = ''
+  departmentPagination.page = 1
+  void loadDepartments()
+}
+
+function applyUserSearch() {
+  userSearch.value = userSearchDraft.value.trim()
+  userPagination.page = 1
+  void loadUsers()
+}
+
+function clearUserSearch() {
+  userSearchDraft.value = ''
+  if (!userSearch.value) return
+  userSearch.value = ''
+  userPagination.page = 1
+  void loadUsers()
 }
 
 async function saveEditor() {
@@ -349,5 +450,29 @@ function groupName(id: number) {
 function formatDate(value?: string | null) {
   if (!value) return '-'
   return new Date(value).toLocaleString()
+}
+
+function paginationOffset(pagination: PagerState) {
+  return (pagination.page - 1) * pagination.page_size
+}
+
+function normalizeSearchParam(value: string) {
+  const trimmed = value.trim()
+  return trimmed || undefined
+}
+
+function normalizeTotal(total: number | undefined, fallback: number) {
+  return typeof total === 'number' ? total : fallback
+}
+
+function handlePageChange(pagination: PagerState, loader: PageLoader, page: number) {
+  pagination.page = page
+  void loader()
+}
+
+function handlePageSizeChange(pagination: PagerState, loader: PageLoader, pageSize: number) {
+  pagination.page_size = pageSize
+  pagination.page = 1
+  void loader()
 }
 </script>

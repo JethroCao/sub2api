@@ -119,6 +119,7 @@ type FeishuDepartmentGroupPoolResult struct {
 
 type FeishuOrgListInput struct {
 	TenantKey string
+	Query     string
 	Limit     int
 	Offset    int
 }
@@ -146,6 +147,7 @@ type FeishuOrgDepartmentView struct {
 
 type FeishuOrgDepartmentListResult struct {
 	Items  []FeishuOrgDepartmentView `json:"items"`
+	Total  int64                     `json:"total"`
 	Limit  int                       `json:"limit"`
 	Offset int                       `json:"offset"`
 }
@@ -176,6 +178,7 @@ type FeishuOrgUserView struct {
 
 type FeishuOrgUserListResult struct {
 	Items  []FeishuOrgUserView `json:"items"`
+	Total  int64               `json:"total"`
 	Limit  int                 `json:"limit"`
 	Offset int                 `json:"offset"`
 }
@@ -198,6 +201,7 @@ type FeishuOrgSyncRunView struct {
 
 type FeishuOrgSyncRunListResult struct {
 	Items  []FeishuOrgSyncRunView `json:"items"`
+	Total  int64                  `json:"total"`
 	Limit  int                    `json:"limit"`
 	Offset int                    `json:"offset"`
 }
@@ -211,7 +215,29 @@ func (s *FeishuOrgPermissionService) ListDepartments(ctx context.Context, input 
 	if s == nil || s.db == nil {
 		return nil, errors.New("feishu org permission service is not configured")
 	}
-	tenantKey, limit, offset := normalizeFeishuOrgListInput(input)
+	tenantKey, search, limit, offset := normalizeFeishuOrgListInput(input)
+	searchClause := ""
+	countArgs := []any{tenantKey}
+	listArgs := []any{tenantKey}
+	limitPlaceholder := "$2"
+	offsetPlaceholder := "$3"
+	if search != "" {
+		searchClause = "\n  AND " + feishuOrgDepartmentSearchCondition("$2")
+		countArgs = append(countArgs, search)
+		listArgs = append(listArgs, search)
+		limitPlaceholder = "$3"
+		offsetPlaceholder = "$4"
+	}
+
+	total, err := scanFeishuCount(ctx, s.db, `
+SELECT COUNT(*)
+FROM feishu_departments d
+WHERE ($1 = '' OR d.tenant_key = $1)
+  AND d.status = 'active'`+searchClause, countArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("count feishu departments: %w", err)
+	}
+	listArgs = append(listArgs, limit, offset)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT d.tenant_key,
        d.open_department_id,
@@ -263,8 +289,9 @@ LEFT JOIN (
  AND group_pools.open_department_id = d.open_department_id
 WHERE ($1 = '' OR d.tenant_key = $1)
   AND d.status = 'active'
+`+searchClause+`
 ORDER BY d.path, d.name, d.open_department_id
-LIMIT $2 OFFSET $3`, tenantKey, limit, offset)
+LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -307,18 +334,48 @@ LIMIT $2 OFFSET $3`, tenantKey, limit, offset)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return &FeishuOrgDepartmentListResult{Items: items, Limit: limit, Offset: offset}, nil
+	return &FeishuOrgDepartmentListResult{Items: items, Total: total, Limit: limit, Offset: offset}, nil
 }
 
 func (s *FeishuOrgPermissionService) ListUsers(ctx context.Context, input FeishuOrgListInput) (*FeishuOrgUserListResult, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("feishu org permission service is not configured")
 	}
-	tenantKey, limit, offset := normalizeFeishuOrgListInput(input)
+	tenantKey, search, limit, offset := normalizeFeishuOrgListInput(input)
+	countJoin := ""
+	searchClause := ""
+	countArgs := []any{tenantKey}
+	listArgs := []any{tenantKey}
+	limitPlaceholder := "$2"
+	offsetPlaceholder := "$3"
+	if search != "" {
+		countJoin = `
+LEFT JOIN users local_user
+  ON local_user.id = fu.user_id
+LEFT JOIN feishu_departments primary_department
+  ON primary_department.tenant_key = fu.tenant_key
+ AND primary_department.open_department_id = fu.primary_open_department_id`
+		searchClause = "\n  AND " + feishuOrgUserSearchCondition("$2")
+		countArgs = append(countArgs, search)
+		listArgs = append(listArgs, search)
+		limitPlaceholder = "$3"
+		offsetPlaceholder = "$4"
+	}
+
+	total, err := scanFeishuCount(ctx, s.db, `
+SELECT COUNT(*)
+FROM feishu_org_users fu
+`+countJoin+`
+WHERE ($1 = '' OR fu.tenant_key = $1)`+searchClause, countArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("count feishu org users: %w", err)
+	}
+	listArgs = append(listArgs, limit, offset)
 	rows, err := s.db.QueryContext(ctx, feishuOrgUsersListSQL(`
 WHERE ($1 = '' OR fu.tenant_key = $1)
+`+searchClause+`
 ORDER BY fu.name, fu.open_id
-LIMIT $2 OFFSET $3`), tenantKey, limit, offset)
+LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder), listArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -327,14 +384,20 @@ LIMIT $2 OFFSET $3`), tenantKey, limit, offset)
 	if err != nil {
 		return nil, err
 	}
-	return &FeishuOrgUserListResult{Items: items, Limit: limit, Offset: offset}, nil
+	return &FeishuOrgUserListResult{Items: items, Total: total, Limit: limit, Offset: offset}, nil
 }
 
 func (s *FeishuOrgPermissionService) ListSyncRuns(ctx context.Context, input FeishuOrgListInput) (*FeishuOrgSyncRunListResult, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("feishu org permission service is not configured")
 	}
-	_, limit, offset := normalizeFeishuOrgListInput(input)
+	_, _, limit, offset := normalizeFeishuOrgListInput(input)
+	total, err := scanFeishuCount(ctx, s.db, `
+SELECT COUNT(*)
+FROM feishu_org_sync_runs`)
+	if err != nil {
+		return nil, fmt.Errorf("count feishu org sync runs: %w", err)
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id,
        status,
@@ -388,7 +451,7 @@ LIMIT $1 OFFSET $2`, limit, offset)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return &FeishuOrgSyncRunListResult{Items: items, Limit: limit, Offset: offset}, nil
+	return &FeishuOrgSyncRunListResult{Items: items, Total: total, Limit: limit, Offset: offset}, nil
 }
 
 func (s *FeishuOrgPermissionService) RunManualReconcile(ctx context.Context, actorUserID int64, policy FeishuDeparturePolicy) (*FeishuManualReconcileResult, error) {
@@ -443,7 +506,119 @@ func (s *FeishuOrgPermissionService) ListManagerUsers(ctx context.Context, manag
 	if managerUserID <= 0 {
 		return nil, errors.New("manager_user_id is required")
 	}
-	_, limit, offset := normalizeFeishuOrgListInput(input)
+	_, search, limit, offset := normalizeFeishuOrgListInput(input)
+	managerScopeCTE := `
+WITH RECURSIVE manager_roots AS (
+    SELECT tenant_key, open_department_id, include_subdepartments
+    FROM feishu_department_managers
+    WHERE manager_user_id = $1
+      AND status = 'active'
+),
+managed_scope AS (
+    SELECT tenant_key, open_department_id, include_subdepartments
+    FROM manager_roots
+    UNION ALL
+    SELECT child.tenant_key, child.open_department_id, scope.include_subdepartments
+    FROM feishu_departments child
+    JOIN managed_scope scope
+      ON child.tenant_key = scope.tenant_key
+     AND child.parent_open_department_id = scope.open_department_id
+    WHERE scope.include_subdepartments = true
+      AND child.status = 'active'
+),
+manager_scope AS (
+    SELECT DISTINCT tenant_key, open_department_id
+    FROM managed_scope
+)
+`
+	countJoin := ""
+	searchClause := ""
+	countArgs := []any{managerUserID}
+	listArgs := []any{managerUserID}
+	limitPlaceholder := "$2"
+	offsetPlaceholder := "$3"
+	if search != "" {
+		countJoin = `
+LEFT JOIN users local_user
+  ON local_user.id = fu.user_id
+LEFT JOIN feishu_departments primary_department
+  ON primary_department.tenant_key = fu.tenant_key
+ AND primary_department.open_department_id = fu.primary_open_department_id`
+		searchClause = "\n  AND " + feishuOrgUserSearchCondition("$2")
+		countArgs = append(countArgs, search)
+		listArgs = append(listArgs, search)
+		limitPlaceholder = "$3"
+		offsetPlaceholder = "$4"
+	}
+	total, err := scanFeishuCount(ctx, s.db, managerScopeCTE+`
+SELECT COUNT(DISTINCT fu.open_id)
+FROM feishu_org_users fu
+`+countJoin+`
+JOIN manager_scope scope
+  ON scope.tenant_key = fu.tenant_key
+ AND scope.open_department_id = fu.primary_open_department_id
+WHERE fu.status = 'active'`+searchClause, countArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("count manager feishu users: %w", err)
+	}
+	listArgs = append(listArgs, limit, offset)
+	rows, err := s.db.QueryContext(ctx, managerScopeCTE+feishuOrgUsersListSQL(`
+JOIN manager_scope scope
+  ON scope.tenant_key = fu.tenant_key
+ AND scope.open_department_id = fu.primary_open_department_id
+WHERE fu.status = 'active'
+`+searchClause+`
+ORDER BY fu.name, fu.open_id
+LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder), listArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items, err := scanFeishuOrgUserViews(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &FeishuOrgUserListResult{Items: items, Total: total, Limit: limit, Offset: offset}, nil
+}
+
+func (s *FeishuOrgPermissionService) HasManagerScope(ctx context.Context, managerUserID int64) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("feishu org permission service is not configured")
+	}
+	if managerUserID <= 0 {
+		return false, errors.New("manager_user_id is required")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT COUNT(*)
+FROM feishu_department_managers
+WHERE manager_user_id = $1
+  AND status = 'active'`, managerUserID)
+	if err != nil {
+		return false, fmt.Errorf("check manager scope: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var count int
+	if rows.Next() {
+		if err := rows.Scan(&count); err != nil {
+			return false, fmt.Errorf("scan manager scope: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("read manager scope: %w", err)
+	}
+	return count > 0, nil
+}
+
+func (s *FeishuOrgPermissionService) ListManagerLocalUserIDs(ctx context.Context, managerUserID int64) ([]int64, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("feishu org permission service is not configured")
+	}
+	if managerUserID <= 0 {
+		return nil, errors.New("manager_user_id is required")
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 WITH RECURSIVE manager_roots AS (
     SELECT tenant_key, open_department_id, include_subdepartments
@@ -462,23 +637,36 @@ managed_scope AS (
      AND child.parent_open_department_id = scope.open_department_id
     WHERE scope.include_subdepartments = true
       AND child.status = 'active'
+),
+manager_scope AS (
+    SELECT DISTINCT tenant_key, open_department_id
+    FROM managed_scope
 )
-`+feishuOrgUsersListSQL(`
-JOIN managed_scope scope
+SELECT DISTINCT fu.user_id
+FROM feishu_org_users fu
+JOIN manager_scope scope
   ON scope.tenant_key = fu.tenant_key
  AND scope.open_department_id = fu.primary_open_department_id
 WHERE fu.status = 'active'
-ORDER BY fu.name, fu.open_id
-LIMIT $2 OFFSET $3`), managerUserID, limit, offset)
+  AND fu.user_id > 0
+ORDER BY fu.user_id`, managerUserID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list manager local user ids: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	items, err := scanFeishuOrgUserViews(rows)
-	if err != nil {
+
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return &FeishuOrgUserListResult{Items: items, Limit: limit, Offset: offset}, nil
+	return ids, nil
 }
 
 func (s *FeishuOrgPermissionService) countActiveFeishuOrgUsers(ctx context.Context) (int, error) {
@@ -1061,6 +1249,14 @@ func scanFeishuSingleRow(ctx context.Context, q feishuOrgSQLExecutor, query stri
 	return nil
 }
 
+func scanFeishuCount(ctx context.Context, q feishuOrgSQLExecutor, query string, args ...any) (int64, error) {
+	var count int64
+	if err := scanFeishuSingleRow(ctx, q, query, args, &count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func feishuOrgUsersListSQL(suffix string) string {
 	return `
 SELECT COALESCE(fu.user_id, 0) AS user_id,
@@ -1132,6 +1328,36 @@ LEFT JOIN LATERAL (
 ` + suffix
 }
 
+func feishuOrgDepartmentSearchCondition(placeholder string) string {
+	terms := []string{
+		feishuOrgSearchTerm("d.name", placeholder),
+		feishuOrgSearchTerm("d.path", placeholder),
+		feishuOrgSearchTerm("d.open_department_id", placeholder),
+	}
+	return "(\n    " + strings.Join(terms, "\n    OR ") + "\n  )"
+}
+
+func feishuOrgUserSearchCondition(placeholder string) string {
+	terms := []string{
+		feishuOrgSearchTerm("fu.name", placeholder),
+		feishuOrgSearchTerm("fu.email", placeholder),
+		feishuOrgSearchTerm("fu.employee_no", placeholder),
+		feishuOrgSearchTerm("fu.open_id", placeholder),
+		feishuOrgSearchTerm("fu.union_id", placeholder),
+		feishuOrgSearchTerm("fu.feishu_user_id", placeholder),
+		feishuOrgSearchTerm("local_user.email", placeholder),
+		feishuOrgSearchTerm("local_user.username", placeholder),
+		feishuOrgSearchTerm("primary_department.name", placeholder),
+		feishuOrgSearchTerm("primary_department.path", placeholder),
+		feishuOrgSearchTerm("fu.primary_open_department_id", placeholder),
+	}
+	return "(\n    " + strings.Join(terms, "\n    OR ") + "\n  )"
+}
+
+func feishuOrgSearchTerm(expression string, placeholder string) string {
+	return "LOWER(COALESCE(" + expression + ", '')) LIKE '%' || " + placeholder + " || '%'"
+}
+
 func scanFeishuOrgUserViews(rows *sql.Rows) ([]FeishuOrgUserView, error) {
 	items := make([]FeishuOrgUserView, 0)
 	for rows.Next() {
@@ -1201,8 +1427,9 @@ func scanFeishuOrgUserViews(rows *sql.Rows) ([]FeishuOrgUserView, error) {
 	return items, nil
 }
 
-func normalizeFeishuOrgListInput(input FeishuOrgListInput) (tenantKey string, limit int, offset int) {
+func normalizeFeishuOrgListInput(input FeishuOrgListInput) (tenantKey string, search string, limit int, offset int) {
 	tenantKey = strings.TrimSpace(input.TenantKey)
+	search = strings.ToLower(strings.TrimSpace(input.Query))
 	limit = input.Limit
 	if limit <= 0 {
 		limit = 50
@@ -1214,7 +1441,7 @@ func normalizeFeishuOrgListInput(input FeishuOrgListInput) (tenantKey string, li
 	if offset < 0 {
 		offset = 0
 	}
-	return tenantKey, limit, offset
+	return tenantKey, search, limit, offset
 }
 
 func decodeFeishuJSONStringSlice(raw string) ([]string, error) {

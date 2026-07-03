@@ -1,4 +1,16 @@
 import { apiClient } from '../client'
+import type {
+  GroupStat,
+  ModelStat,
+  PaginatedResponse,
+  TrendDataPoint,
+  UsageLog,
+  UsageQueryParams,
+  UsageStatsResponse,
+} from '@/types'
+import type { UsageDashboardSnapshotV2Response, UserDashboardStats } from '@/api/usage'
+
+const FEISHU_ORG_MANUAL_SYNC_TIMEOUT_MS = 5 * 60 * 1000
 
 export interface FeishuOrgGroupBrief {
   id: number
@@ -63,12 +75,14 @@ export interface FeishuOrgSyncRun {
 
 export interface FeishuOrgListResult<T> {
   items: T[]
+  total: number
   limit: number
   offset: number
 }
 
 export interface FeishuOrgListParams {
   tenant_key?: string
+  q?: string
   limit?: number
   offset?: number
 }
@@ -77,6 +91,34 @@ export interface FeishuOrgSetGroupsRequest {
   tenant_key?: string
   group_ids: number[]
   reason?: string
+}
+
+export interface FeishuOrgManagerAccess {
+  has_access: boolean
+}
+
+export type FeishuOrgUsageQueryParams = UsageQueryParams & {
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
+}
+
+export interface FeishuOrgTrendResponse {
+  trend: TrendDataPoint[]
+  start_date: string
+  end_date: string
+  granularity: string
+}
+
+export interface FeishuOrgModelStatsResponse {
+  models: ModelStat[]
+  start_date: string
+  end_date: string
+}
+
+export interface FeishuOrgGroupStatsResponse {
+  groups: GroupStat[]
+  start_date: string
+  end_date: string
 }
 
 export async function listDepartments(params?: FeishuOrgListParams): Promise<FeishuOrgListResult<FeishuOrgDepartment>> {
@@ -101,7 +143,9 @@ export async function listSyncRuns(params?: FeishuOrgListParams): Promise<Feishu
 }
 
 export async function runManualReconcile() {
-  const { data } = await apiClient.post('/admin/feishu-org/sync-runs')
+  const { data } = await apiClient.post('/admin/feishu-org/sync-runs', undefined, {
+    timeout: FEISHU_ORG_MANUAL_SYNC_TIMEOUT_MS
+  })
   return data
 }
 
@@ -125,8 +169,66 @@ export async function listManagedUsers(params?: FeishuOrgListParams): Promise<Fe
   return data
 }
 
+export async function getManagerAccess(): Promise<FeishuOrgManagerAccess> {
+  const { data } = await apiClient.get<FeishuOrgManagerAccess>('/org-manager/access')
+  return data
+}
+
 export async function setManagedUserGroupGrants(userId: number, payload: FeishuOrgSetGroupsRequest) {
   const { data } = await apiClient.put(`/org-manager/users/${userId}/group-grants`, payload)
+  return data
+}
+
+export async function queryManagerUsage(
+  params: FeishuOrgUsageQueryParams,
+  config: { signal?: AbortSignal } = {}
+): Promise<PaginatedResponse<UsageLog>> {
+  const { data } = await apiClient.get<PaginatedResponse<UsageLog>>('/org-manager/usage', {
+    ...config,
+    params
+  })
+  return data
+}
+
+export async function getManagerUsageStats(params: UsageQueryParams): Promise<UsageStatsResponse> {
+  const { data } = await apiClient.get<UsageStatsResponse>('/org-manager/usage/stats', {
+    params
+  })
+  return data
+}
+
+export async function getManagerDashboardStats(params?: UsageQueryParams): Promise<UserDashboardStats> {
+  const { data } = await apiClient.get<UserDashboardStats>('/org-manager/usage/dashboard/stats', {
+    params
+  })
+  return data
+}
+
+export async function getManagerUsageTrend(params: UsageQueryParams & { granularity?: 'day' | 'hour' }): Promise<FeishuOrgTrendResponse> {
+  const { data } = await apiClient.get<FeishuOrgTrendResponse>('/org-manager/usage/dashboard/trend', {
+    params
+  })
+  return data
+}
+
+export async function getManagerUsageModels(params: UsageQueryParams & { model_source?: 'requested' }): Promise<FeishuOrgModelStatsResponse> {
+  const { data } = await apiClient.get<FeishuOrgModelStatsResponse>('/org-manager/usage/dashboard/models', {
+    params
+  })
+  return data
+}
+
+export async function getManagerUsageSnapshotV2(
+  params: UsageQueryParams & {
+    granularity?: 'day' | 'hour'
+    include_trend?: boolean
+    include_model_stats?: boolean
+    include_group_stats?: boolean
+  }
+): Promise<UsageDashboardSnapshotV2Response> {
+  const { data } = await apiClient.get<UsageDashboardSnapshotV2Response>('/org-manager/usage/dashboard/snapshot-v2', {
+    params
+  })
   return data
 }
 
@@ -138,5 +240,12 @@ export default {
   setDepartmentGroupPool,
   setUserOverrideGroupGrants,
   listManagedUsers,
+  getManagerAccess,
   setManagedUserGroupGrants,
+  queryManagerUsage,
+  getManagerUsageStats,
+  getManagerDashboardStats,
+  getManagerUsageTrend,
+  getManagerUsageModels,
+  getManagerUsageSnapshotV2,
 }

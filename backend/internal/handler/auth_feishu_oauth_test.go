@@ -14,6 +14,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	entsql "entgo.io/ent/dialect/sql"
 )
 
 func newFeishuOAuthTestHandler(t *testing.T, extraSettings map[string]string) (*AuthHandler, *dbent.Client) {
@@ -192,6 +194,147 @@ func TestFeishuOAuthCallbackAutoCreatesSyntheticUserWithFeishuSource(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, createdUser.ID, identity.UserID)
 	require.Equal(t, "ou_new_open", identity.Metadata["open_id"])
+}
+
+func TestFeishuOAuthCallbackBindsExistingOrgMirrorAfterAutoCreate(t *testing.T) {
+	originalFetch := fetchFeishuOAuthIdentity
+	fetchFeishuOAuthIdentity = func(ctx context.Context, cfg feishuOAuthConfig, code string) (*feishuOAuthIdentity, error) {
+		return &feishuOAuthIdentity{
+			Token: feishuOAuthTokenResponse{Scope: "contact:user.base:readonly"},
+			User: feishuUserInfo{
+				Name:      "田晶晶",
+				OpenID:    "ou_existing_org_user",
+				UnionID:   "on_existing_org_user",
+				UserID:    "feishu_existing_org_user",
+				TenantKey: "tenant_test",
+			},
+		}, nil
+	}
+	t.Cleanup(func() { fetchFeishuOAuthIdentity = originalFetch })
+
+	handler, client := newFeishuOAuthTestHandler(t, nil)
+	t.Cleanup(func() { _ = client.Close() })
+	createFeishuOrgMirrorTablesForTest(t, client)
+	insertFeishuOrgMirrorUserForTest(t, client, "tenant_test", "ou_existing_org_user", "on_existing_org_user", "feishu_existing_org_user", "od-tech")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/feishu/callback?code=feishu-code&state=state-existing-org", nil)
+	req.AddCookie(encodedCookie(feishuOAuthStateCookieName, "state-existing-org"))
+	req.AddCookie(encodedCookie(feishuOAuthRedirectCookieName, "/dashboard"))
+	req.AddCookie(encodedCookie(feishuOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-existing-org"))
+	c.Request = req
+
+	handler.FeishuOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	fragment := parseOAuthRedirectFragment(t, recorder.Header().Get("Location"))
+	require.NotEmpty(t, fragment.Get("access_token"))
+
+	ctx := context.Background()
+	createdUser, err := client.User.Query().
+		Where(dbuser.EmailEQ("feishu-ou_existing_org_user@feishu-connect.invalid")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, createdUser.ID, loadFeishuOrgMirrorUserIDForTest(t, client, "tenant_test", "ou_existing_org_user"))
+	require.Equal(t, createdUser.ID, loadFeishuOrgMirrorDepartmentUserIDForTest(t, client, "tenant_test", "ou_existing_org_user", "od-tech"))
+}
+
+func createFeishuOrgMirrorTablesForTest(t *testing.T, client *dbent.Client) {
+	t.Helper()
+
+	execFeishuOAuthTestSQL(t, client, `
+CREATE TABLE IF NOT EXISTS feishu_org_users (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NULL,
+	tenant_key TEXT NOT NULL DEFAULT '',
+	open_id TEXT NOT NULL,
+	union_id TEXT NOT NULL DEFAULT '',
+	feishu_user_id TEXT NOT NULL DEFAULT '',
+	name TEXT NOT NULL DEFAULT '',
+	email TEXT NOT NULL DEFAULT '',
+	employee_no TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'active',
+	primary_open_department_id TEXT NOT NULL DEFAULT '',
+	manager_open_id TEXT NOT NULL DEFAULT '',
+	department_open_ids TEXT NOT NULL DEFAULT '[]',
+	raw TEXT NOT NULL DEFAULT '{}',
+	last_synced_at TIMESTAMP NULL,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(tenant_key, open_id)
+)`)
+	execFeishuOAuthTestSQL(t, client, `
+CREATE TABLE IF NOT EXISTS feishu_user_departments (
+	tenant_key TEXT NOT NULL DEFAULT '',
+	open_id TEXT NOT NULL,
+	open_department_id TEXT NOT NULL,
+	user_id INTEGER NULL,
+	is_primary BOOLEAN NOT NULL DEFAULT false,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (tenant_key, open_id, open_department_id)
+)`)
+}
+
+func insertFeishuOrgMirrorUserForTest(t *testing.T, client *dbent.Client, tenantKey string, openID string, unionID string, feishuUserID string, departmentID string) {
+	t.Helper()
+
+	execFeishuOAuthTestSQL(t, client, `
+INSERT INTO feishu_org_users (
+	user_id, tenant_key, open_id, union_id, feishu_user_id, name, status,
+	primary_open_department_id, department_open_ids, raw, last_synced_at, updated_at
+) VALUES (
+	NULL, ?, ?, ?, ?, '田晶晶', 'active', ?, '["' || ? || '"]', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+)
+ON CONFLICT(tenant_key, open_id) DO UPDATE SET
+	user_id = NULL,
+	union_id = excluded.union_id,
+	feishu_user_id = excluded.feishu_user_id,
+	primary_open_department_id = excluded.primary_open_department_id,
+	department_open_ids = excluded.department_open_ids,
+	updated_at = CURRENT_TIMESTAMP`, tenantKey, openID, unionID, feishuUserID, departmentID, departmentID)
+	execFeishuOAuthTestSQL(t, client, `
+INSERT INTO feishu_user_departments (
+	tenant_key, open_id, open_department_id, user_id, is_primary, updated_at
+) VALUES (?, ?, ?, NULL, true, CURRENT_TIMESTAMP)
+ON CONFLICT(tenant_key, open_id, open_department_id) DO UPDATE SET
+	user_id = NULL,
+	is_primary = excluded.is_primary,
+	updated_at = CURRENT_TIMESTAMP`, tenantKey, openID, departmentID)
+}
+
+func execFeishuOAuthTestSQL(t *testing.T, client *dbent.Client, query string, args ...any) {
+	t.Helper()
+
+	var result entsql.Result
+	require.NoError(t, client.Driver().Exec(context.Background(), query, args, &result))
+}
+
+func loadFeishuOrgMirrorUserIDForTest(t *testing.T, client *dbent.Client, tenantKey string, openID string) int64 {
+	t.Helper()
+
+	return loadFeishuOrgMirrorIDForTest(t, client, `SELECT COALESCE(user_id, 0) FROM feishu_org_users WHERE tenant_key = ? AND open_id = ?`, tenantKey, openID)
+}
+
+func loadFeishuOrgMirrorDepartmentUserIDForTest(t *testing.T, client *dbent.Client, tenantKey string, openID string, departmentID string) int64 {
+	t.Helper()
+
+	return loadFeishuOrgMirrorIDForTest(t, client, `SELECT COALESCE(user_id, 0) FROM feishu_user_departments WHERE tenant_key = ? AND open_id = ? AND open_department_id = ?`, tenantKey, openID, departmentID)
+}
+
+func loadFeishuOrgMirrorIDForTest(t *testing.T, client *dbent.Client, query string, args ...any) int64 {
+	t.Helper()
+
+	var rows entsql.Rows
+	require.NoError(t, client.Driver().Query(context.Background(), query, args, &rows))
+	defer func() { _ = rows.Close() }()
+	require.True(t, rows.Next())
+	var id int64
+	require.NoError(t, rows.Scan(&id))
+	require.NoError(t, rows.Err())
+	return id
 }
 
 func TestFeishuOAuthCallbackRejectsUnboundExistingEmail(t *testing.T) {

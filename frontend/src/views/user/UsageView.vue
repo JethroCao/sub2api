@@ -3,6 +3,19 @@
     <div class="space-y-6">
       <UsageStatsCards :stats="usageStats" :show-account-cost="false" :strike-standard-cost="true" />
 
+      <div v-if="canViewTeamUsage" class="card p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">统计范围</h2>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">部门范围仅查看你负责范围内已绑定员工的使用记录。</p>
+          </div>
+          <div class="flex rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
+            <button class="rounded-md px-3 py-1.5 text-sm font-medium" :class="scopeButtonClass('personal')" @click="setUsageScope('personal')">个人</button>
+            <button class="rounded-md px-3 py-1.5 text-sm font-medium" :class="scopeButtonClass('team')" @click="setUsageScope('team')">部门</button>
+          </div>
+        </div>
+      </div>
+
       <div class="space-y-4">
         <div class="card p-4">
           <div class="flex flex-wrap items-center gap-4">
@@ -69,7 +82,16 @@
       <div class="card p-6">
         <div class="flex flex-wrap items-end justify-between gap-4">
           <div class="flex flex-1 flex-wrap items-end gap-4">
-            <div class="w-full sm:w-auto sm:min-w-[220px]">
+            <div v-if="isTeamScope" class="w-full sm:w-auto sm:min-w-[260px]">
+              <label class="input-label">{{ t('admin.usage.user') }}</label>
+              <Select
+                v-model="filters.user_id"
+                :options="managedUserOptions"
+                searchable
+                @change="applyFilters"
+              />
+            </div>
+            <div v-if="!isTeamScope" class="w-full sm:w-auto sm:min-w-[220px]">
               <label class="input-label">{{ t('usage.apiKeyFilter') }}</label>
               <Select v-model="filters.api_key_id" :options="apiKeyOptions" @change="applyFilters" />
             </div>
@@ -190,6 +212,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { keysAPI, usageAPI, userGroupsAPI } from '@/api'
+import feishuOrgAPI, { type FeishuOrgUser } from '@/api/admin/feishuOrg'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
@@ -281,7 +304,11 @@ const groupDistributionMetric = ref<DistributionMetric>('tokens')
 const endpointDistributionMetric = ref<DistributionMetric>('tokens')
 const endpointDistributionSource = ref<EndpointSource>('inbound')
 const activeTab = ref<'usage' | 'errors'>('usage')
-const errorViewEnabled = computed(() => appStore.cachedPublicSettings?.allow_user_view_error_requests ?? false)
+type UsageScope = 'personal' | 'team'
+const usageScope = ref<UsageScope>('personal')
+const canViewTeamUsage = ref(false)
+const isTeamScope = computed(() => canViewTeamUsage.value && usageScope.value === 'team')
+const errorViewEnabled = computed(() => !isTeamScope.value && (appStore.cachedPublicSettings?.allow_user_view_error_requests ?? false))
 
 const filters = ref<UsageQueryParams>({
   start_date: startDate.value,
@@ -326,10 +353,25 @@ const billingModeOptions = computed<SelectOption[]>(() => [
 const apiKeys = ref<ApiKey[]>([])
 const groups = ref<Group[]>([])
 const modelOptionValues = ref<string[]>([])
+const managedUsers = ref<FeishuOrgUser[]>([])
+
+const MANAGED_USER_FILTER_PAGE_SIZE = 200
+const MANAGED_USER_FILTER_MAX = 2000
 
 const apiKeyOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('usage.allApiKeys') },
   ...apiKeys.value.map((key) => ({ value: key.id, label: key.name })),
+])
+const formatManagedUserOptionLabel = (user: FeishuOrgUser): string => {
+  const name = user.name || user.local_username || user.local_email || user.email || `#${user.user_id}`
+  const email = user.local_email || user.email
+  return email && email !== name ? `${name} (${email})` : name
+}
+const managedUserOptions = computed<SelectOption[]>(() => [
+  { value: null, label: '全部员工' },
+  ...managedUsers.value
+    .filter((user) => user.user_id > 0)
+    .map((user) => ({ value: user.user_id, label: formatManagedUserOptionLabel(user) })),
 ])
 const groupOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('admin.usage.allGroups') },
@@ -339,6 +381,34 @@ const modelOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('admin.usage.allModels') },
   ...modelOptionValues.value.map((model) => ({ value: model, label: model })),
 ])
+
+const scopeButtonClass = (scope: UsageScope) =>
+  usageScope.value === scope
+    ? 'bg-white text-primary-600 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+    : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'
+
+const setUsageScope = (scope: UsageScope) => {
+  if (usageScope.value === scope) return
+  usageScope.value = scope
+  if (scope === 'team') {
+    filters.value.api_key_id = undefined
+    activeTab.value = 'usage'
+  } else {
+    filters.value.user_id = undefined
+  }
+  pagination.page = 1
+  resetErrorRows()
+  refreshData()
+}
+
+const detectTeamUsageAccess = async () => {
+  try {
+    const result = await feishuOrgAPI.getManagerAccess()
+    canViewTeamUsage.value = result.has_access
+  } catch {
+    canViewTeamUsage.value = false
+  }
+}
 
 const normalizedFilters = computed<UsageQueryParams>(() => {
   const requestType = filters.value.request_type
@@ -365,9 +435,9 @@ const loadLogs = async () => {
   abortController = controller
   loading.value = true
   try {
-    const res = await usageAPI.query(buildUsageListParams(pagination.page, pagination.page_size), {
-      signal: controller.signal,
-    })
+    const res = isTeamScope.value
+      ? await feishuOrgAPI.queryManagerUsage(buildUsageListParams(pagination.page, pagination.page_size), { signal: controller.signal })
+      : await usageAPI.query(buildUsageListParams(pagination.page, pagination.page_size), { signal: controller.signal })
     if (!controller.signal.aborted) {
       usageLogs.value = res.items
       pagination.total = res.total
@@ -385,7 +455,9 @@ const loadStats = async () => {
   const seq = ++statsReqSeq
   endpointStatsLoading.value = true
   try {
-    const stats = await usageAPI.getStats(normalizedFilters.value)
+    const stats = isTeamScope.value
+      ? await feishuOrgAPI.getManagerUsageStats(normalizedFilters.value)
+      : await usageAPI.getStats(normalizedFilters.value)
     if (seq !== statsReqSeq) return
     usageStats.value = stats
     inboundEndpointStats.value = stats.endpoints || []
@@ -406,10 +478,15 @@ const loadModelStats = async () => {
   const seq = ++modelStatsReqSeq
   modelStatsLoading.value = true
   try {
-    const response = await usageAPI.getDashboardModels({
-      ...normalizedFilters.value,
-      model_source: 'requested',
-    })
+    const response = isTeamScope.value
+      ? await feishuOrgAPI.getManagerUsageModels({
+        ...normalizedFilters.value,
+        model_source: 'requested',
+      })
+      : await usageAPI.getDashboardModels({
+        ...normalizedFilters.value,
+        model_source: 'requested',
+      })
     if (seq !== modelStatsReqSeq) return
     requestedModelStats.value = response.models || []
     refreshModelOptions(response.models || [])
@@ -426,13 +503,21 @@ const loadChartData = async () => {
   const seq = ++chartReqSeq
   chartsLoading.value = true
   try {
-    const snapshot = await usageAPI.getDashboardSnapshotV2({
-      ...normalizedFilters.value,
-      granularity: granularity.value,
-      include_trend: true,
-      include_model_stats: false,
-      include_group_stats: true,
-    })
+    const snapshot = isTeamScope.value
+      ? await feishuOrgAPI.getManagerUsageSnapshotV2({
+        ...normalizedFilters.value,
+        granularity: granularity.value,
+        include_trend: true,
+        include_model_stats: false,
+        include_group_stats: true,
+      })
+      : await usageAPI.getDashboardSnapshotV2({
+        ...normalizedFilters.value,
+        granularity: granularity.value,
+        include_trend: true,
+        include_model_stats: false,
+        include_group_stats: true,
+      })
     if (seq !== chartReqSeq) return
     trendData.value = snapshot.trend || []
     groupStats.value = snapshot.groups || []
@@ -556,7 +641,9 @@ const exportToCSV = async () => {
     const pageSize = 100
     const totalPages = Math.ceil(pagination.total / pageSize)
     for (let page = 1; page <= totalPages; page++) {
-      const response = await usageAPI.query(buildUsageListParams(page, pageSize))
+      const response = isTeamScope.value
+        ? await feishuOrgAPI.queryManagerUsage(buildUsageListParams(page, pageSize))
+        : await usageAPI.query(buildUsageListParams(page, pageSize))
       allLogs.push(...response.items)
     }
     if (allLogs.length === 0) {
@@ -565,6 +652,7 @@ const exportToCSV = async () => {
     }
     const headers = [
       'Time',
+      ...(isTeamScope.value ? ['User'] : []),
       'API Key Name',
       'Model',
       'Reasoning Effort',
@@ -584,6 +672,7 @@ const exportToCSV = async () => {
     ]
     const rows = allLogs.map((log) => [
       log.created_at,
+      ...(isTeamScope.value ? [log.user?.email || log.user?.username || (log.user_id ? `#${log.user_id}` : '')] : []),
       log.api_key?.name || '',
       log.model,
       formatReasoningEffort(log.reasoning_effort),
@@ -626,6 +715,7 @@ const DEFAULT_HIDDEN_COLUMNS = ['user_agent']
 const HIDDEN_COLUMNS_KEY = 'user-usage-hidden-columns'
 
 const allColumns = computed<Column[]>(() => [
+  ...(isTeamScope.value ? [{ key: 'user', label: t('admin.usage.user'), sortable: false }] : []),
   { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
   { key: 'model', label: t('usage.model'), sortable: true },
   { key: 'reasoning_effort', label: t('usage.reasoningEffort'), sortable: false },
@@ -684,6 +774,30 @@ const loadFilterOptions = async () => {
   }
 }
 
+const loadManagedUsers = async () => {
+  if (!canViewTeamUsage.value) {
+    managedUsers.value = []
+    return
+  }
+  try {
+    const collected: FeishuOrgUser[] = []
+    let offset = 0
+    while (collected.length < MANAGED_USER_FILTER_MAX) {
+      const result = await feishuOrgAPI.listManagedUsers({
+        limit: MANAGED_USER_FILTER_PAGE_SIZE,
+        offset,
+      })
+      collected.push(...result.items)
+      offset += result.items.length
+      if (result.items.length === 0 || offset >= result.total) break
+    }
+    managedUsers.value = collected
+  } catch (error) {
+    console.error('Failed to load managed users for usage filters:', error)
+    managedUsers.value = []
+  }
+}
+
 const resetErrorRows = () => {
   errorPage.value = 1
   if (activeTab.value === 'errors') {
@@ -695,6 +809,11 @@ const resetErrorRows = () => {
 }
 
 const loadErrors = async () => {
+  if (isTeamScope.value) {
+    errorRows.value = []
+    errorTotal.value = 0
+    return
+  }
   errorLoading.value = true
   try {
     const resp = await usageAPI.listMyErrorRequests({
@@ -738,10 +857,12 @@ const switchToErrors = () => {
   if (errorRows.value.length === 0) void loadErrors()
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadSavedColumns()
   document.addEventListener('click', handleColumnClickOutside)
+  await detectTeamUsageAccess()
   void loadFilterOptions()
+  void loadManagedUsers()
   refreshData()
 })
 

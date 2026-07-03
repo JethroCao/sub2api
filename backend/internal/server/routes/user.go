@@ -75,8 +75,15 @@ func RegisterUserRoutes(
 		// 飞书部门负责人受限管理入口（非全局管理员）
 		orgManager := authenticated.Group("/org-manager")
 		{
+			orgManager.GET("/access", h.FeishuOrg.ManagerAccess)
 			orgManager.GET("/users", h.FeishuOrg.ListManagedUsers)
 			orgManager.PUT("/users/:id/group-grants", h.FeishuOrg.SetManagedUserGroupGrants)
+			orgManager.GET("/usage", h.FeishuOrg.ListManagerUsage)
+			orgManager.GET("/usage/stats", h.FeishuOrg.ManagerUsageStats)
+			orgManager.GET("/usage/dashboard/stats", h.FeishuOrg.ManagerDashboardStats)
+			orgManager.GET("/usage/dashboard/trend", h.FeishuOrg.ManagerUsageTrend)
+			orgManager.GET("/usage/dashboard/models", h.FeishuOrg.ManagerUsageModels)
+			orgManager.GET("/usage/dashboard/snapshot-v2", h.FeishuOrg.ManagerUsageSnapshotV2)
 		}
 
 		// 用户可用渠道（非管理员接口）

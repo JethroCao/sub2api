@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
+	entdialect "entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/gin-gonic/gin"
 )
@@ -1233,6 +1234,9 @@ func applyPendingOAuthBindingTx(
 	if _, err := updateIdentity.Save(ctx); err != nil {
 		return err
 	}
+	if err := bindFeishuOrgMirrorUserTx(ctx, tx, session, targetUserID); err != nil {
+		return err
+	}
 
 	if decision != nil && (decision.IdentityID == nil || *decision.IdentityID != identity.ID) {
 		if _, err := tx.Client().IdentityAdoptionDecision.Update().
@@ -1264,6 +1268,115 @@ func applyPendingOAuthBindingTx(
 	}
 
 	return nil
+}
+
+func bindFeishuOrgMirrorUserTx(ctx context.Context, tx *dbent.Tx, session *dbent.PendingAuthSession, userID int64) error {
+	if tx == nil || session == nil || userID <= 0 || !strings.EqualFold(strings.TrimSpace(session.ProviderType), "feishu") {
+		return nil
+	}
+	tenantKey := firstNonEmpty(session.ProviderKey, pendingSessionStringValue(session.UpstreamIdentityClaims, "tenant_key"))
+	openID := firstNonEmpty(pendingSessionStringValue(session.UpstreamIdentityClaims, "open_id"), session.ProviderSubject)
+	if tenantKey == "" || openID == "" {
+		return nil
+	}
+	unionID := pendingSessionStringValue(session.UpstreamIdentityClaims, "union_id")
+	feishuUserID := pendingSessionStringValue(session.UpstreamIdentityClaims, "user_id")
+
+	driver := tx.Client().Driver()
+	dialectName := driver.Dialect()
+	placeholder := func(index int) string {
+		if dialectName == entdialect.Postgres {
+			return fmt.Sprintf("$%d", index)
+		}
+		return "?"
+	}
+
+	orgUserSQL := fmt.Sprintf(`
+UPDATE feishu_org_users
+SET user_id = %s,
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_key = %s
+  AND (
+    open_id = %s
+    OR (%s <> '' AND union_id = %s)
+    OR (%s <> '' AND feishu_user_id = %s)
+  )
+  AND (user_id IS NULL OR user_id = %s)`,
+		placeholder(1), placeholder(2), placeholder(3), placeholder(4), placeholder(5), placeholder(6), placeholder(7), placeholder(8))
+	if err := execOAuthRawSQL(ctx, driver, orgUserSQL, userID, tenantKey, openID, unionID, unionID, feishuUserID, feishuUserID, userID); err != nil {
+		if isMissingFeishuOrgMirrorTableError(err) {
+			return nil
+		}
+		return err
+	}
+
+	departmentSQL := fmt.Sprintf(`
+UPDATE feishu_user_departments
+SET user_id = %s,
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_key = %s
+  AND open_id = %s
+  AND (user_id IS NULL OR user_id = %s)
+  AND EXISTS (
+    SELECT 1
+    FROM feishu_org_users fu
+    WHERE fu.tenant_key = feishu_user_departments.tenant_key
+      AND fu.open_id = feishu_user_departments.open_id
+      AND fu.user_id = %s
+  )`,
+		placeholder(1), placeholder(2), placeholder(3), placeholder(4), placeholder(5))
+	if err := execOAuthRawSQL(ctx, driver, departmentSQL, userID, tenantKey, openID, userID, userID); err != nil {
+		if isMissingFeishuOrgMirrorTableError(err) {
+			return nil
+		}
+		return err
+	}
+
+	managerSQL := fmt.Sprintf(`
+UPDATE feishu_department_managers
+SET manager_user_id = %s,
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_key = %s
+  AND manager_open_id = %s
+  AND (manager_user_id IS NULL OR manager_user_id = %s)
+  AND EXISTS (
+    SELECT 1
+    FROM feishu_org_users fu
+    WHERE fu.tenant_key = feishu_department_managers.tenant_key
+      AND fu.open_id = feishu_department_managers.manager_open_id
+      AND fu.user_id = %s
+  )`,
+		placeholder(1), placeholder(2), placeholder(3), placeholder(4), placeholder(5))
+	if err := execOAuthRawSQL(ctx, driver, managerSQL, userID, tenantKey, openID, userID, userID); err != nil {
+		if isMissingFeishuOrgMirrorTableError(err) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
+}
+
+func execOAuthRawSQL(ctx context.Context, driver dialectDriver, query string, args ...any) error {
+	var result entsql.Result
+	return driver.Exec(ctx, query, args, &result)
+}
+
+type dialectDriver interface {
+	Dialect() string
+	Exec(context.Context, string, any, any) error
+}
+
+func isMissingFeishuOrgMirrorTableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "feishu_") &&
+		(strings.Contains(msg, "no such table") ||
+			strings.Contains(msg, "does not exist") ||
+			strings.Contains(msg, "unknown table") ||
+			strings.Contains(msg, "1146"))
 }
 
 func consumePendingOAuthBrowserSessionTx(

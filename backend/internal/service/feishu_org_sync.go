@@ -22,7 +22,7 @@ import (
 const (
 	feishuOpenAPIBaseURL          = "https://open.feishu.cn"
 	feishuRootDepartmentID        = "0"
-	feishuOrgSyncHTTPTimeout      = 20 * time.Second
+	feishuOrgSyncHTTPTimeout      = 60 * time.Second
 	feishuOrgSyncPageSize         = 50
 	feishuOrgSyncResponseBodySize = 4 << 20
 )
