@@ -180,6 +180,19 @@ func TestMigration158BackfillsGrokMediaGenerationGroups(t *testing.T) {
 	require.Contains(t, sql, "AND allow_image_generation = false")
 }
 
+func TestMigration160AllowsFeishuAuthProvider(t *testing.T) {
+	content, err := FS.ReadFile("160_add_feishu_provider_type.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "users_signup_source_check")
+	require.Contains(t, sql, "auth_identities_provider_type_check")
+	require.Contains(t, sql, "auth_identity_channels_provider_type_check")
+	require.Contains(t, sql, "pending_auth_sessions_provider_type_check")
+	require.Contains(t, sql, "user_provider_default_grants_provider_type_check")
+	require.Contains(t, sql, "'feishu'")
+}
+
 func TestMigration154AddsSparkShadowColumnsAndConstraintsWithoutHotIndexes(t *testing.T) {
 	content, err := FS.ReadFile("154_account_spark_shadow.sql")
 	require.NoError(t, err)
