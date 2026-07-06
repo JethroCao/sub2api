@@ -61,6 +61,25 @@ func (c *HTMLCache) Get() *CachedHTML {
 	}
 }
 
+// GetForSettings returns cached HTML only when it was rendered from the same
+// settings payload. This keeps per-process HTML caches safe in distributed
+// deployments where another instance may update settings.
+func (c *HTMLCache) GetForSettings(settingsJSON []byte) *CachedHTML {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.cachedHTML == nil {
+		return nil
+	}
+	if c.etag != c.generateETag(settingsJSON) {
+		return nil
+	}
+	return &CachedHTML{
+		Content: c.cachedHTML,
+		ETag:    c.etag,
+	}
+}
+
 // Set updates the cache with new rendered HTML
 func (c *HTMLCache) Set(html []byte, settingsJSON []byte) {
 	c.mu.Lock()
