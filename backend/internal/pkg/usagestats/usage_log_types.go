@@ -267,6 +267,7 @@ type PlatformDashboardStats struct {
 // UsageLogFilters represents filters for usage log queries
 type UsageLogFilters struct {
 	UserID    int64
+	UserIDs   []int64
 	APIKeyID  int64
 	AccountID int64
 	GroupID   int64

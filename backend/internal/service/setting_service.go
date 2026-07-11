@@ -96,6 +96,7 @@ type AuthSourceDefaultSettings struct {
 	GitHub                       ProviderDefaultGrantSettings
 	Google                       ProviderDefaultGrantSettings
 	DingTalk                     ProviderDefaultGrantSettings
+	Feishu                       ProviderDefaultGrantSettings
 	ForceEmailOnThirdPartySignup bool
 }
 
@@ -174,6 +175,15 @@ var (
 		grantOnSignup:    SettingKeyAuthSourceDefaultDingTalkGrantOnSignup,
 		grantOnFirstBind: SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind,
 		platformQuotas:   SettingKeyAuthSourcePlatformQuotas("dingtalk"),
+	}
+	feishuAuthSourceDefaultKeys = authSourceDefaultKeySet{
+		source:           "feishu",
+		balance:          SettingKeyAuthSourceDefaultFeishuBalance,
+		concurrency:      SettingKeyAuthSourceDefaultFeishuConcurrency,
+		subscriptions:    SettingKeyAuthSourceDefaultFeishuSubscriptions,
+		grantOnSignup:    SettingKeyAuthSourceDefaultFeishuGrantOnSignup,
+		grantOnFirstBind: SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind,
+		platformQuotas:   SettingKeyAuthSourcePlatformQuotas("feishu"),
 	}
 )
 

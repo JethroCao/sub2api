@@ -47,6 +47,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	// 初始化默认设置
 	defaults := map[string]string{
 		SettingKeyRegistrationEnabled:                       "true",
+		SettingKeyEmailPasswordLoginEnabled:                 "true",
+		SettingKeyAdminEmailLoginFallbackEnabled:            "true",
 		SettingKeyEmailVerifyEnabled:                        "false",
 		SettingKeyRegistrationEmailSuffixWhitelist:          "[]",
 		SettingKeyPromoCodeEnabled:                          "true", // 默认启用优惠码功能
@@ -154,7 +156,26 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAuthSourceDefaultDingTalkSubscriptions:    "[]",
 		SettingKeyAuthSourceDefaultDingTalkGrantOnSignup:    "false",
 		SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind: "false",
+		SettingKeyAuthSourceDefaultFeishuBalance:            "0",
+		SettingKeyAuthSourceDefaultFeishuConcurrency:        "5",
+		SettingKeyAuthSourceDefaultFeishuSubscriptions:      "[]",
+		SettingKeyAuthSourceDefaultFeishuGrantOnSignup:      "false",
+		SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind:   "false",
 		SettingKeyForceEmailOnThirdPartySignup:              "false",
+		SettingKeyFeishuConnectEnabled:                      "false",
+		SettingKeyFeishuConnectAppID:                        "",
+		SettingKeyFeishuConnectAppSecret:                    "",
+		SettingKeyFeishuConnectRedirectURL:                  "",
+		SettingKeyFeishuConnectTenantRestrictionPolicy:      FeishuTenantRestrictionInternalOnly,
+		SettingKeyFeishuConnectAllowedTenantKey:             "",
+		SettingKeyFeishuConnectBypassRegistration:           "false",
+		SettingKeyFeishuConnectSyncEmail:                    "true",
+		SettingKeyFeishuConnectSyncDisplayName:              "true",
+		SettingKeyFeishuConnectSyncDepartment:               "true",
+		SettingKeyFeishuOrgSyncEnabled:                      "false",
+		SettingKeyFeishuDepartedUserAction:                  FeishuDepartedUserActionAutoDisable,
+		SettingKeyFeishuSyncDisableThresholdCount:           strconv.Itoa(FeishuDefaultDisableThresholdCount),
+		SettingKeyFeishuSyncDisableThresholdPercent:         strconv.Itoa(FeishuDefaultDisableThresholdPct),
 		SettingKeySMTPPort:                                  "587",
 		SettingKeySMTPUseTLS:                                "false",
 		// Model fallback defaults
@@ -236,6 +257,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 // parseSettings 解析设置到结构体
 func (s *SettingService) parseSettings(settings map[string]string) *SystemSettings {
 	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
+	emailPasswordLoginEnabled, emailPasswordLoginExplicit := parseOptionalBoolSetting(settings, SettingKeyEmailPasswordLoginEnabled, true)
+	adminEmailLoginFallbackEnabled, adminEmailLoginFallbackExplicit := parseOptionalBoolSetting(settings, SettingKeyAdminEmailLoginFallbackEnabled, true)
 	loginAgreementDocuments := parseLoginAgreementDocuments(settings[SettingKeyLoginAgreementDocuments])
 	loginAgreementUpdatedAt := strings.TrimSpace(settings[SettingKeyLoginAgreementUpdatedAt])
 	if loginAgreementUpdatedAt == "" {
@@ -249,6 +272,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result := &SystemSettings{
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
+		EmailPasswordLoginEnabled:        emailPasswordLoginEnabled,
+		AdminEmailLoginFallbackEnabled:   adminEmailLoginFallbackEnabled,
+		LoginEntrySettingsExplicit:       emailPasswordLoginExplicit || adminEmailLoginFallbackExplicit,
 		EmailVerifyEnabled:               emailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist: ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
 		PromoCodeEnabled:                 settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
@@ -499,6 +525,87 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 			result.DingTalkConnectSyncDeptAttrName = "钉钉部门"
 		}
 	}
+
+	// Feishu Connect 设置：
+	// - 兼容 config.yaml/env
+	// - 支持后台系统设置覆盖并持久化（存储于 DB）
+	feishuBase := defaultFeishuConnectConfig(config.FeishuConnectConfig{})
+	if s.cfg != nil {
+		feishuBase = defaultFeishuConnectConfig(s.cfg.Feishu)
+	}
+
+	if raw, ok := settings[SettingKeyFeishuConnectEnabled]; ok {
+		result.FeishuConnectEnabled = raw == "true"
+	} else {
+		result.FeishuConnectEnabled = feishuBase.Enabled
+	}
+	if v, ok := settings[SettingKeyFeishuConnectAppID]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectAppID = strings.TrimSpace(v)
+	} else {
+		result.FeishuConnectAppID = feishuBase.AppID
+	}
+	if v, ok := settings[SettingKeyFeishuConnectRedirectURL]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectRedirectURL = strings.TrimSpace(v)
+	} else {
+		result.FeishuConnectRedirectURL = feishuBase.RedirectURL
+	}
+	result.FeishuConnectAppSecret = strings.TrimSpace(settings[SettingKeyFeishuConnectAppSecret])
+	if result.FeishuConnectAppSecret == "" {
+		result.FeishuConnectAppSecret = strings.TrimSpace(feishuBase.AppSecret)
+	}
+	result.FeishuConnectAppSecretConfigured = result.FeishuConnectAppSecret != ""
+	if v, ok := settings[SettingKeyFeishuConnectTenantRestrictionPolicy]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectTenantRestrictionPolicy = strings.TrimSpace(v)
+	} else {
+		result.FeishuConnectTenantRestrictionPolicy = feishuBase.TenantRestrictionPolicy
+	}
+	result.FeishuConnectTenantRestrictionPolicy = NormalizeFeishuTenantRestrictionPolicy(result.FeishuConnectTenantRestrictionPolicy)
+	if v, ok := settings[SettingKeyFeishuConnectAllowedTenantKey]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectAllowedTenantKey = strings.TrimSpace(v)
+	} else {
+		result.FeishuConnectAllowedTenantKey = feishuBase.AllowedTenantKey
+	}
+	if v, ok := settings[SettingKeyFeishuConnectBypassRegistration]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectBypassRegistration = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuConnectBypassRegistration = feishuBase.BypassRegistration
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncEmail]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectSyncEmail = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuConnectSyncEmail = feishuBase.SyncEmail
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncDisplayName]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectSyncDisplayName = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuConnectSyncDisplayName = feishuBase.SyncDisplayName
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncDepartment]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuConnectSyncDepartment = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuConnectSyncDepartment = feishuBase.SyncDepartment
+	}
+	if v, ok := settings[SettingKeyFeishuOrgSyncEnabled]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuOrgSyncEnabled = strings.EqualFold(strings.TrimSpace(v), "true")
+	} else {
+		result.FeishuOrgSyncEnabled = feishuBase.OrgSyncEnabled
+	}
+	if v, ok := settings[SettingKeyFeishuDepartedUserAction]; ok && strings.TrimSpace(v) != "" {
+		result.FeishuDepartedUserAction = strings.TrimSpace(v)
+	} else {
+		result.FeishuDepartedUserAction = feishuBase.DepartedUserAction
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyFeishuSyncDisableThresholdCount])); err == nil && v > 0 {
+		result.FeishuSyncDisableThresholdCount = v
+	} else {
+		result.FeishuSyncDisableThresholdCount = feishuBase.DisableThresholdCount
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyFeishuSyncDisableThresholdPercent])); err == nil && v > 0 {
+		result.FeishuSyncDisableThresholdPercent = v
+	} else {
+		result.FeishuSyncDisableThresholdPercent = feishuBase.DisableThresholdPercent
+	}
+	normalizeFeishuSystemSettings(result)
 
 	// Generic OIDC 设置：
 	// - 兼容 config.yaml/env
@@ -864,6 +971,18 @@ func isFalseSettingValue(value string) bool {
 	default:
 		return false
 	}
+}
+
+func parseOptionalBoolSetting(settings map[string]string, key string, defaultValue bool) (bool, bool) {
+	raw, ok := settings[key]
+	if !ok {
+		return defaultValue, false
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultValue, false
+	}
+	return strings.EqualFold(raw, "true"), true
 }
 
 func normalizeVisibleMethodSettingSource(method, source string, enabled bool) (string, error) {

@@ -190,6 +190,8 @@ export default {
     channelMonitor: '渠道监控',
     channelStatus: '渠道状态',
     riskControl: '风控中心',
+    feishuOrg: '飞书组织权限',
+    orgManager: '部门成员授权',
   },
 
   // Auth
@@ -218,8 +220,11 @@ export default {
     passwordRequired: '请输入密码',
     passwordMinLength: '密码至少需要 6 个字符',
     loginFailed: '登录失败，请检查您的凭据后重试。',
+    adminEmailFallbackOnly: '邮箱密码登录已关闭，仅超管邮箱兜底入口可用。',
+    emailLoginUnavailable: '邮箱密码登录当前不可用，请使用其他登录方式。',
     errors: {
       USER_NOT_ACTIVE: '账号已被禁用',
+      EMAIL_PASSWORD_LOGIN_DISABLED: '邮箱密码登录已关闭，请使用飞书等其他登录方式。',
     },
     registrationFailed: '注册失败，请重试。',
     emailSuffixNotAllowed: '该邮箱域名不在允许注册范围内。',
@@ -311,6 +316,19 @@ export default {
         retry: '重新登录'
       }
     },
+    feishu: {
+      signIn: '飞书登录',
+      callbackTitle: '正在完成飞书登录',
+      callbackProcessing: '正在验证飞书登录信息，请稍候...',
+      callbackHint: '如果页面未自动跳转，请返回登录页重试。',
+      callbackMissingToken: '登录信息缺失，请返回重试。',
+      backToLogin: '返回登录',
+      invitationRequired: '该飞书账号尚未注册，站点已开启邀请码注册，请输入邀请码以完成注册。',
+      invalidPendingToken: '注册凭证已失效，请重新使用飞书登录。',
+      completeRegistration: '完成注册',
+      completing: '正在完成注册...',
+      completeRegistrationFailed: '注册失败，请检查邀请码后重试。'
+    },
     emailOAuth: {
       signIn: '使用 {providerName} 登录'
     },
@@ -360,6 +378,8 @@ export default {
     linuxdoCallbackPageTitle: 'LinuxDo 登录回调',
     dingtalkCallbackPageTitle: '钉钉登录回调',
     dingtalkProviderName: '钉钉',
+    feishuCallbackPageTitle: '飞书登录回调',
+    feishuProviderName: '飞书',
     oidcCallbackPageTitle: 'OIDC 登录回调',
     oauthCallbackPageTitle: 'OAuth 回调',
     wechatProviderName: '微信',

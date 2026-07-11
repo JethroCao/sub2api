@@ -1,4 +1,9 @@
 export default {
+    feishuOrg: {
+      title: '飞书组织权限',
+      description: '配置飞书部门分组池与员工授权'
+    },
+
     // Dashboard
     dashboard: {
       title: '管理控制台',

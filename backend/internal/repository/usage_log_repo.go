@@ -9,6 +9,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 	gocache "github.com/patrickmn/go-cache"
 )
 
@@ -94,6 +95,37 @@ func appendUsageLogBillingModeWhereConditionWithAlias(conditions []string, args 
 
 func appendUsageLogBillingModeQueryFilter(query string, args []any, billingMode string, alias string) (string, []any) {
 	conditions, args := appendUsageLogBillingModeWhereConditionWithAlias(nil, args, billingMode, alias)
+	if len(conditions) == 0 {
+		return query, args
+	}
+	return query + " AND " + conditions[0], args
+}
+
+func appendUsageLogUserScopeWhereCondition(conditions []string, args []any, userID int64, userIDs []int64, alias string) ([]string, []any) {
+	column := "user_id"
+	if alias != "" {
+		column = alias + ".user_id"
+	}
+	if userID > 0 {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", column, len(args)+1))
+		args = append(args, userID)
+		return conditions, args
+	}
+	if userIDs == nil {
+		return conditions, args
+	}
+	userIDs = normalizePositiveInt64IDs(userIDs)
+	if len(userIDs) == 0 {
+		conditions = append(conditions, "1 = 0")
+		return conditions, args
+	}
+	conditions = append(conditions, fmt.Sprintf("%s = ANY($%d)", column, len(args)+1))
+	args = append(args, pq.Array(userIDs))
+	return conditions, args
+}
+
+func appendUsageLogUserScopeQueryFilter(query string, args []any, userID int64, userIDs []int64, alias string) (string, []any) {
+	conditions, args := appendUsageLogUserScopeWhereCondition(nil, args, userID, userIDs, alias)
 	if len(conditions) == 0 {
 		return query, args
 	}

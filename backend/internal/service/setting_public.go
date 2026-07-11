@@ -158,6 +158,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	keys := []string{
 		SettingKeyRegistrationEnabled,
 		SettingKeyEmailVerifyEnabled,
+		SettingKeyEmailPasswordLoginEnabled,
+		SettingKeyAdminEmailLoginFallbackEnabled,
 		SettingKeyForceEmailOnThirdPartySignup,
 		SettingKeyRegistrationEmailSuffixWhitelist,
 		SettingKeyPromoCodeEnabled,
@@ -187,6 +189,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyCustomEndpoints,
 		SettingKeyLinuxDoConnectEnabled,
 		SettingKeyDingTalkConnectEnabled,
+		SettingKeyFeishuConnectEnabled,
+		SettingKeyFeishuOrgSyncEnabled,
 		SettingKeyWeChatConnectEnabled,
 		SettingKeyWeChatConnectAppID,
 		SettingKeyWeChatConnectAppSecret,
@@ -242,6 +246,12 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	} else {
 		dingTalkEnabled = s.cfg != nil && s.cfg.DingTalk.Enabled
 	}
+	feishuEnabled := false
+	if raw, ok := settings[SettingKeyFeishuConnectEnabled]; ok {
+		feishuEnabled = raw == "true"
+	} else {
+		feishuEnabled = s.cfg != nil && s.cfg.Feishu.Enabled
+	}
 	oidcEnabled := false
 	if raw, ok := settings[SettingKeyOIDCConnectEnabled]; ok {
 		oidcEnabled = raw == "true"
@@ -258,6 +268,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	gitHubEnabled := s.emailOAuthPublicEnabled(settings, "github")
 	googleEnabled := s.emailOAuthPublicEnabled(settings, "google")
 	weChatEnabled, weChatOpenEnabled, weChatMPEnabled, weChatMobileEnabled := s.weChatOAuthCapabilitiesFromSettings(settings)
+	emailPasswordLoginEnabled, _ := parseOptionalBoolSetting(settings, SettingKeyEmailPasswordLoginEnabled, true)
+	adminEmailLoginFallbackEnabled, _ := parseOptionalBoolSetting(settings, SettingKeyAdminEmailLoginFallbackEnabled, true)
 
 	// Password reset requires email verification to be enabled
 	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
@@ -312,6 +324,10 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		DingTalkOAuthEnabled:             dingTalkEnabled,
+		FeishuOAuthEnabled:               feishuEnabled,
+		FeishuOrgSyncEnabled:             settings[SettingKeyFeishuOrgSyncEnabled] == "true",
+		EmailPasswordLoginEnabled:        emailPasswordLoginEnabled,
+		AdminEmailLoginFallbackEnabled:   adminEmailLoginFallbackEnabled,
 		WeChatOAuthEnabled:               weChatEnabled,
 		WeChatOAuthOpenEnabled:           weChatOpenEnabled,
 		WeChatOAuthMPEnabled:             weChatMPEnabled,
@@ -469,6 +485,10 @@ type PublicSettingsInjectionPayload struct {
 	CustomEndpoints                  json.RawMessage          `json:"custom_endpoints"`
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
+	FeishuOAuthEnabled               bool                     `json:"feishu_oauth_enabled"`
+	FeishuOrgSyncEnabled             bool                     `json:"feishu_org_sync_enabled"`
+	EmailPasswordLoginEnabled        bool                     `json:"email_password_login_enabled"`
+	AdminEmailLoginFallbackEnabled   bool                     `json:"admin_email_login_fallback_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
 	WeChatOAuthOpenEnabled           bool                     `json:"wechat_oauth_open_enabled"`
 	WeChatOAuthMPEnabled             bool                     `json:"wechat_oauth_mp_enabled"`
@@ -538,6 +558,10 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		CustomEndpoints:                  safeRawJSONArray(settings.CustomEndpoints),
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		DingTalkOAuthEnabled:             settings.DingTalkOAuthEnabled,
+		FeishuOAuthEnabled:               settings.FeishuOAuthEnabled,
+		FeishuOrgSyncEnabled:             settings.FeishuOrgSyncEnabled,
+		EmailPasswordLoginEnabled:        settings.EmailPasswordLoginEnabled,
+		AdminEmailLoginFallbackEnabled:   settings.AdminEmailLoginFallbackEnabled,
 		WeChatOAuthEnabled:               settings.WeChatOAuthEnabled,
 		WeChatOAuthOpenEnabled:           settings.WeChatOAuthOpenEnabled,
 		WeChatOAuthMPEnabled:             settings.WeChatOAuthMPEnabled,

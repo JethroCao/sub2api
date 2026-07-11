@@ -3,14 +3,10 @@
     <div class="space-y-6">
       <div class="text-center">
         <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
-          {{ t('auth.oidc.callbackTitle', { providerName }) }}
+          {{ providerCallbackTitle }}
         </h2>
         <p class="mt-2 text-sm text-gray-500 dark:text-dark-400">
-          {{
-            isProcessing
-              ? t('auth.oidc.callbackProcessing', { providerName })
-              : t('auth.oidc.callbackHint')
-          }}
+          {{ isProcessing ? providerCallbackProcessing : providerCallbackHint }}
         </p>
       </div>
 
@@ -79,7 +75,7 @@
 
           <template v-if="needsInvitation">
             <p class="text-sm text-gray-700 dark:text-gray-300">
-              {{ t('auth.oidc.invitationRequired', { providerName }) }}
+              {{ providerInvitationRequired }}
             </p>
             <div>
               <input
@@ -98,8 +94,8 @@
             >
               {{
                 isSubmitting
-                  ? t('auth.oidc.completing')
-                  : t('auth.oidc.completeRegistration')
+                  ? providerCompleting
+                  : providerCompleteRegistration
               }}
             </button>
           </template>
@@ -154,7 +150,7 @@
               {{ t('auth.oauthFlow.createAccountHint') }}
             </p>
             <PendingOAuthCreateAccountForm
-              test-id-prefix="oidc"
+              :test-id-prefix="oauthProvider"
               :initial-email="pendingAccountEmail"
               :is-submitting="isSubmitting"
               :error-message="accountActionError"
@@ -170,7 +166,7 @@
             <div class="space-y-3">
               <input
                 v-model="bindLoginEmail"
-                data-testid="oidc-bind-login-email"
+                :data-testid="`${oauthProvider}-bind-login-email`"
                 type="email"
                 class="input w-full"
                 :placeholder="t('auth.emailPlaceholder')"
@@ -179,7 +175,7 @@
               />
               <input
                 v-model="bindLoginPassword"
-                data-testid="oidc-bind-login-password"
+                :data-testid="`${oauthProvider}-bind-login-password`"
                 type="password"
                 class="input w-full"
                 :placeholder="t('auth.passwordPlaceholder')"
@@ -187,7 +183,7 @@
                 @keyup.enter="handleBindLogin"
               />
               <button
-                data-testid="oidc-bind-login-submit"
+                :data-testid="`${oauthProvider}-bind-login-submit`"
                 class="btn btn-primary w-full"
                 :disabled="isSubmitting || !bindLoginEmail.trim() || !bindLoginPassword"
                 @click="handleBindLogin"
@@ -217,7 +213,7 @@
             <div class="space-y-3">
               <input
                 v-model="totpCode"
-                data-testid="oidc-bind-login-totp"
+                :data-testid="`${oauthProvider}-bind-login-totp`"
                 type="text"
                 inputmode="numeric"
                 maxlength="6"
@@ -227,7 +223,7 @@
                 @keyup.enter="handleSubmitTotpChallenge"
               />
               <button
-                data-testid="oidc-bind-login-totp-submit"
+                :data-testid="`${oauthProvider}-bind-login-totp-submit`"
                 class="btn btn-primary w-full"
                 :disabled="isSubmitting || totpCode.trim().length !== 6"
                 @click="handleSubmitTotpChallenge"
@@ -277,6 +273,12 @@ const { t } = useI18n()
 const authStore = useAuthStore()
 const appStore = useAppStore()
 
+type PendingOAuthProvider = 'oidc' | 'feishu'
+
+const oauthProvider = computed<PendingOAuthProvider>(() =>
+  route.path.startsWith('/auth/feishu') ? 'feishu' : 'oidc'
+)
+const providerI18nBase = computed(() => `auth.${oauthProvider.value}`)
 const isProcessing = ref(true)
 const errorMessage = ref('')
 const needsInvitation = ref(false)
@@ -308,6 +310,22 @@ const totpUserEmailMasked = ref('')
 const needsCreateAccount = computed(() => pendingAccountAction.value === 'create_account')
 const needsChooser = computed(() => pendingAccountAction.value === 'choose_account_action')
 const needsBindLogin = computed(() => pendingAccountAction.value === 'bind_login')
+const providerCallbackTitle = computed(() =>
+  t(`${providerI18nBase.value}.callbackTitle`, { providerName: providerName.value })
+)
+const providerCallbackProcessing = computed(() =>
+  t(`${providerI18nBase.value}.callbackProcessing`, { providerName: providerName.value })
+)
+const providerCallbackHint = computed(() => t(`${providerI18nBase.value}.callbackHint`))
+const providerInvitationRequired = computed(() =>
+  t(`${providerI18nBase.value}.invitationRequired`, { providerName: providerName.value })
+)
+const providerCompleting = computed(() => t(`${providerI18nBase.value}.completing`))
+const providerCompleteRegistration = computed(() => t(`${providerI18nBase.value}.completeRegistration`))
+const providerCompleteRegistrationFailed = computed(() =>
+  t(`${providerI18nBase.value}.completeRegistrationFailed`)
+)
+const providerCallbackMissingToken = computed(() => t(`${providerI18nBase.value}.callbackMissingToken`))
 
 watch(invitationError, value => {
   if (value) {
@@ -352,7 +370,7 @@ function persistPendingAuthSession(redirect?: string) {
   authStore.setPendingAuthSession({
     token: '',
     token_field: 'pending_oauth_token',
-    provider: 'oidc',
+    provider: oauthProvider.value,
     redirect: sanitizeRedirectPath(redirect || redirectTo.value)
   })
 }
@@ -401,6 +419,10 @@ function sanitizeRedirectPath(path: string | null | undefined): string {
 }
 
 async function loadProviderName() {
+  if (oauthProvider.value === 'feishu') {
+    providerName.value = t('auth.feishuProviderName')
+    return
+  }
   try {
     const settings = await getPublicSettings()
     const name = settings.oidc_oauth_provider_name?.trim()
@@ -604,7 +626,7 @@ async function finalizeCompletion(completion: PendingOAuthExchangeResponse, redi
   }
 
   if (!isOAuthLoginCompletion(completion)) {
-    throw new Error(t('auth.oidc.callbackMissingToken'))
+    throw new Error(providerCallbackMissingToken.value)
   }
 
   persistOAuthTokenContext(completion)
@@ -660,7 +682,15 @@ async function handleSubmitInvitation() {
   try {
     const affCode = loadOAuthAffiliateCode()
     const decision = currentAdoptionDecision()
-    const completion: PendingOidcCompletion = legacyPendingOAuthToken.value
+    const completion: PendingOidcCompletion = oauthProvider.value === 'feishu'
+      ? (
+          await apiClient.post<PendingOidcCompletion>('/auth/oauth/pending/create-account', {
+            invitation_code: invitationCode.value.trim(),
+            ...oauthAffiliatePayload(affCode),
+            ...serializeAdoptionDecision(decision)
+          })
+        ).data
+      : legacyPendingOAuthToken.value
       ? (
           await apiClient.post<PendingOidcCompletion>('/auth/oauth/oidc/complete-registration', {
             pending_oauth_token: legacyPendingOAuthToken.value,
@@ -676,7 +706,7 @@ async function handleSubmitInvitation() {
   } catch (e: unknown) {
     const err = e as { message?: string; response?: { data?: { message?: string } } }
     invitationError.value =
-      err.response?.data?.message || err.message || t('auth.oidc.completeRegistrationFailed')
+      err.response?.data?.message || err.message || providerCompleteRegistrationFailed.value
   } finally {
     isSubmitting.value = false
   }

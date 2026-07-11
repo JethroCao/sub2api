@@ -106,6 +106,21 @@ func RegisterAdminRoutes(
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
+
+		// 飞书组织权限
+		registerFeishuOrgAdminRoutes(admin, h)
+	}
+}
+
+func registerFeishuOrgAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	feishuOrg := admin.Group("/feishu-org")
+	{
+		feishuOrg.GET("/departments", h.FeishuOrg.ListDepartments)
+		feishuOrg.GET("/users", h.FeishuOrg.ListUsers)
+		feishuOrg.GET("/sync-runs", h.FeishuOrg.ListSyncRuns)
+		feishuOrg.POST("/sync-runs", h.FeishuOrg.RunManualReconcile)
+		feishuOrg.PUT("/departments/:department_id/groups", h.FeishuOrg.SetDepartmentGroupPool)
+		feishuOrg.PUT("/users/:id/overrides", h.FeishuOrg.SetUserOverrideGroupGrants)
 	}
 }
 
@@ -459,6 +474,7 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
+		adminSettings.POST("/feishu/preflight", h.Admin.Setting.CheckFeishuPreflight)
 		adminSettings.POST("/test-smtp", h.Admin.Setting.TestSMTPConnection)
 		adminSettings.POST("/send-test-email", h.Admin.Setting.SendTestEmail)
 		adminSettings.GET("/email-templates", h.Admin.Setting.ListEmailTemplates)

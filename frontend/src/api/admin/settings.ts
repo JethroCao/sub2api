@@ -64,7 +64,8 @@ export type AuthSourceType =
   | "wechat"
   | "github"
   | "google"
-  | "dingtalk";
+  | "dingtalk"
+  | "feishu";
 
 export interface AuthSourceDefaultsValue {
   balance: number;
@@ -109,6 +110,7 @@ const AUTH_SOURCE_TYPES: AuthSourceType[] = [
   "github",
   "google",
   "dingtalk",
+  "feishu",
 ];
 const AUTH_SOURCE_DEFAULT_BALANCE = 0;
 const AUTH_SOURCE_DEFAULT_CONCURRENCY = 5;
@@ -370,6 +372,8 @@ export interface SystemSettings {
   login_agreement_mode: "modal" | "checkbox" | string;
   login_agreement_updated_at: string;
   login_agreement_documents: LoginAgreementDocument[];
+  email_password_login_enabled: boolean;
+  admin_email_login_fallback_enabled: boolean;
   // Default settings
   default_balance: number;
   affiliate_rebate_rate: number;
@@ -404,6 +408,11 @@ export interface SystemSettings {
   auth_source_default_dingtalk_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_dingtalk_grant_on_signup?: boolean;
   auth_source_default_dingtalk_grant_on_first_bind?: boolean;
+  auth_source_default_feishu_balance?: number;
+  auth_source_default_feishu_concurrency?: number;
+  auth_source_default_feishu_subscriptions?: DefaultSubscriptionSetting[];
+  auth_source_default_feishu_grant_on_signup?: boolean;
+  auth_source_default_feishu_grant_on_first_bind?: boolean;
   auth_source_default_github_balance?: number;
   auth_source_default_github_concurrency?: number;
   auth_source_default_github_subscriptions?: DefaultSubscriptionSetting[];
@@ -424,6 +433,7 @@ export interface SystemSettings {
   auth_source_default_github_platform_quotas?: DefaultPlatformQuotasMap;
   auth_source_default_google_platform_quotas?: DefaultPlatformQuotasMap;
   auth_source_default_dingtalk_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_feishu_platform_quotas?: DefaultPlatformQuotasMap;
   // OEM settings
   site_name: string;
   site_logo: string;
@@ -475,6 +485,22 @@ export interface SystemSettings {
   dingtalk_connect_sync_corp_email_attr_name: string;
   dingtalk_connect_sync_display_name_attr_name: string;
   dingtalk_connect_sync_dept_attr_name: string;
+
+  // Feishu Connect OAuth settings
+  feishu_connect_enabled: boolean;
+  feishu_connect_app_id: string;
+  feishu_connect_app_secret_configured: boolean;
+  feishu_connect_redirect_url: string;
+  feishu_connect_tenant_restriction_policy: string;
+  feishu_connect_allowed_tenant_key: string;
+  feishu_connect_bypass_registration: boolean;
+  feishu_connect_sync_email: boolean;
+  feishu_connect_sync_display_name: boolean;
+  feishu_connect_sync_department: boolean;
+  feishu_org_sync_enabled: boolean;
+  feishu_departed_user_action: string;
+  feishu_sync_disable_threshold_count: number;
+  feishu_sync_disable_threshold_percent: number;
 
   // WeChat Connect OAuth settings
   wechat_connect_enabled: boolean;
@@ -668,6 +694,8 @@ export interface UpdateSettingsRequest {
   login_agreement_mode?: "modal" | "checkbox" | string;
   login_agreement_updated_at?: string;
   login_agreement_documents?: LoginAgreementDocument[];
+  email_password_login_enabled?: boolean;
+  admin_email_login_fallback_enabled?: boolean;
   default_balance?: number;
   affiliate_rebate_rate?: number;
   affiliate_rebate_freeze_hours?: number;
@@ -701,6 +729,11 @@ export interface UpdateSettingsRequest {
   auth_source_default_dingtalk_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_dingtalk_grant_on_signup?: boolean;
   auth_source_default_dingtalk_grant_on_first_bind?: boolean;
+  auth_source_default_feishu_balance?: number;
+  auth_source_default_feishu_concurrency?: number;
+  auth_source_default_feishu_subscriptions?: DefaultSubscriptionSetting[];
+  auth_source_default_feishu_grant_on_signup?: boolean;
+  auth_source_default_feishu_grant_on_first_bind?: boolean;
   auth_source_default_github_balance?: number;
   auth_source_default_github_concurrency?: number;
   auth_source_default_github_subscriptions?: DefaultSubscriptionSetting[];
@@ -721,6 +754,7 @@ export interface UpdateSettingsRequest {
   auth_source_default_github_platform_quotas?: DefaultPlatformQuotasMap;
   auth_source_default_google_platform_quotas?: DefaultPlatformQuotasMap;
   auth_source_default_dingtalk_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_feishu_platform_quotas?: DefaultPlatformQuotasMap;
   site_name?: string;
   site_logo?: string;
   site_subtitle?: string;
@@ -765,6 +799,20 @@ export interface UpdateSettingsRequest {
   dingtalk_connect_sync_corp_email_attr_name?: string;
   dingtalk_connect_sync_display_name_attr_name?: string;
   dingtalk_connect_sync_dept_attr_name?: string;
+  feishu_connect_enabled?: boolean;
+  feishu_connect_app_id?: string;
+  feishu_connect_app_secret?: string;
+  feishu_connect_redirect_url?: string;
+  feishu_connect_tenant_restriction_policy?: string;
+  feishu_connect_allowed_tenant_key?: string;
+  feishu_connect_bypass_registration?: boolean;
+  feishu_connect_sync_email?: boolean;
+  feishu_connect_sync_display_name?: boolean;
+  feishu_connect_sync_department?: boolean;
+  feishu_org_sync_enabled?: boolean;
+  feishu_departed_user_action?: string;
+  feishu_sync_disable_threshold_count?: number;
+  feishu_sync_disable_threshold_percent?: number;
   wechat_connect_enabled?: boolean;
   wechat_connect_app_id?: string;
   wechat_connect_app_secret?: string;
@@ -1397,6 +1445,33 @@ export async function resetWebSearchUsage(payload: {
   );
 }
 
+export interface FeishuPreflightCapability {
+  status: "ready" | "disabled" | "warning" | "missing" | string;
+  message: string;
+  required_scopes?: string[];
+}
+
+export interface FeishuPreflightWarning {
+  code: string;
+  message: string;
+}
+
+export interface FeishuPreflightResult {
+  login: FeishuPreflightCapability;
+  email: FeishuPreflightCapability;
+  org_sync: FeishuPreflightCapability;
+  departed_detection: FeishuPreflightCapability;
+  manager_relation: FeishuPreflightCapability;
+  warnings?: FeishuPreflightWarning[];
+}
+
+export async function checkFeishuPreflight(): Promise<FeishuPreflightResult> {
+  const { data } = await apiClient.post<FeishuPreflightResult>(
+    "/admin/settings/feishu/preflight",
+  );
+  return data;
+}
+
 export const settingsAPI = {
   getSettings,
   updateSettings,
@@ -1424,6 +1499,7 @@ export const settingsAPI = {
   updateWebSearchEmulationConfig,
   testWebSearchEmulation,
   resetWebSearchUsage,
+  checkFeishuPreflight,
 };
 
 export default settingsAPI;

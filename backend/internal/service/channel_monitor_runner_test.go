@@ -12,6 +12,7 @@ import (
 
 // stubMonitorSvc 实现 monitorRunnerSvc，用于隔离 runner 与真实 service/repo。
 type stubMonitorSvc struct {
+	mu         sync.Mutex
 	enabled    []*ChannelMonitor
 	runCount   atomic.Int64
 	runCalled  chan int64 // 每次 RunCheck 触发时 push 一次（缓冲足够大避免阻塞）
@@ -21,13 +22,21 @@ type stubMonitorSvc struct {
 }
 
 func (s *stubMonitorSvc) ListEnabledMonitors(_ context.Context) ([]*ChannelMonitor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
-	return s.enabled, nil
+	return append([]*ChannelMonitor(nil), s.enabled...), nil
 }
 
-func (s *stubMonitorSvc) RunCheck(ctx context.Context, id int64) ([]*CheckResult, error) {
+func (s *stubMonitorSvc) setEnabled(monitors ...*ChannelMonitor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enabled = append([]*ChannelMonitor(nil), monitors...)
+}
+
+func (s *stubMonitorSvc) RunScheduledCheck(ctx context.Context, id int64) ([]*CheckResult, error) {
 	s.runCount.Add(1)
 	if s.runCalled != nil {
 		select {
@@ -73,6 +82,20 @@ func runnerTaskPtr(r *ChannelMonitorRunner, id int64) *scheduledMonitor {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.tasks[id]
+}
+
+func requireRunnerTaskIDs(t *testing.T, r *ChannelMonitorRunner, ids ...int64) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.tasks) != len(ids) {
+		t.Fatalf("expected %d tasks, got %d", len(ids), len(r.tasks))
+	}
+	for _, id := range ids {
+		if _, ok := r.tasks[id]; !ok {
+			t.Fatalf("expected task %d to be scheduled", id)
+		}
+	}
 }
 
 // TestSchedule_AddsTaskAndFiresOnce 验证 Schedule 后立即触发一次首检测，并把任务记入 tasks 表。
@@ -201,6 +224,36 @@ func TestStart_LoadsAllEnabledMonitors(t *testing.T) {
 	stoppedWithin(t, r, 3*time.Second)
 }
 
+func TestReconcileEnabledMonitorsAddsUpdatesAndRemovesTasks(t *testing.T) {
+	svc := &stubMonitorSvc{}
+	svc.setEnabled(
+		&ChannelMonitor{ID: 1, Name: "m1", Enabled: true, IntervalSeconds: 60},
+		&ChannelMonitor{ID: 2, Name: "m2", Enabled: true, IntervalSeconds: 60},
+	)
+	r := newRunnerForTest(svc)
+	r.Start()
+	waitFor(t, 2*time.Second, "initial tasks scheduled", func() bool { return runnerTaskCount(r) == 2 })
+
+	svc.setEnabled(
+		&ChannelMonitor{ID: 2, Name: "m2-new", Enabled: true, IntervalSeconds: 120, JitterSeconds: 15},
+		&ChannelMonitor{ID: 3, Name: "m3", Enabled: true, IntervalSeconds: 60},
+	)
+	if err := r.reconcileEnabledMonitors(context.Background()); err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+
+	requireRunnerTaskIDs(t, r, 2, 3)
+	task2 := runnerTaskPtr(r, 2)
+	if task2 == nil {
+		t.Fatal("expected task 2 after reconcile")
+	}
+	if task2.name != "m2-new" || task2.interval != 120*time.Second || task2.jitter != 15*time.Second {
+		t.Fatalf("task 2 was not refreshed from DB: %+v", task2)
+	}
+
+	stoppedWithin(t, r, 3*time.Second)
+}
+
 // TestStop_DrainsAllGoroutines 验证 Stop 会等待所有调度 goroutine 退出（无游离）。
 func TestStop_DrainsAllGoroutines(t *testing.T) {
 	svc := &stubMonitorSvc{}
@@ -258,6 +311,48 @@ func TestInFlight_AcquireReleaseSymmetric(t *testing.T) {
 		t.Fatal("acquire after release should succeed")
 	}
 	r.releaseInFlight(42)
+}
+
+func TestRunOne_SkipsCheckWhenMonitorLockHeldByPeer(t *testing.T) {
+	svc := &stubMonitorSvc{}
+	r := newRunnerForTest(svc)
+	cache := &fakeLeaderLockCache{}
+	_, _ = cache.TryAcquireLeaderLock(context.Background(), channelMonitorRunLeaderLockKey(42), "peer", time.Minute)
+	r.SetLeaderLock(cache, nil)
+
+	r.runOne(42, "m42")
+
+	if got := svc.runCount.Load(); got != 0 {
+		t.Fatalf("non-leader must not run monitor check, got %d calls", got)
+	}
+}
+
+func TestRunOne_SkipsCheckWhenMonitorLockErrors(t *testing.T) {
+	svc := &stubMonitorSvc{}
+	r := newRunnerForTest(svc)
+	r.SetLeaderLock(&fakeLeaderLockCache{acquireErr: context.DeadlineExceeded}, nil)
+
+	r.runOne(42, "m42")
+
+	if got := svc.runCount.Load(); got != 0 {
+		t.Fatalf("lock errors must not run monitor check ungated, got %d calls", got)
+	}
+}
+
+func TestRunOne_RunsAndReleasesMonitorLockWhenLeader(t *testing.T) {
+	svc := &stubMonitorSvc{}
+	r := newRunnerForTest(svc)
+	cache := &fakeLeaderLockCache{}
+	r.SetLeaderLock(cache, nil)
+
+	r.runOne(42, "m42")
+
+	if got := svc.runCount.Load(); got != 1 {
+		t.Fatalf("leader should run monitor check once, got %d calls", got)
+	}
+	if owner := cache.heldBy(channelMonitorRunLeaderLockKey(42)); owner != "" {
+		t.Fatalf("monitor lock should be released after runOne, still held by %q", owner)
+	}
 }
 
 // stoppedWithin 在 timeout 内并行调用 Stop，超时则 Fatal。验证 Stop 不会阻塞。

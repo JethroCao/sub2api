@@ -129,6 +129,16 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/auth/feishu/callback',
+    name: 'FeishuOAuthCallback',
+    component: () => import('@/views/auth/OidcCallbackView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Feishu OAuth Callback',
+      titleKey: 'auth.feishuCallbackPageTitle'
+    }
+  },
+  {
     path: '/auth/oidc/callback',
     name: 'OIDCOAuthCallback',
     component: () => import('@/views/auth/OidcCallbackView.vue'),
@@ -440,6 +450,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/feishu-org',
+    name: 'AdminFeishuOrgPermissions',
+    component: () => import('@/views/admin/FeishuOrgPermissionsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Feishu Organization Permissions',
+      titleKey: 'admin.feishuOrg.title',
+      descriptionKey: 'admin.feishuOrg.description'
+    }
+  },
+  {
     path: '/admin/channels',
     redirect: '/admin/channels/pricing'
   },
@@ -476,6 +498,16 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: false,
       title: 'Channel Status',
       titleKey: 'nav.channelStatus'
+    }
+  },
+  {
+    path: '/org-manager',
+    name: 'OrgManager',
+    component: () => import('@/views/user/OrgManagerView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: 'Department Authorization',
+      titleKey: 'nav.orgManager'
     }
   },
   {
@@ -709,6 +741,7 @@ const BACKEND_MODE_CALLBACK_PATHS = [
   '/auth/linuxdo/callback',
   '/auth/dingtalk/callback',
   '/auth/dingtalk/email-completion',
+  '/auth/feishu/callback',
   '/auth/oidc/callback',
   '/auth/wechat/callback',
   '/auth/wechat/payment/callback',

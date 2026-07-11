@@ -255,13 +255,32 @@ func (s *ChannelMonitorService) ListHistory(ctx context.Context, id int64, model
 
 // ---------- 业务 ----------
 
-// RunCheck 同步触发对一个监控的检测：并发跑 primary + extra 模型，
+// RunCheck 同步触发一次手动检测：并发跑 primary + extra 模型，
 // 写历史记录并更新 last_checked_at。返回每个模型的检测结果。
+//
+// 手动检测允许 disabled monitor 执行，方便管理员在启用前验证配置。
 func (s *ChannelMonitorService) RunCheck(ctx context.Context, id int64) ([]*CheckResult, error) {
 	m, err := s.Get(ctx, id) // 已解密 APIKey
 	if err != nil {
 		return nil, err
 	}
+	return s.runCheckLoaded(ctx, m)
+}
+
+// RunScheduledCheck 是后台调度入口。disabled monitor 不应被后台执行；
+// 手动入口 RunCheck 则允许 disabled monitor 运行一次配置验证。
+func (s *ChannelMonitorService) RunScheduledCheck(ctx context.Context, id int64) ([]*CheckResult, error) {
+	m, err := s.Get(ctx, id) // 已解密 APIKey
+	if err != nil {
+		return nil, err
+	}
+	if !m.Enabled {
+		return nil, ErrChannelMonitorDisabled
+	}
+	return s.runCheckLoaded(ctx, m)
+}
+
+func (s *ChannelMonitorService) runCheckLoaded(ctx context.Context, m *ChannelMonitor) ([]*CheckResult, error) {
 	if m.APIKeyDecryptFailed {
 		return nil, ErrChannelMonitorAPIKeyDecryptFailed
 	}

@@ -1,4 +1,9 @@
 export default {
+    feishuOrg: {
+      title: 'Feishu Organization Permissions',
+      description: 'Configure Feishu department group pools and employee grants'
+    },
+
     // Dashboard
     dashboard: {
       title: 'Admin Dashboard',

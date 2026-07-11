@@ -105,6 +105,14 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if settings.GoogleOAuthFrontendRedirectURL == "" {
 		settings.GoogleOAuthFrontendRedirectURL = defaultGoogleOAuthFrontend
 	}
+	normalizeFeishuSystemSettings(settings)
+	if !settings.LoginEntrySettingsExplicit {
+		settings.EmailPasswordLoginEnabled = true
+		settings.AdminEmailLoginFallbackEnabled = true
+	}
+	if err := s.ValidateLoginEntryAvailability(ctx, settings); err != nil {
+		return nil, err
+	}
 
 	updates := make(map[string]string)
 
@@ -134,6 +142,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyLoginAgreementMode] = settings.LoginAgreementMode
 	updates[SettingKeyLoginAgreementUpdatedAt] = settings.LoginAgreementUpdatedAt
 	updates[SettingKeyLoginAgreementDocuments] = loginAgreementDocumentsJSON
+	updates[SettingKeyEmailPasswordLoginEnabled] = strconv.FormatBool(settings.EmailPasswordLoginEnabled)
+	updates[SettingKeyAdminEmailLoginFallbackEnabled] = strconv.FormatBool(settings.AdminEmailLoginFallbackEnabled)
 
 	// 邮件服务设置（只有非空才更新密码）
 	updates[SettingKeySMTPHost] = settings.SMTPHost
@@ -181,6 +191,24 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyDingTalkConnectSyncCorpEmailAttrName] = settings.DingTalkConnectSyncCorpEmailAttrName
 	updates[SettingKeyDingTalkConnectSyncDisplayNameAttrName] = settings.DingTalkConnectSyncDisplayNameAttrName
 	updates[SettingKeyDingTalkConnectSyncDeptAttrName] = settings.DingTalkConnectSyncDeptAttrName
+
+	// Feishu Connect OAuth 登录
+	updates[SettingKeyFeishuConnectEnabled] = strconv.FormatBool(settings.FeishuConnectEnabled)
+	updates[SettingKeyFeishuConnectAppID] = settings.FeishuConnectAppID
+	updates[SettingKeyFeishuConnectRedirectURL] = settings.FeishuConnectRedirectURL
+	if settings.FeishuConnectAppSecret != "" {
+		updates[SettingKeyFeishuConnectAppSecret] = settings.FeishuConnectAppSecret
+	}
+	updates[SettingKeyFeishuConnectTenantRestrictionPolicy] = settings.FeishuConnectTenantRestrictionPolicy
+	updates[SettingKeyFeishuConnectAllowedTenantKey] = settings.FeishuConnectAllowedTenantKey
+	updates[SettingKeyFeishuConnectBypassRegistration] = strconv.FormatBool(settings.FeishuConnectBypassRegistration)
+	updates[SettingKeyFeishuConnectSyncEmail] = strconv.FormatBool(settings.FeishuConnectSyncEmail)
+	updates[SettingKeyFeishuConnectSyncDisplayName] = strconv.FormatBool(settings.FeishuConnectSyncDisplayName)
+	updates[SettingKeyFeishuConnectSyncDepartment] = strconv.FormatBool(settings.FeishuConnectSyncDepartment)
+	updates[SettingKeyFeishuOrgSyncEnabled] = strconv.FormatBool(settings.FeishuOrgSyncEnabled)
+	updates[SettingKeyFeishuDepartedUserAction] = settings.FeishuDepartedUserAction
+	updates[SettingKeyFeishuSyncDisableThresholdCount] = strconv.Itoa(settings.FeishuSyncDisableThresholdCount)
+	updates[SettingKeyFeishuSyncDisableThresholdPercent] = strconv.Itoa(settings.FeishuSyncDisableThresholdPercent)
 
 	// Generic OIDC OAuth 登录
 	updates[SettingKeyOIDCConnectEnabled] = strconv.FormatBool(settings.OIDCConnectEnabled)
@@ -452,6 +480,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 		settings.GitHub.Subscriptions,
 		settings.Google.Subscriptions,
 		settings.DingTalk.Subscriptions,
+		settings.Feishu.Subscriptions,
 	} {
 		if err := s.validateDefaultSubscriptionGroups(ctx, subscriptions); err != nil {
 			return nil, err
@@ -470,6 +499,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 		{"github", settings.GitHub.PlatformQuotas},
 		{"google", settings.Google.PlatformQuotas},
 		{"dingtalk", settings.DingTalk.PlatformQuotas},
+		{"feishu", settings.Feishu.PlatformQuotas},
 	} {
 		if pgs.pq != nil {
 			if err := validateDefaultPlatformQuotaMap(pgs.pq); err != nil {
@@ -478,7 +508,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 		}
 	}
 
-	updates := make(map[string]string, 36)
+	updates := make(map[string]string, 42)
 	writeProviderDefaultGrantUpdates(updates, emailAuthSourceDefaultKeys, settings.Email)
 	writeProviderDefaultGrantUpdates(updates, linuxDoAuthSourceDefaultKeys, settings.LinuxDo)
 	writeProviderDefaultGrantUpdates(updates, oidcAuthSourceDefaultKeys, settings.OIDC)
@@ -486,6 +516,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 	writeProviderDefaultGrantUpdates(updates, gitHubAuthSourceDefaultKeys, settings.GitHub)
 	writeProviderDefaultGrantUpdates(updates, googleAuthSourceDefaultKeys, settings.Google)
 	writeProviderDefaultGrantUpdates(updates, dingTalkAuthSourceDefaultKeys, settings.DingTalk)
+	writeProviderDefaultGrantUpdates(updates, feishuAuthSourceDefaultKeys, settings.Feishu)
 	updates[SettingKeyForceEmailOnThirdPartySignup] = strconv.FormatBool(settings.ForceEmailOnThirdPartySignup)
 	return updates, nil
 }

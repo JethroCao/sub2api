@@ -188,6 +188,52 @@ func TestAdminServiceBindUserAuthIdentityIsIdempotentForSameUser(t *testing.T) {
 	require.Equal(t, "second", identities[0].Metadata["source"])
 }
 
+func TestBindUserAuthIdentityAcceptsFeishu(t *testing.T) {
+	client := newAdminServiceAuthIdentityBindingTestClient(t)
+	ctx := context.Background()
+
+	user, err := client.User.Create().
+		SetEmail("feishu-bind@example.com").
+		SetPasswordHash("hash").
+		SetRole(RoleUser).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &adminServiceImpl{
+		userRepo:  &userRepoStub{user: &User{ID: user.ID, Email: user.Email, Status: StatusActive}},
+		entClient: client,
+	}
+
+	result, err := svc.BindUserAuthIdentity(ctx, user.ID, AdminBindAuthIdentityInput{
+		ProviderType:    "feishu",
+		ProviderKey:     "tenant-key-1",
+		ProviderSubject: "ou_open_id_1",
+		Metadata: map[string]any{
+			"union_id":          "on_union_id_1",
+			"user_id_in_tenant": "user-id-1",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, user.ID, result.UserID)
+	require.Equal(t, "feishu", result.ProviderType)
+	require.Equal(t, "tenant-key-1", result.ProviderKey)
+	require.Equal(t, "ou_open_id_1", result.ProviderSubject)
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("feishu"),
+			authidentity.ProviderKeyEQ("tenant-key-1"),
+			authidentity.ProviderSubjectEQ("ou_open_id_1"),
+		).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, user.ID, identity.UserID)
+	require.Equal(t, "on_union_id_1", identity.Metadata["union_id"])
+	require.Equal(t, "user-id-1", identity.Metadata["user_id_in_tenant"])
+}
+
 func TestAdminServiceBindUserAuthIdentityReusesLegacyWeChatAliasRecords(t *testing.T) {
 	client := newAdminServiceAuthIdentityBindingTestClient(t)
 	ctx := context.Background()
@@ -293,9 +339,35 @@ func TestAdminServiceBindUserAuthIdentityRejectsInvalidProviderType(t *testing.T
 	}
 
 	_, err = svc.BindUserAuthIdentity(ctx, user.ID, AdminBindAuthIdentityInput{
-		ProviderType:    "github",
-		ProviderKey:     "github-main",
+		ProviderType:    "unsupported-provider",
+		ProviderKey:     "unsupported-main",
 		ProviderSubject: "subject-3",
+	})
+	require.Error(t, err)
+	require.Equal(t, "INVALID_INPUT", infraerrors.Reason(err))
+}
+
+func TestBindUserAuthIdentityRejectsUnknownProvider(t *testing.T) {
+	client := newAdminServiceAuthIdentityBindingTestClient(t)
+	ctx := context.Background()
+
+	user, err := client.User.Create().
+		SetEmail("unknown-provider@example.com").
+		SetPasswordHash("hash").
+		SetRole(RoleUser).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &adminServiceImpl{
+		userRepo:  &userRepoStub{user: &User{ID: user.ID, Email: user.Email, Status: StatusActive}},
+		entClient: client,
+	}
+
+	_, err = svc.BindUserAuthIdentity(ctx, user.ID, AdminBindAuthIdentityInput{
+		ProviderType:    "not-a-provider",
+		ProviderKey:     "provider-main",
+		ProviderSubject: "subject-4",
 	})
 	require.Error(t, err)
 	require.Equal(t, "INVALID_INPUT", infraerrors.Reason(err))

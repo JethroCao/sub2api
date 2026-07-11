@@ -708,6 +708,125 @@ func (s *SettingService) GetDingTalkConnectOAuthConfig(ctx context.Context) (con
 	return effective, nil
 }
 
+func (s *SettingService) GetFeishuConnectOAuthConfig(ctx context.Context) (config.FeishuConnectConfig, error) {
+	if s == nil || s.cfg == nil {
+		return config.FeishuConnectConfig{}, infraerrors.ServiceUnavailable("CONFIG_NOT_READY", "config not loaded")
+	}
+
+	effective := defaultFeishuConnectConfig(s.cfg.Feishu)
+	keys := []string{
+		SettingKeyFeishuConnectEnabled,
+		SettingKeyFeishuConnectAppID,
+		SettingKeyFeishuConnectAppSecret,
+		SettingKeyFeishuConnectRedirectURL,
+		SettingKeyFeishuConnectTenantRestrictionPolicy,
+		SettingKeyFeishuConnectAllowedTenantKey,
+		SettingKeyFeishuConnectBypassRegistration,
+		SettingKeyFeishuConnectSyncEmail,
+		SettingKeyFeishuConnectSyncDisplayName,
+		SettingKeyFeishuConnectSyncDepartment,
+		SettingKeyFeishuOrgSyncEnabled,
+		SettingKeyFeishuDepartedUserAction,
+		SettingKeyFeishuSyncDisableThresholdCount,
+		SettingKeyFeishuSyncDisableThresholdPercent,
+	}
+	settings, err := s.settingRepo.GetMultiple(ctx, keys)
+	if err != nil {
+		return config.FeishuConnectConfig{}, fmt.Errorf("get feishu connect settings: %w", err)
+	}
+
+	if raw, ok := settings[SettingKeyFeishuConnectEnabled]; ok {
+		effective.Enabled = raw == "true"
+	}
+	if v, ok := settings[SettingKeyFeishuConnectAppID]; ok && strings.TrimSpace(v) != "" {
+		effective.AppID = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyFeishuConnectAppSecret]; ok && strings.TrimSpace(v) != "" {
+		effective.AppSecret = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyFeishuConnectRedirectURL]; ok && strings.TrimSpace(v) != "" {
+		effective.RedirectURL = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyFeishuConnectTenantRestrictionPolicy]; ok && strings.TrimSpace(v) != "" {
+		effective.TenantRestrictionPolicy = strings.TrimSpace(v)
+	}
+	effective.TenantRestrictionPolicy = NormalizeFeishuTenantRestrictionPolicy(effective.TenantRestrictionPolicy)
+	if v, ok := settings[SettingKeyFeishuConnectAllowedTenantKey]; ok && strings.TrimSpace(v) != "" {
+		effective.AllowedTenantKey = strings.TrimSpace(v)
+	}
+	if v, ok := settings[SettingKeyFeishuConnectBypassRegistration]; ok && strings.TrimSpace(v) != "" {
+		effective.BypassRegistration = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncEmail]; ok && strings.TrimSpace(v) != "" {
+		effective.SyncEmail = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncDisplayName]; ok && strings.TrimSpace(v) != "" {
+		effective.SyncDisplayName = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuConnectSyncDepartment]; ok && strings.TrimSpace(v) != "" {
+		effective.SyncDepartment = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuOrgSyncEnabled]; ok && strings.TrimSpace(v) != "" {
+		effective.OrgSyncEnabled = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := settings[SettingKeyFeishuDepartedUserAction]; ok && strings.TrimSpace(v) != "" {
+		effective.DepartedUserAction = normalizeFeishuDepartedUserAction(v)
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyFeishuSyncDisableThresholdCount])); err == nil && v > 0 {
+		effective.DisableThresholdCount = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyFeishuSyncDisableThresholdPercent])); err == nil && v > 0 {
+		effective.DisableThresholdPercent = v
+	}
+	effective = defaultFeishuConnectConfig(effective)
+	if effective.TenantRestrictionPolicy != FeishuTenantRestrictionInternalOnly {
+		effective.BypassRegistration = false
+		effective.OrgSyncEnabled = false
+	}
+
+	if !effective.Enabled {
+		return config.FeishuConnectConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "feishu oauth login is disabled")
+	}
+	if strings.TrimSpace(effective.AppID) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth app id not configured")
+	}
+	if strings.TrimSpace(effective.AppSecret) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth app secret not configured")
+	}
+	if strings.TrimSpace(effective.AuthorizeURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth authorize url not configured")
+	}
+	if strings.TrimSpace(effective.TokenURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth token url not configured")
+	}
+	if strings.TrimSpace(effective.UserInfoURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth userinfo url not configured")
+	}
+	if strings.TrimSpace(effective.RedirectURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth redirect url not configured")
+	}
+	if strings.TrimSpace(effective.FrontendRedirectURL) == "" {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth frontend redirect url not configured")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.AuthorizeURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth authorize url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.TokenURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth token url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.UserInfoURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth userinfo url invalid")
+	}
+	if err := config.ValidateAbsoluteHTTPURL(effective.RedirectURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth redirect url invalid")
+	}
+	if err := config.ValidateFrontendRedirectURL(effective.FrontendRedirectURL); err != nil {
+		return config.FeishuConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "feishu oauth frontend redirect url invalid")
+	}
+
+	return effective, nil
+}
+
 // GetWeChatConnectOAuthConfig 返回用于登录的最终生效 WeChat Connect 配置。
 //
 // WeChat Connect 已回归 DB 系统设置模型，不再回退到 config/env。

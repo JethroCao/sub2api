@@ -127,6 +127,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		LoginAgreementMode:                                     settings.LoginAgreementMode,
 		LoginAgreementUpdatedAt:                                settings.LoginAgreementUpdatedAt,
 		LoginAgreementDocuments:                                loginAgreementDocumentsToDTO(settings.LoginAgreementDocuments),
+		EmailPasswordLoginEnabled:                              settings.EmailPasswordLoginEnabled,
+		AdminEmailLoginFallbackEnabled:                         settings.AdminEmailLoginFallbackEnabled,
 		SMTPHost:                                               settings.SMTPHost,
 		SMTPPort:                                               settings.SMTPPort,
 		SMTPUsername:                                           settings.SMTPUsername,
@@ -158,6 +160,20 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DingTalkConnectSyncCorpEmailAttrName:                   settings.DingTalkConnectSyncCorpEmailAttrName,
 		DingTalkConnectSyncDisplayNameAttrName:                 settings.DingTalkConnectSyncDisplayNameAttrName,
 		DingTalkConnectSyncDeptAttrName:                        settings.DingTalkConnectSyncDeptAttrName,
+		FeishuConnectEnabled:                                   settings.FeishuConnectEnabled,
+		FeishuConnectAppID:                                     settings.FeishuConnectAppID,
+		FeishuConnectAppSecretConfigured:                       settings.FeishuConnectAppSecretConfigured,
+		FeishuConnectRedirectURL:                               settings.FeishuConnectRedirectURL,
+		FeishuConnectTenantRestrictionPolicy:                   settings.FeishuConnectTenantRestrictionPolicy,
+		FeishuConnectAllowedTenantKey:                          settings.FeishuConnectAllowedTenantKey,
+		FeishuConnectBypassRegistration:                        settings.FeishuConnectBypassRegistration,
+		FeishuConnectSyncEmail:                                 settings.FeishuConnectSyncEmail,
+		FeishuConnectSyncDisplayName:                           settings.FeishuConnectSyncDisplayName,
+		FeishuConnectSyncDepartment:                            settings.FeishuConnectSyncDepartment,
+		FeishuOrgSyncEnabled:                                   settings.FeishuOrgSyncEnabled,
+		FeishuDepartedUserAction:                               settings.FeishuDepartedUserAction,
+		FeishuSyncDisableThresholdCount:                        settings.FeishuSyncDisableThresholdCount,
+		FeishuSyncDisableThresholdPercent:                      settings.FeishuSyncDisableThresholdPercent,
 		WeChatConnectEnabled:                                   settings.WeChatConnectEnabled,
 		WeChatConnectAppID:                                     settings.WeChatConnectAppID,
 		WeChatConnectAppSecretConfigured:                       settings.WeChatConnectAppSecretConfigured,
@@ -435,6 +451,11 @@ func systemSettingsResponseData(settings dto.SystemSettings, authSourceDefaults 
 	data["auth_source_default_dingtalk_subscriptions"] = authSourceDefaults.DingTalk.Subscriptions
 	data["auth_source_default_dingtalk_grant_on_signup"] = authSourceDefaults.DingTalk.GrantOnSignup
 	data["auth_source_default_dingtalk_grant_on_first_bind"] = authSourceDefaults.DingTalk.GrantOnFirstBind
+	data["auth_source_default_feishu_balance"] = authSourceDefaults.Feishu.Balance
+	data["auth_source_default_feishu_concurrency"] = authSourceDefaults.Feishu.Concurrency
+	data["auth_source_default_feishu_subscriptions"] = authSourceDefaults.Feishu.Subscriptions
+	data["auth_source_default_feishu_grant_on_signup"] = authSourceDefaults.Feishu.GrantOnSignup
+	data["auth_source_default_feishu_grant_on_first_bind"] = authSourceDefaults.Feishu.GrantOnFirstBind
 	data["auth_source_default_oidc_balance"] = authSourceDefaults.OIDC.Balance
 	data["auth_source_default_oidc_concurrency"] = authSourceDefaults.OIDC.Concurrency
 	data["auth_source_default_oidc_subscriptions"] = authSourceDefaults.OIDC.Subscriptions
@@ -462,6 +483,7 @@ func systemSettingsResponseData(settings dto.SystemSettings, authSourceDefaults 
 	data["auth_source_default_github_platform_quotas"] = authSourceDefaults.GitHub.PlatformQuotas
 	data["auth_source_default_google_platform_quotas"] = authSourceDefaults.Google.PlatformQuotas
 	data["auth_source_default_dingtalk_platform_quotas"] = authSourceDefaults.DingTalk.PlatformQuotas
+	data["auth_source_default_feishu_platform_quotas"] = authSourceDefaults.Feishu.PlatformQuotas
 	data["force_email_on_third_party_signup"] = authSourceDefaults.ForceEmailOnThirdPartySignup
 
 	return data

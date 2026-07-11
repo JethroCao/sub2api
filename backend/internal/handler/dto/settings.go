@@ -40,6 +40,8 @@ type SystemSettings struct {
 	LoginAgreementMode               string                   `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt          string                   `json:"login_agreement_updated_at"`
 	LoginAgreementDocuments          []LoginAgreementDocument `json:"login_agreement_documents"`
+	EmailPasswordLoginEnabled        bool                     `json:"email_password_login_enabled"`
+	AdminEmailLoginFallbackEnabled   bool                     `json:"admin_email_login_fallback_enabled"`
 
 	SMTPHost               string `json:"smtp_host"`
 	SMTPPort               int    `json:"smtp_port"`
@@ -75,6 +77,21 @@ type SystemSettings struct {
 	DingTalkConnectSyncCorpEmailAttrName   string `json:"dingtalk_connect_sync_corp_email_attr_name"`
 	DingTalkConnectSyncDisplayNameAttrName string `json:"dingtalk_connect_sync_display_name_attr_name"`
 	DingTalkConnectSyncDeptAttrName        string `json:"dingtalk_connect_sync_dept_attr_name"`
+
+	FeishuConnectEnabled                 bool   `json:"feishu_connect_enabled"`
+	FeishuConnectAppID                   string `json:"feishu_connect_app_id"`
+	FeishuConnectAppSecretConfigured     bool   `json:"feishu_connect_app_secret_configured"`
+	FeishuConnectRedirectURL             string `json:"feishu_connect_redirect_url"`
+	FeishuConnectTenantRestrictionPolicy string `json:"feishu_connect_tenant_restriction_policy"`
+	FeishuConnectAllowedTenantKey        string `json:"feishu_connect_allowed_tenant_key"`
+	FeishuConnectBypassRegistration      bool   `json:"feishu_connect_bypass_registration"`
+	FeishuConnectSyncEmail               bool   `json:"feishu_connect_sync_email"`
+	FeishuConnectSyncDisplayName         bool   `json:"feishu_connect_sync_display_name"`
+	FeishuConnectSyncDepartment          bool   `json:"feishu_connect_sync_department"`
+	FeishuOrgSyncEnabled                 bool   `json:"feishu_org_sync_enabled"`
+	FeishuDepartedUserAction             string `json:"feishu_departed_user_action"`
+	FeishuSyncDisableThresholdCount      int    `json:"feishu_sync_disable_threshold_count"`
+	FeishuSyncDisableThresholdPercent    int    `json:"feishu_sync_disable_threshold_percent"`
 
 	WeChatConnectEnabled                   bool   `json:"wechat_connect_enabled"`
 	WeChatConnectAppID                     string `json:"wechat_connect_app_id"`
@@ -330,7 +347,11 @@ type PublicSettings struct {
 	TablePageSizeOptions             []int                    `json:"table_page_size_options"`
 	CustomMenuItems                  []CustomMenuItem         `json:"custom_menu_items"`
 	CustomEndpoints                  []CustomEndpoint         `json:"custom_endpoints"`
+	EmailPasswordLoginEnabled        bool                     `json:"email_password_login_enabled"`
+	AdminEmailLoginFallbackEnabled   bool                     `json:"admin_email_login_fallback_enabled"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
+	FeishuOAuthEnabled               bool                     `json:"feishu_oauth_enabled"`
+	FeishuOrgSyncEnabled             bool                     `json:"feishu_org_sync_enabled"`
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
 	WeChatOAuthOpenEnabled           bool                     `json:"wechat_oauth_open_enabled"`

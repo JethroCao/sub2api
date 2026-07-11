@@ -119,6 +119,11 @@ export const FeatureFlags = {
     mode: 'opt-in',
     label: 'Affiliate',
   }),
+  feishuOrgSync: defineFlag({
+    key: 'feishu_org_sync_enabled',
+    mode: 'opt-in',
+    label: 'Feishu Organization Sync',
+  }),
 } as const
 
 export type RegisteredFeatureFlag = keyof typeof FeatureFlags

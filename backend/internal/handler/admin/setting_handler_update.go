@@ -31,6 +31,8 @@ type UpdateSettingsRequest struct {
 	LoginAgreementMode               string                       `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt          string                       `json:"login_agreement_updated_at"`
 	LoginAgreementDocuments          []dto.LoginAgreementDocument `json:"login_agreement_documents"`
+	EmailPasswordLoginEnabled        *bool                        `json:"email_password_login_enabled"`
+	AdminEmailLoginFallbackEnabled   *bool                        `json:"admin_email_login_fallback_enabled"`
 
 	// 邮件服务设置
 	SMTPHost     string `json:"smtp_host"`
@@ -72,6 +74,22 @@ type UpdateSettingsRequest struct {
 	DingTalkConnectSyncCorpEmailAttrName   string `json:"dingtalk_connect_sync_corp_email_attr_name"`
 	DingTalkConnectSyncDisplayNameAttrName string `json:"dingtalk_connect_sync_display_name_attr_name"`
 	DingTalkConnectSyncDeptAttrName        string `json:"dingtalk_connect_sync_dept_attr_name"`
+
+	// Feishu Connect OAuth 登录
+	FeishuConnectEnabled                 *bool  `json:"feishu_connect_enabled"`
+	FeishuConnectAppID                   string `json:"feishu_connect_app_id"`
+	FeishuConnectAppSecret               string `json:"feishu_connect_app_secret"`
+	FeishuConnectRedirectURL             string `json:"feishu_connect_redirect_url"`
+	FeishuConnectTenantRestrictionPolicy string `json:"feishu_connect_tenant_restriction_policy"`
+	FeishuConnectAllowedTenantKey        string `json:"feishu_connect_allowed_tenant_key"`
+	FeishuConnectBypassRegistration      bool   `json:"feishu_connect_bypass_registration"`
+	FeishuConnectSyncEmail               bool   `json:"feishu_connect_sync_email"`
+	FeishuConnectSyncDisplayName         bool   `json:"feishu_connect_sync_display_name"`
+	FeishuConnectSyncDepartment          bool   `json:"feishu_connect_sync_department"`
+	FeishuOrgSyncEnabled                 bool   `json:"feishu_org_sync_enabled"`
+	FeishuDepartedUserAction             string `json:"feishu_departed_user_action"`
+	FeishuSyncDisableThresholdCount      int    `json:"feishu_sync_disable_threshold_count"`
+	FeishuSyncDisableThresholdPercent    int    `json:"feishu_sync_disable_threshold_percent"`
 
 	// WeChat Connect OAuth 登录
 	WeChatConnectEnabled             bool   `json:"wechat_connect_enabled"`
@@ -186,6 +204,11 @@ type UpdateSettingsRequest struct {
 	AuthSourceDefaultDingTalkSubscriptions    *[]dto.DefaultSubscriptionSetting `json:"auth_source_default_dingtalk_subscriptions"`
 	AuthSourceDefaultDingTalkGrantOnSignup    *bool                             `json:"auth_source_default_dingtalk_grant_on_signup"`
 	AuthSourceDefaultDingTalkGrantOnFirstBind *bool                             `json:"auth_source_default_dingtalk_grant_on_first_bind"`
+	AuthSourceDefaultFeishuBalance            *float64                          `json:"auth_source_default_feishu_balance"`
+	AuthSourceDefaultFeishuConcurrency        *int                              `json:"auth_source_default_feishu_concurrency"`
+	AuthSourceDefaultFeishuSubscriptions      *[]dto.DefaultSubscriptionSetting `json:"auth_source_default_feishu_subscriptions"`
+	AuthSourceDefaultFeishuGrantOnSignup      *bool                             `json:"auth_source_default_feishu_grant_on_signup"`
+	AuthSourceDefaultFeishuGrantOnFirstBind   *bool                             `json:"auth_source_default_feishu_grant_on_first_bind"`
 	ForceEmailOnThirdPartySignup              *bool                             `json:"force_email_on_third_party_signup"`
 
 	// Model fallback configuration
@@ -323,6 +346,7 @@ type UpdateSettingsRequest struct {
 	AuthSourceGitHubPlatformQuotas   map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_github_platform_quotas"`
 	AuthSourceGooglePlatformQuotas   map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_google_platform_quotas"`
 	AuthSourceDingTalkPlatformQuotas map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_dingtalk_platform_quotas"`
+	AuthSourceFeishuPlatformQuotas   map[string]*service.DefaultPlatformQuotaSetting `json:"auth_source_default_feishu_platform_quotas"`
 
 	AllowUserViewErrorRequests *bool `json:"allow_user_view_error_requests"`
 }
@@ -412,6 +436,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	req.AuthSourceDefaultOIDCSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultOIDCSubscriptions)
 	req.AuthSourceDefaultWeChatSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultWeChatSubscriptions)
 	req.AuthSourceDefaultDingTalkSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultDingTalkSubscriptions)
+	req.AuthSourceDefaultFeishuSubscriptions = normalizeOptionalDefaultSubscriptions(req.AuthSourceDefaultFeishuSubscriptions)
 
 	// SMTP 配置保护：如果请求中 smtp_host 为空但数据库中已有配置，则保留已有 SMTP 配置
 	// 防止前端加载设置失败时空表单覆盖已保存的 SMTP 配置
@@ -620,6 +645,70 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		if req.DingTalkConnectSyncDeptAttrName == "" {
 			req.DingTalkConnectSyncDeptAttrName = "钉钉部门"
 		}
+	}
+
+	feishuConnectEnabled := boolValueOrDefault(req.FeishuConnectEnabled, previousSettings.FeishuConnectEnabled)
+	if req.FeishuConnectEnabled == nil {
+		req.FeishuConnectBypassRegistration = previousSettings.FeishuConnectBypassRegistration
+		req.FeishuConnectSyncEmail = previousSettings.FeishuConnectSyncEmail
+		req.FeishuConnectSyncDisplayName = previousSettings.FeishuConnectSyncDisplayName
+		req.FeishuConnectSyncDepartment = previousSettings.FeishuConnectSyncDepartment
+		req.FeishuOrgSyncEnabled = previousSettings.FeishuOrgSyncEnabled
+		req.FeishuConnectTenantRestrictionPolicy = previousSettings.FeishuConnectTenantRestrictionPolicy
+	}
+	req.FeishuConnectTenantRestrictionPolicy = service.NormalizeFeishuTenantRestrictionPolicy(req.FeishuConnectTenantRestrictionPolicy)
+	req.FeishuDepartedUserAction = strings.TrimSpace(req.FeishuDepartedUserAction)
+	if req.FeishuDepartedUserAction == "" {
+		req.FeishuDepartedUserAction = previousSettings.FeishuDepartedUserAction
+	}
+	if req.FeishuDepartedUserAction == "" {
+		req.FeishuDepartedUserAction = service.FeishuDepartedUserActionAutoDisable
+	}
+	if req.FeishuSyncDisableThresholdCount <= 0 {
+		req.FeishuSyncDisableThresholdCount = previousSettings.FeishuSyncDisableThresholdCount
+	}
+	if req.FeishuSyncDisableThresholdCount <= 0 {
+		req.FeishuSyncDisableThresholdCount = service.FeishuDefaultDisableThresholdCount
+	}
+	if req.FeishuSyncDisableThresholdPercent <= 0 {
+		req.FeishuSyncDisableThresholdPercent = previousSettings.FeishuSyncDisableThresholdPercent
+	}
+	if req.FeishuSyncDisableThresholdPercent <= 0 {
+		req.FeishuSyncDisableThresholdPercent = service.FeishuDefaultDisableThresholdPct
+	}
+	if feishuConnectEnabled {
+		req.FeishuConnectAppID = strings.TrimSpace(firstNonEmpty(req.FeishuConnectAppID, previousSettings.FeishuConnectAppID))
+		req.FeishuConnectAppSecret = strings.TrimSpace(req.FeishuConnectAppSecret)
+		req.FeishuConnectRedirectURL = strings.TrimSpace(firstNonEmpty(req.FeishuConnectRedirectURL, previousSettings.FeishuConnectRedirectURL))
+		req.FeishuConnectAllowedTenantKey = strings.TrimSpace(firstNonEmpty(req.FeishuConnectAllowedTenantKey, previousSettings.FeishuConnectAllowedTenantKey))
+
+		if req.FeishuConnectAppID == "" {
+			response.BadRequest(c, "Feishu App ID is required when enabled")
+			return
+		}
+		if req.FeishuConnectRedirectURL == "" {
+			response.BadRequest(c, "Feishu Redirect URL is required when enabled")
+			return
+		}
+		if err := config.ValidateAbsoluteHTTPURL(req.FeishuConnectRedirectURL); err != nil {
+			response.BadRequest(c, "Feishu Redirect URL must be an absolute http(s) URL")
+			return
+		}
+		if req.FeishuConnectAppSecret == "" {
+			if previousSettings.FeishuConnectAppSecret == "" {
+				response.BadRequest(c, "Feishu App Secret is required when enabled")
+				return
+			}
+			req.FeishuConnectAppSecret = previousSettings.FeishuConnectAppSecret
+		}
+		if req.FeishuConnectTenantRestrictionPolicy != service.FeishuTenantRestrictionInternalOnly {
+			req.FeishuConnectBypassRegistration = false
+			req.FeishuOrgSyncEnabled = false
+		}
+	} else {
+		req.FeishuConnectAppID = strings.TrimSpace(firstNonEmpty(req.FeishuConnectAppID, previousSettings.FeishuConnectAppID))
+		req.FeishuConnectRedirectURL = strings.TrimSpace(firstNonEmpty(req.FeishuConnectRedirectURL, previousSettings.FeishuConnectRedirectURL))
+		req.FeishuConnectAllowedTenantKey = strings.TrimSpace(firstNonEmpty(req.FeishuConnectAllowedTenantKey, previousSettings.FeishuConnectAllowedTenantKey))
 	}
 
 	if req.WeChatConnectEnabled {
@@ -1159,6 +1248,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 
+	emailPasswordLoginEnabled := boolValueOrDefault(req.EmailPasswordLoginEnabled, previousSettings.EmailPasswordLoginEnabled)
+	adminEmailLoginFallbackEnabled := boolValueOrDefault(req.AdminEmailLoginFallbackEnabled, previousSettings.AdminEmailLoginFallbackEnabled)
+
 	settings := &service.SystemSettings{
 		// 系统全局 platform quota 默认值（整体替换语义）
 		DefaultPlatformQuotas: req.DefaultPlatformQuotas,
@@ -1175,6 +1267,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		LoginAgreementMode:               loginAgreementMode,
 		LoginAgreementUpdatedAt:          loginAgreementUpdatedAt,
 		LoginAgreementDocuments:          loginAgreementDocuments,
+		EmailPasswordLoginEnabled:        emailPasswordLoginEnabled,
+		AdminEmailLoginFallbackEnabled:   adminEmailLoginFallbackEnabled,
+		LoginEntrySettingsExplicit:       true,
 		SMTPHost:                         req.SMTPHost,
 		SMTPPort:                         req.SMTPPort,
 		SMTPUsername:                     req.SMTPUsername,
@@ -1211,6 +1306,20 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DingTalkConnectSyncCorpEmailAttrName:   req.DingTalkConnectSyncCorpEmailAttrName,
 		DingTalkConnectSyncDisplayNameAttrName: req.DingTalkConnectSyncDisplayNameAttrName,
 		DingTalkConnectSyncDeptAttrName:        req.DingTalkConnectSyncDeptAttrName,
+		FeishuConnectEnabled:                   feishuConnectEnabled,
+		FeishuConnectAppID:                     req.FeishuConnectAppID,
+		FeishuConnectAppSecret:                 req.FeishuConnectAppSecret,
+		FeishuConnectRedirectURL:               req.FeishuConnectRedirectURL,
+		FeishuConnectTenantRestrictionPolicy:   req.FeishuConnectTenantRestrictionPolicy,
+		FeishuConnectAllowedTenantKey:          req.FeishuConnectAllowedTenantKey,
+		FeishuConnectBypassRegistration:        req.FeishuConnectBypassRegistration,
+		FeishuConnectSyncEmail:                 req.FeishuConnectSyncEmail,
+		FeishuConnectSyncDisplayName:           req.FeishuConnectSyncDisplayName,
+		FeishuConnectSyncDepartment:            req.FeishuConnectSyncDepartment,
+		FeishuOrgSyncEnabled:                   req.FeishuOrgSyncEnabled,
+		FeishuDepartedUserAction:               req.FeishuDepartedUserAction,
+		FeishuSyncDisableThresholdCount:        req.FeishuSyncDisableThresholdCount,
+		FeishuSyncDisableThresholdPercent:      req.FeishuSyncDisableThresholdPercent,
 		WeChatConnectEnabled:                   req.WeChatConnectEnabled,
 		WeChatConnectAppID:                     req.WeChatConnectAppID,
 		WeChatConnectAppSecret:                 req.WeChatConnectAppSecret,
@@ -1590,6 +1699,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			GrantOnFirstBind: boolValueOrDefault(req.AuthSourceDefaultDingTalkGrantOnFirstBind, previousAuthSourceDefaults.DingTalk.GrantOnFirstBind),
 			PlatformQuotas:   platformQuotasValueOrDefault(req.AuthSourceDingTalkPlatformQuotas, previousAuthSourceDefaults.DingTalk.PlatformQuotas),
 		},
+		Feishu: service.ProviderDefaultGrantSettings{
+			Balance:          float64ValueOrDefault(req.AuthSourceDefaultFeishuBalance, previousAuthSourceDefaults.Feishu.Balance),
+			Concurrency:      intValueOrDefault(req.AuthSourceDefaultFeishuConcurrency, previousAuthSourceDefaults.Feishu.Concurrency),
+			Subscriptions:    defaultSubscriptionsValueOrDefault(req.AuthSourceDefaultFeishuSubscriptions, previousAuthSourceDefaults.Feishu.Subscriptions),
+			GrantOnSignup:    boolValueOrDefault(req.AuthSourceDefaultFeishuGrantOnSignup, previousAuthSourceDefaults.Feishu.GrantOnSignup),
+			GrantOnFirstBind: boolValueOrDefault(req.AuthSourceDefaultFeishuGrantOnFirstBind, previousAuthSourceDefaults.Feishu.GrantOnFirstBind),
+			PlatformQuotas:   platformQuotasValueOrDefault(req.AuthSourceFeishuPlatformQuotas, previousAuthSourceDefaults.Feishu.PlatformQuotas),
+		},
 		ForceEmailOnThirdPartySignup: boolValueOrDefault(req.ForceEmailOnThirdPartySignup, previousAuthSourceDefaults.ForceEmailOnThirdPartySignup),
 	}
 	if err := h.settingService.UpdateSettingsWithAuthSourceDefaults(c.Request.Context(), settings, authSourceDefaults); err != nil {
@@ -1687,6 +1804,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		LoginAgreementMode:                                     updatedSettings.LoginAgreementMode,
 		LoginAgreementUpdatedAt:                                updatedSettings.LoginAgreementUpdatedAt,
 		LoginAgreementDocuments:                                loginAgreementDocumentsToDTO(updatedSettings.LoginAgreementDocuments),
+		EmailPasswordLoginEnabled:                              updatedSettings.EmailPasswordLoginEnabled,
+		AdminEmailLoginFallbackEnabled:                         updatedSettings.AdminEmailLoginFallbackEnabled,
 		SMTPHost:                                               updatedSettings.SMTPHost,
 		SMTPPort:                                               updatedSettings.SMTPPort,
 		SMTPUsername:                                           updatedSettings.SMTPUsername,
@@ -1718,6 +1837,20 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DingTalkConnectSyncCorpEmailAttrName:                   updatedSettings.DingTalkConnectSyncCorpEmailAttrName,
 		DingTalkConnectSyncDisplayNameAttrName:                 updatedSettings.DingTalkConnectSyncDisplayNameAttrName,
 		DingTalkConnectSyncDeptAttrName:                        updatedSettings.DingTalkConnectSyncDeptAttrName,
+		FeishuConnectEnabled:                                   updatedSettings.FeishuConnectEnabled,
+		FeishuConnectAppID:                                     updatedSettings.FeishuConnectAppID,
+		FeishuConnectAppSecretConfigured:                       updatedSettings.FeishuConnectAppSecretConfigured,
+		FeishuConnectRedirectURL:                               updatedSettings.FeishuConnectRedirectURL,
+		FeishuConnectTenantRestrictionPolicy:                   updatedSettings.FeishuConnectTenantRestrictionPolicy,
+		FeishuConnectAllowedTenantKey:                          updatedSettings.FeishuConnectAllowedTenantKey,
+		FeishuConnectBypassRegistration:                        updatedSettings.FeishuConnectBypassRegistration,
+		FeishuConnectSyncEmail:                                 updatedSettings.FeishuConnectSyncEmail,
+		FeishuConnectSyncDisplayName:                           updatedSettings.FeishuConnectSyncDisplayName,
+		FeishuConnectSyncDepartment:                            updatedSettings.FeishuConnectSyncDepartment,
+		FeishuOrgSyncEnabled:                                   updatedSettings.FeishuOrgSyncEnabled,
+		FeishuDepartedUserAction:                               updatedSettings.FeishuDepartedUserAction,
+		FeishuSyncDisableThresholdCount:                        updatedSettings.FeishuSyncDisableThresholdCount,
+		FeishuSyncDisableThresholdPercent:                      updatedSettings.FeishuSyncDisableThresholdPercent,
 		WeChatConnectEnabled:                                   updatedSettings.WeChatConnectEnabled,
 		WeChatConnectAppID:                                     updatedSettings.WeChatConnectAppID,
 		WeChatConnectAppSecretConfigured:                       updatedSettings.WeChatConnectAppSecretConfigured,

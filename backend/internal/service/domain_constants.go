@@ -123,6 +123,29 @@ const WeChatConnectSyntheticEmailDomain = "@wechat-connect.invalid"
 // DingTalkConnectSyntheticEmailDomain 是 DingTalk Connect 用户的合成邮箱后缀（RFC 保留域名）。
 const DingTalkConnectSyntheticEmailDomain = "@dingtalk-connect.invalid"
 
+// FeishuConnectSyntheticEmailDomain 是 Feishu Connect 用户的合成邮箱后缀（RFC 保留域名）。
+const FeishuConnectSyntheticEmailDomain = "@feishu-connect.invalid"
+
+const (
+	FeishuTenantRestrictionNone         = "none"
+	FeishuTenantRestrictionInternalOnly = "internal_only"
+	FeishuDepartedUserActionAutoDisable = "auto_disable"
+	FeishuDefaultDisableThresholdCount  = 10
+	FeishuDefaultDisableThresholdPct    = 20
+)
+
+// Auth source constants
+const (
+	AuthSourceEmail    = "email"
+	AuthSourceLinuxDo  = "linuxdo"
+	AuthSourceOIDC     = "oidc"
+	AuthSourceWeChat   = "wechat"
+	AuthSourceGitHub   = "github"
+	AuthSourceGoogle   = "google"
+	AuthSourceDingTalk = "dingtalk"
+	AuthSourceFeishu   = "feishu"
+)
+
 // Setting keys
 const (
 	// 注册设置
@@ -146,6 +169,8 @@ const (
 	SettingKeyLoginAgreementMode               = "login_agreement_mode"                // 条款确认展示模式：modal / checkbox
 	SettingKeyLoginAgreementUpdatedAt          = "login_agreement_updated_at"          // 条款更新日期（展示用）
 	SettingKeyLoginAgreementDocuments          = "login_agreement_documents"           // 条款文档列表（JSON，Markdown 内容）
+	SettingKeyEmailPasswordLoginEnabled        = "email_password_login_enabled"        // 是否允许普通用户邮箱密码登录
+	SettingKeyAdminEmailLoginFallbackEnabled   = "admin_email_login_fallback_enabled"  // 普通邮箱登录关闭时是否保留超管邮箱兜底入口
 
 	// 邮件服务设置
 	SettingKeySMTPHost     = "smtp_host"      // SMTP服务器地址
@@ -190,6 +215,22 @@ const (
 	SettingKeyDingTalkConnectSyncCorpEmailAttrName   = "dingtalk_connect_sync_corp_email_attr_name"
 	SettingKeyDingTalkConnectSyncDisplayNameAttrName = "dingtalk_connect_sync_display_name_attr_name"
 	SettingKeyDingTalkConnectSyncDeptAttrName        = "dingtalk_connect_sync_dept_attr_name"
+
+	// Feishu Connect OAuth 登录和组织同步设置
+	SettingKeyFeishuConnectEnabled                 = "feishu_connect_enabled"
+	SettingKeyFeishuConnectAppID                   = "feishu_connect_app_id"
+	SettingKeyFeishuConnectAppSecret               = "feishu_connect_app_secret"
+	SettingKeyFeishuConnectRedirectURL             = "feishu_connect_redirect_url"
+	SettingKeyFeishuConnectTenantRestrictionPolicy = "feishu_connect_tenant_restriction_policy"
+	SettingKeyFeishuConnectAllowedTenantKey        = "feishu_connect_allowed_tenant_key"
+	SettingKeyFeishuConnectBypassRegistration      = "feishu_connect_bypass_registration"
+	SettingKeyFeishuConnectSyncEmail               = "feishu_connect_sync_email"
+	SettingKeyFeishuConnectSyncDisplayName         = "feishu_connect_sync_display_name"
+	SettingKeyFeishuConnectSyncDepartment          = "feishu_connect_sync_department"
+	SettingKeyFeishuOrgSyncEnabled                 = "feishu_org_sync_enabled"
+	SettingKeyFeishuDepartedUserAction             = "feishu_departed_user_action"
+	SettingKeyFeishuSyncDisableThresholdCount      = "feishu_sync_disable_threshold_count"
+	SettingKeyFeishuSyncDisableThresholdPercent    = "feishu_sync_disable_threshold_percent"
 
 	// WeChat Connect OAuth 登录设置
 	SettingKeyWeChatConnectEnabled             = "wechat_connect_enabled"
@@ -303,6 +344,11 @@ const (
 	SettingKeyAuthSourceDefaultDingTalkSubscriptions    = "auth_source_default_dingtalk_subscriptions"
 	SettingKeyAuthSourceDefaultDingTalkGrantOnSignup    = "auth_source_default_dingtalk_grant_on_signup"
 	SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind = "auth_source_default_dingtalk_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultFeishuBalance            = "auth_source_default_feishu_balance"
+	SettingKeyAuthSourceDefaultFeishuConcurrency        = "auth_source_default_feishu_concurrency"
+	SettingKeyAuthSourceDefaultFeishuSubscriptions      = "auth_source_default_feishu_subscriptions"
+	SettingKeyAuthSourceDefaultFeishuGrantOnSignup      = "auth_source_default_feishu_grant_on_signup"
+	SettingKeyAuthSourceDefaultFeishuGrantOnFirstBind   = "auth_source_default_feishu_grant_on_first_bind"
 	SettingKeyForceEmailOnThirdPartySignup              = "force_email_on_third_party_signup"
 
 	// 管理员 API Key

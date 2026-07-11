@@ -262,7 +262,7 @@ func TestFrontendServer_ServeIndexHTML(t *testing.T) {
 		assert.Contains(t, body, `nonce="`+testNonce+`"`)
 	})
 
-	t.Run("caches_html_content", func(t *testing.T) {
+	t.Run("caches_html_content_after_settings_revalidation", func(t *testing.T) {
 		provider := &mockSettingsProvider{
 			settings: map[string]string{"test": "value"},
 		}
@@ -286,11 +286,41 @@ func TestFrontendServer_ServeIndexHTML(t *testing.T) {
 		c2.Set(middleware.CSPNonceKey, "nonce2")
 
 		server.serveIndexHTML(c2)
-		// Settings provider should not be called again
-		assert.Equal(t, 1, provider.called)
+		// Settings are revalidated before cached HTML is reused. This prevents
+		// stale injected settings in distributed deployments.
+		assert.Equal(t, 2, provider.called)
 
 		// But nonce should be different
 		assert.Contains(t, w2.Body.String(), `nonce="nonce2"`)
+	})
+
+	t.Run("re-renders_when_settings_change_without_explicit_invalidation", func(t *testing.T) {
+		provider := &mockSettingsProvider{
+			settings: map[string]bool{"feishu_org_sync_enabled": false},
+		}
+
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+
+		w1 := httptest.NewRecorder()
+		c1, _ := gin.CreateTestContext(w1)
+		c1.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		c1.Set(middleware.CSPNonceKey, "nonce1")
+
+		server.serveIndexHTML(c1)
+		assert.Contains(t, w1.Body.String(), `"feishu_org_sync_enabled":false`)
+
+		provider.settings = map[string]bool{"feishu_org_sync_enabled": true}
+
+		w2 := httptest.NewRecorder()
+		c2, _ := gin.CreateTestContext(w2)
+		c2.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		c2.Set(middleware.CSPNonceKey, "nonce2")
+
+		server.serveIndexHTML(c2)
+		assert.Equal(t, 2, provider.called)
+		assert.Contains(t, w2.Body.String(), `"feishu_org_sync_enabled":true`)
+		assert.NotContains(t, w2.Body.String(), `"feishu_org_sync_enabled":false`)
 	})
 
 	t.Run("sets_etag_header", func(t *testing.T) {
@@ -705,6 +735,20 @@ func TestHTMLCache(t *testing.T) {
 		require.NotNil(t, result)
 		assert.Equal(t, html, result.Content)
 		assert.NotEmpty(t, result.ETag)
+	})
+
+	t.Run("get_for_settings_only_matches_same_payload", func(t *testing.T) {
+		cache := NewHTMLCache()
+		cache.SetBaseHTML([]byte("<html></html>"))
+
+		html := []byte("<html><body>cached</body></html>")
+		cache.Set(html, []byte(`{"v":1}`))
+
+		matched := cache.GetForSettings([]byte(`{"v":1}`))
+		require.NotNil(t, matched)
+		assert.Equal(t, html, matched.Content)
+
+		assert.Nil(t, cache.GetForSettings([]byte(`{"v":2}`)))
 	})
 
 	t.Run("invalidate_clears_cache", func(t *testing.T) {

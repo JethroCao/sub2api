@@ -18,7 +18,7 @@
     </div>
 
     <!-- API Keys -->
-    <div class="card p-4">
+    <div v-if="!hideApiKeys" class="card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-blue-100 p-2 dark:bg-blue-900/30">
           <Icon name="key" size="md" class="text-blue-600 dark:text-blue-400" :stroke-width="2" />
@@ -243,6 +243,7 @@ const props = defineProps<{
   stats: UserStatsType
   balance: number
   isSimple: boolean
+  hideApiKeys?: boolean
   platformQuotas?: PlatformQuotaItem[] | null
 }>()
 const { t } = useI18n()
