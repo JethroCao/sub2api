@@ -181,7 +181,12 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, ResponsesInputItem{Role: "assistant", Content: partsJSON})
+		items = append(items, ResponsesInputItem{
+			Type:    "message",
+			Role:    "assistant",
+			Status:  "completed",
+			Content: partsJSON,
+		})
 	}
 
 	// Emit one function_call item per tool_call.
@@ -192,6 +197,7 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 		}
 		items = append(items, ResponsesInputItem{
 			Type:      "function_call",
+			Status:    "completed",
 			CallID:    tc.ID,
 			Name:      tc.Function.Name,
 			Arguments: args,

@@ -223,7 +223,8 @@ type ResponsesText struct {
 // The Type field determines which other fields are populated.
 type ResponsesInputItem struct {
 	// Common
-	Type string `json:"type,omitempty"` // "" for role-based messages
+	Type   string `json:"type,omitempty"`   // "" for input-only messages; "message" for replayed assistant output
+	Status string `json:"status,omitempty"` // completed status for replayed output items
 
 	// Role-based messages (developer/system/user/assistant)
 	Role    string          `json:"role,omitempty"`
