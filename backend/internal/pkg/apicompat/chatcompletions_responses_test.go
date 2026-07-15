@@ -139,6 +139,7 @@ func TestChatCompletionsToResponses_ToolCalls(t *testing.T) {
 
 	// Check function_call item
 	assert.Equal(t, "function_call", items[1].Type)
+	assert.Equal(t, "completed", items[1].Status)
 	assert.Equal(t, "call_1", items[1].CallID)
 	assert.Empty(t, items[1].ID)
 	assert.Equal(t, "ping", items[1].Name)
@@ -664,6 +665,8 @@ func TestChatCompletionsToResponses_AssistantWithTextAndToolCalls(t *testing.T) 
 	require.Len(t, items, 3)
 	assert.Equal(t, "user", items[0].Role)
 	assert.Equal(t, "assistant", items[1].Role)
+	assert.Equal(t, "message", items[1].Type)
+	assert.Equal(t, "completed", items[1].Status)
 	assert.Equal(t, "function_call", items[2].Type)
 	assert.Empty(t, items[2].ID)
 }
