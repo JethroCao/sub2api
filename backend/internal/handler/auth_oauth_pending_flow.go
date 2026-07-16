@@ -326,6 +326,21 @@ func pendingSessionStringValue(values map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
+func pendingSessionBoolValue(values map[string]any, key string, defaultValue bool) bool {
+	if len(values) == 0 {
+		return defaultValue
+	}
+	raw, ok := values[key]
+	if !ok {
+		return defaultValue
+	}
+	value, ok := raw.(bool)
+	if !ok {
+		return defaultValue
+	}
+	return value
+}
+
 func pendingSessionWantsInvitation(payload map[string]any) bool {
 	return strings.EqualFold(strings.TrimSpace(pendingSessionStringValue(payload, "error")), "invitation_required")
 }
@@ -1190,6 +1205,11 @@ func applyPendingOAuthBindingTx(
 	if decision != nil && decision.AdoptDisplayName {
 		adoptedDisplayName = normalizeAdoptedOAuthDisplayName(pendingSessionStringValue(session.UpstreamIdentityClaims, "suggested_display_name"))
 	}
+	forceFeishuDisplayNameSync := strings.EqualFold(strings.TrimSpace(session.ProviderType), "feishu") &&
+		pendingSessionBoolValue(session.UpstreamIdentityClaims, "sync_display_name", true)
+	if forceFeishuDisplayNameSync {
+		adoptedDisplayName = normalizeAdoptedOAuthDisplayName(pendingSessionStringValue(session.UpstreamIdentityClaims, "suggested_display_name"))
+	}
 	adoptedAvatarURL := ""
 	if decision != nil && decision.AdoptAvatar {
 		adoptedAvatarURL = pendingSessionStringValue(session.UpstreamIdentityClaims, "suggested_avatar_url")
@@ -1203,7 +1223,7 @@ func applyPendingOAuthBindingTx(
 		}
 	}
 
-	if decision != nil && decision.AdoptDisplayName && adoptedDisplayName != "" {
+	if adoptedDisplayName != "" && ((decision != nil && decision.AdoptDisplayName) || forceFeishuDisplayNameSync) {
 		if err := tx.Client().User.UpdateOneID(targetUserID).
 			SetUsername(adoptedDisplayName).
 			Exec(ctx); err != nil {
@@ -1220,7 +1240,7 @@ func applyPendingOAuthBindingTx(
 	for key, value := range session.UpstreamIdentityClaims {
 		metadata[key] = value
 	}
-	if decision != nil && decision.AdoptDisplayName && adoptedDisplayName != "" {
+	if adoptedDisplayName != "" && ((decision != nil && decision.AdoptDisplayName) || forceFeishuDisplayNameSync) {
 		metadata["display_name"] = adoptedDisplayName
 	}
 	if shouldAdoptAvatar {
@@ -1272,6 +1292,9 @@ func applyPendingOAuthBindingTx(
 
 func bindFeishuOrgMirrorUserTx(ctx context.Context, tx *dbent.Tx, session *dbent.PendingAuthSession, userID int64) error {
 	if tx == nil || session == nil || userID <= 0 || !strings.EqualFold(strings.TrimSpace(session.ProviderType), "feishu") {
+		return nil
+	}
+	if !pendingSessionBoolValue(session.UpstreamIdentityClaims, "sync_department", true) {
 		return nil
 	}
 	tenantKey := firstNonEmpty(session.ProviderKey, pendingSessionStringValue(session.UpstreamIdentityClaims, "tenant_key"))

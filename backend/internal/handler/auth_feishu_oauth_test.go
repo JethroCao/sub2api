@@ -28,6 +28,9 @@ func newFeishuOAuthTestHandler(t *testing.T, extraSettings map[string]string) (*
 		service.SettingKeyFeishuConnectRedirectURL:             "https://api.example.com/api/v1/auth/oauth/feishu/callback",
 		service.SettingKeyFeishuConnectTenantRestrictionPolicy: "internal_only",
 		service.SettingKeyFeishuConnectAllowedTenantKey:        "tenant_test",
+		service.SettingKeyFeishuConnectSyncEmail:               "true",
+		service.SettingKeyFeishuConnectSyncDisplayName:         "true",
+		service.SettingKeyFeishuConnectSyncDepartment:          "true",
 	}
 	for key, value := range extraSettings {
 		values[key] = value
@@ -239,6 +242,57 @@ func TestFeishuOAuthCallbackBindsExistingOrgMirrorAfterAutoCreate(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, createdUser.ID, loadFeishuOrgMirrorUserIDForTest(t, client, "tenant_test", "ou_existing_org_user"))
 	require.Equal(t, createdUser.ID, loadFeishuOrgMirrorDepartmentUserIDForTest(t, client, "tenant_test", "ou_existing_org_user", "od-tech"))
+}
+
+func TestFeishuOAuthCallbackHonorsDisabledProfileAndDepartmentSync(t *testing.T) {
+	originalFetch := fetchFeishuOAuthIdentity
+	fetchFeishuOAuthIdentity = func(ctx context.Context, cfg feishuOAuthConfig, code string) (*feishuOAuthIdentity, error) {
+		return &feishuOAuthIdentity{
+			Token: feishuOAuthTokenResponse{Scope: "contact:user.base:readonly contact:user.email:readonly"},
+			User: feishuUserInfo{
+				Name:            "不应同步的姓名",
+				OpenID:          "ou_sync_disabled",
+				UnionID:         "on_sync_disabled",
+				UserID:          "feishu_sync_disabled",
+				TenantKey:       "tenant_test",
+				EnterpriseEmail: "should-not-sync@example.com",
+			},
+		}, nil
+	}
+	t.Cleanup(func() { fetchFeishuOAuthIdentity = originalFetch })
+
+	handler, client := newFeishuOAuthTestHandler(t, map[string]string{
+		service.SettingKeyFeishuConnectSyncEmail:       "false",
+		service.SettingKeyFeishuConnectSyncDisplayName: "false",
+		service.SettingKeyFeishuConnectSyncDepartment:  "false",
+	})
+	t.Cleanup(func() { _ = client.Close() })
+	createFeishuOrgMirrorTablesForTest(t, client)
+	insertFeishuOrgMirrorUserForTest(t, client, "tenant_test", "ou_sync_disabled", "on_sync_disabled", "feishu_sync_disabled", "od-tech")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/feishu/callback?code=feishu-code&state=state-sync-disabled", nil)
+	req.AddCookie(encodedCookie(feishuOAuthStateCookieName, "state-sync-disabled"))
+	req.AddCookie(encodedCookie(feishuOAuthRedirectCookieName, "/dashboard"))
+	req.AddCookie(encodedCookie(feishuOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-sync-disabled"))
+	c.Request = req
+
+	handler.FeishuOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	fragment := parseOAuthRedirectFragment(t, recorder.Header().Get("Location"))
+	require.NotEmpty(t, fragment.Get("access_token"))
+
+	ctx := context.Background()
+	createdUser, err := client.User.Query().
+		Where(dbuser.EmailEQ("feishu-ou_sync_disabled@feishu-connect.invalid")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "feishu_ou_sync_disabled", createdUser.Username)
+	require.Zero(t, loadFeishuOrgMirrorUserIDForTest(t, client, "tenant_test", "ou_sync_disabled"))
+	require.Zero(t, loadFeishuOrgMirrorDepartmentUserIDForTest(t, client, "tenant_test", "ou_sync_disabled", "od-tech"))
 }
 
 func createFeishuOrgMirrorTablesForTest(t *testing.T, client *dbent.Client) {

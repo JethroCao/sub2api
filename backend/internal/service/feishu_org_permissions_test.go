@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -65,14 +66,18 @@ func TestFeishuOrgPermissionServiceHasManagerScope(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestFeishuOrgPermissionServiceSetDepartmentManagerGrantImportsLegacyAndRecalculates(t *testing.T) {
+func TestFeishuOrgPermissionServiceSetDepartmentManagerGrantReconcilesOverridesAndRecalculates(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM feishu_user_group_grants WHERE user_id = $1")).
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM users WHERE id = $1 FOR UPDATE")).
 		WithArgs(int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
+	mock.ExpectExec("UPDATE feishu_user_group_grants grant_row").
+		WithArgs(int64(42), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO feishu_user_group_grants").
 		WithArgs(int64(42), int64(7)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -91,6 +96,7 @@ func TestFeishuOrgPermissionServiceSetDepartmentManagerGrantImportsLegacyAndReca
 	mock.ExpectExec("INSERT INTO feishu_org_permission_audit_logs").
 		WithArgs(int64(7), int64(42), "dept-a", FeishuGrantSourceDepartmentManager, "grant", "manual").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	invalidator := &feishuOrgPermissionInvalidatorStub{}
 	svc := NewFeishuOrgPermissionService(db, invalidator)
@@ -107,6 +113,41 @@ func TestFeishuOrgPermissionServiceSetDepartmentManagerGrantImportsLegacyAndReca
 	require.NoError(t, err)
 	require.Equal(t, []int64{11}, result.GroupIDs)
 	require.Equal(t, []int64{42}, invalidator.userIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceSetUserGroupGrantsRollsBackAtomically(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM users WHERE id = $1 FOR UPDATE")).
+		WithArgs(int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
+	mock.ExpectExec("UPDATE feishu_user_group_grants grant_row").
+		WithArgs(int64(42), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO feishu_user_group_grants").
+		WithArgs(int64(42), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE feishu_user_group_grants").
+		WithArgs(int64(42), FeishuGrantSourceDepartmentManager, "dept-a", sqlmock.AnyArg(), int64(7), "manual").
+		WillReturnError(errors.New("write failed"))
+	mock.ExpectRollback()
+
+	invalidator := &feishuOrgPermissionInvalidatorStub{}
+	svc := NewFeishuOrgPermissionService(db, invalidator)
+	_, err = svc.SetUserGroupGrants(context.Background(), FeishuSetUserGroupGrantsInput{
+		ActorUserID:            7,
+		TargetUserID:           42,
+		Source:                 FeishuGrantSourceDepartmentManager,
+		SourceOpenDepartmentID: "dept-a",
+		GroupIDs:               []int64{11},
+	})
+
+	require.ErrorContains(t, err, "write failed")
+	require.Empty(t, invalidator.userIDs)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -142,9 +183,16 @@ func TestFeishuOrgPermissionServiceSetDepartmentManagerUserGroupGrants(t *testin
 	mock.ExpectQuery("SELECT group_id FROM feishu_department_group_grants").
 		WithArgs("tenant-a", "dept-a").
 		WillReturnRows(sqlmock.NewRows([]string{"group_id"}).AddRow(11).AddRow(12))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM feishu_user_group_grants WHERE user_id = $1")).
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM users WHERE id = $1 FOR UPDATE")).
 		WithArgs(int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
+	mock.ExpectExec("UPDATE feishu_user_group_grants grant_row").
+		WithArgs(int64(42), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO feishu_user_group_grants").
+		WithArgs(int64(42), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE feishu_user_group_grants").
 		WithArgs(int64(42), FeishuGrantSourceDepartmentManager, "dept-a", sqlmock.AnyArg(), int64(7), "manual").
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -160,6 +208,7 @@ func TestFeishuOrgPermissionServiceSetDepartmentManagerUserGroupGrants(t *testin
 	mock.ExpectExec("INSERT INTO feishu_org_permission_audit_logs").
 		WithArgs(int64(7), int64(42), "dept-a", FeishuGrantSourceDepartmentManager, "grant", "manual").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	svc := NewFeishuOrgPermissionService(db, nil)
 	result, err := svc.SetDepartmentManagerUserGroupGrants(context.Background(), FeishuDepartmentManagerAssignmentInput{
@@ -231,9 +280,21 @@ func TestFeishuOrgPermissionServiceSetDepartmentGroupPoolRevokesInvalidManagerGr
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
+	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT DISTINCT user_id FROM feishu_user_group_grants").
 		WithArgs("dept-a", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(42).AddRow(43))
+	for _, userID := range []int64{42, 43} {
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM users WHERE id = $1 FOR UPDATE")).
+			WithArgs(userID).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(userID))
+		mock.ExpectExec("UPDATE feishu_user_group_grants grant_row").
+			WithArgs(userID, int64(1)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("INSERT INTO feishu_user_group_grants").
+			WithArgs(userID, int64(1)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
 	mock.ExpectExec("UPDATE feishu_user_group_grants").
 		WithArgs("dept-a", sqlmock.AnyArg(), int64(1), "pool_updated").
 		WillReturnResult(sqlmock.NewResult(0, 2))
@@ -258,6 +319,7 @@ func TestFeishuOrgPermissionServiceSetDepartmentGroupPoolRevokesInvalidManagerGr
 	mock.ExpectExec("INSERT INTO feishu_org_permission_audit_logs").
 		WithArgs(int64(1), int64(0), "dept-a", FeishuGrantSourceDepartmentManager, "auto_revoke", "pool_updated").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	svc := NewFeishuOrgPermissionService(db, &feishuOrgPermissionInvalidatorStub{})
 	result, err := svc.SetDepartmentGroupPool(context.Background(), FeishuSetDepartmentGroupPoolInput{
@@ -918,8 +980,6 @@ func TestFeishuOrgPermissionServiceRunFeishuSyncRejectsEmptyUserSnapshot(t *test
 
 	startedAt := time.Date(2026, 7, 3, 14, 0, 0, 0, time.UTC)
 	finishedAt := time.Date(2026, 7, 3, 14, 1, 0, 0, time.UTC)
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM feishu_org_users").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
 	mock.ExpectQuery("INSERT INTO feishu_org_sync_runs").
 		WithArgs("failed", 0, 0, 0, 0, 0, false, "feishu org sync returned no users", int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -945,6 +1005,66 @@ func TestFeishuOrgPermissionServiceRunFeishuSyncRejectsEmptyUserSnapshot(t *test
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no users")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceRunFeishuSyncRejectsConcurrentTenantSync(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	cache := &fakeLeaderLockCache{}
+	lockKey := "feishu:org_sync:tenant-a"
+	_, err = cache.TryAcquireLeaderLock(context.Background(), lockKey, "peer", time.Minute)
+	require.NoError(t, err)
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	svc.SetLeaderLock(cache)
+	_, err = svc.RunFeishuOrgSyncWithClient(context.Background(), 7, feishuOrgDirectoryClientStub{
+		snapshot: &FeishuOrgDirectorySnapshot{
+			TenantKey: "tenant-a",
+			Users:     []FeishuOrgDirectoryUser{{OpenID: "ou-1"}},
+		},
+	}, FeishuDeparturePolicy{})
+
+	require.ErrorContains(t, err, "already running")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFeishuOrgPermissionServiceImportSnapshotRollsBackPartialWrites(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO feishu_departments").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("WITH matched_identity AS").
+		WillReturnError(errors.New("user import failed"))
+	mock.ExpectRollback()
+
+	svc := NewFeishuOrgPermissionService(db, nil)
+	counts, err := svc.importFeishuOrgSnapshot(context.Background(), &FeishuOrgDirectorySnapshot{
+		TenantKey: "tenant-a",
+		Departments: []FeishuOrgDirectoryDepartment{{
+			TenantKey:              "tenant-a",
+			OpenDepartmentID:       "od-tech",
+			ParentOpenDepartmentID: "0",
+			Name:                   "Tech",
+			Status:                 "active",
+		}},
+		Users: []FeishuOrgDirectoryUser{{
+			TenantKey:               "tenant-a",
+			OpenID:                  "ou-1",
+			Name:                    "User One",
+			Status:                  "active",
+			PrimaryOpenDepartmentID: "od-tech",
+		}},
+	})
+
+	require.ErrorContains(t, err, "user import failed")
+	require.Equal(t, 1, counts.DepartmentsSynced)
+	require.Zero(t, counts.UsersSynced)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -515,6 +515,12 @@ func ProvideAPIKeyAuthCacheInvalidator(apiKeyService *APIKeyService) APIKeyAuthC
 	return apiKeyService
 }
 
+func ProvideFeishuOrgPermissionService(db *sql.DB, invalidator APIKeyAuthCacheInvalidator, lockCache LeaderLockCache) *FeishuOrgPermissionService {
+	svc := NewFeishuOrgPermissionService(db, invalidator)
+	svc.SetLeaderLock(lockCache)
+	return svc
+}
+
 // ProvideBackupService creates and starts BackupService
 func ProvideBackupService(
 	settingRepo SettingRepository,
@@ -642,7 +648,7 @@ var ProviderSet = wire.NewSet(
 	ProvideBillingCacheService,
 	NewAnnouncementService,
 	NewAdminService,
-	NewFeishuOrgPermissionService,
+	ProvideFeishuOrgPermissionService,
 	NewGatewayService,
 	NewOpenAIGatewayService,
 	ProvideBatchImageModelPricingResolver,

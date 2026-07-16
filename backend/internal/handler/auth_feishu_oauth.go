@@ -238,19 +238,22 @@ func (h *AuthHandler) FeishuOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	email := feishuPrimaryEmail(identity.User)
 	syntheticEmail := buildFeishuSyntheticEmail(providerSubject)
-	resolvedEmail := email
-	if resolvedEmail == "" {
-		resolvedEmail = syntheticEmail
+	email := ""
+	if cfg.SyncEmail {
+		email = feishuPrimaryEmail(identity.User)
 	}
-	username := firstNonEmpty(identity.User.Name, identity.User.EnName, feishuFallbackUsername(providerSubject))
+	resolvedEmail := firstNonEmpty(email, syntheticEmail)
+	username := feishuFallbackUsername(providerSubject)
+	if cfg.SyncDisplayName {
+		username = firstNonEmpty(identity.User.Name, identity.User.EnName, username)
+	}
 	identityRef := service.PendingAuthIdentityKey{
 		ProviderType:    "feishu",
 		ProviderKey:     providerKey,
 		ProviderSubject: providerSubject,
 	}
-	upstreamClaims := buildFeishuUpstreamClaims(identity, resolvedEmail, syntheticEmail, username)
+	upstreamClaims := buildFeishuUpstreamClaims(identity, resolvedEmail, syntheticEmail, username, cfg)
 
 	if intent == oauthIntentBindCurrentUser {
 		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, feishuOAuthBindUserCookieName)
@@ -507,12 +510,16 @@ func feishuFallbackUsername(subject string) string {
 	return "feishu_" + subject
 }
 
-func buildFeishuUpstreamClaims(identity *feishuOAuthIdentity, resolvedEmail string, syntheticEmail string, username string) map[string]any {
+func buildFeishuUpstreamClaims(identity *feishuOAuthIdentity, resolvedEmail string, syntheticEmail string, username string, cfg config.FeishuConnectConfig) map[string]any {
 	user := feishuUserInfo{}
 	scope := ""
 	if identity != nil {
 		user = identity.User
 		scope = identity.Token.Scope
+	}
+	suggestedDisplayName := ""
+	if cfg.SyncDisplayName {
+		suggestedDisplayName = firstNonEmpty(user.Name, user.EnName, username)
 	}
 	claims := map[string]any{
 		"email":                  strings.TrimSpace(resolvedEmail),
@@ -524,8 +531,11 @@ func buildFeishuUpstreamClaims(identity *feishuOAuthIdentity, resolvedEmail stri
 		"tenant_key":             strings.TrimSpace(user.TenantKey),
 		"employee_no":            strings.TrimSpace(user.EmployeeNo),
 		"scope":                  strings.TrimSpace(scope),
-		"suggested_display_name": firstNonEmpty(user.Name, user.EnName, username),
+		"suggested_display_name": suggestedDisplayName,
 		"suggested_avatar_url":   firstNonEmpty(user.AvatarURL, user.AvatarThumb, user.AvatarMiddle, user.AvatarBig),
+		"sync_email":             cfg.SyncEmail,
+		"sync_display_name":      cfg.SyncDisplayName,
+		"sync_department":        cfg.SyncDepartment,
 	}
 	if syntheticEmail != "" && !strings.EqualFold(strings.TrimSpace(syntheticEmail), strings.TrimSpace(resolvedEmail)) {
 		claims["synthetic_email"] = strings.TrimSpace(syntheticEmail)

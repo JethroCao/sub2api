@@ -23,6 +23,7 @@ const (
 	feishuOpenAPIBaseURL          = "https://open.feishu.cn"
 	feishuRootDepartmentID        = "0"
 	feishuOrgSyncHTTPTimeout      = 60 * time.Second
+	feishuOrgSyncLeaderLockTTL    = 30 * time.Minute
 	feishuOrgSyncPageSize         = 50
 	feishuOrgSyncResponseBodySize = 4 << 20
 )
@@ -329,10 +330,6 @@ func (s *FeishuOrgPermissionService) RunFeishuOrgSyncWithClient(ctx context.Cont
 	if client == nil {
 		return nil, errors.New("feishu org directory client is not configured")
 	}
-	previousActiveUsers, err := s.countActiveFeishuOrgUsers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("count active feishu org users: %w", err)
-	}
 	snapshot, err := client.FetchSnapshot(ctx)
 	if err != nil {
 		_, _ = s.insertDetailedSyncRun(ctx, "failed", feishuOrgSyncImportCounts{}, 0, false, err.Error(), actorUserID)
@@ -348,6 +345,17 @@ func (s *FeishuOrgPermissionService) RunFeishuOrgSyncWithClient(ctx context.Cont
 		err := errors.New("feishu org sync returned no users")
 		_, _ = s.insertDetailedSyncRun(ctx, "failed", feishuOrgSyncImportCounts{}, 0, false, err.Error(), actorUserID)
 		return nil, err
+	}
+	lockKey := "feishu:org_sync:" + strings.ToLower(strings.TrimSpace(snapshot.TenantKey))
+	release, acquired := tryAcquireStrictSingletonLeaderLock(ctx, s.lockCache, s.sqlDB, lockKey, s.instanceID, feishuOrgSyncLeaderLockTTL)
+	if !acquired {
+		return nil, infraerrors.Conflict("FEISHU_ORG_SYNC_IN_PROGRESS", "feishu org sync is already running or the distributed lock is unavailable")
+	}
+	defer release()
+
+	previousActiveUsers, err := s.countActiveFeishuOrgUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("count active feishu org users: %w", err)
 	}
 	counts, err := s.importFeishuOrgSnapshot(ctx, snapshot)
 	if err != nil {
@@ -391,6 +399,16 @@ func (s *FeishuOrgPermissionService) RunFeishuOrgSyncWithClient(ctx context.Cont
 }
 
 func (s *FeishuOrgPermissionService) importFeishuOrgSnapshot(ctx context.Context, snapshot *FeishuOrgDirectorySnapshot) (feishuOrgSyncImportCounts, error) {
+	counts := feishuOrgSyncImportCounts{}
+	err := s.withTransaction(ctx, func(txService *FeishuOrgPermissionService) error {
+		var err error
+		counts, err = txService.importFeishuOrgSnapshotTx(ctx, snapshot)
+		return err
+	})
+	return counts, err
+}
+
+func (s *FeishuOrgPermissionService) importFeishuOrgSnapshotTx(ctx context.Context, snapshot *FeishuOrgDirectorySnapshot) (feishuOrgSyncImportCounts, error) {
 	counts := feishuOrgSyncImportCounts{}
 	for _, department := range snapshot.Departments {
 		if err := s.upsertFeishuDepartment(ctx, department); err != nil {

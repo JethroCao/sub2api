@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
 
@@ -63,14 +64,45 @@ type feishuOrgSQLExecutor interface {
 
 type FeishuOrgPermissionService struct {
 	db                   feishuOrgSQLExecutor
+	sqlDB                *sql.DB
 	authCacheInvalidator APIKeyAuthCacheInvalidator
+	lockCache            LeaderLockCache
+	instanceID           string
 }
 
 func NewFeishuOrgPermissionService(db *sql.DB, invalidator APIKeyAuthCacheInvalidator) *FeishuOrgPermissionService {
 	return &FeishuOrgPermissionService{
 		db:                   db,
+		sqlDB:                db,
 		authCacheInvalidator: invalidator,
+		instanceID:           uuid.NewString(),
 	}
+}
+
+// SetLeaderLock injects the distributed coordination backend used by organization sync.
+func (s *FeishuOrgPermissionService) SetLeaderLock(lockCache LeaderLockCache) {
+	if s == nil {
+		return
+	}
+	s.lockCache = lockCache
+}
+
+func (s *FeishuOrgPermissionService) withTransaction(ctx context.Context, fn func(*FeishuOrgPermissionService) error) error {
+	if s == nil || s.sqlDB == nil {
+		return fn(s)
+	}
+	tx, err := s.sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txService := *s
+	txService.db = tx
+	txService.sqlDB = nil
+	if err := fn(&txService); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type FeishuSetUserGroupGrantsInput struct {
@@ -791,26 +823,44 @@ func (s *FeishuOrgPermissionService) SetDepartmentGroupPool(ctx context.Context,
 	}
 	groupIDs := uniqueSortedInt64s(input.GroupIDs)
 
-	affectedUserIDs, err := s.listUsersWithInvalidDepartmentManagerGrants(ctx, deptID, groupIDs)
-	if err != nil {
-		return nil, fmt.Errorf("list invalid department manager grants: %w", err)
-	}
-	if err := s.revokeInvalidDepartmentManagerGrants(ctx, deptID, groupIDs, input.ActorUserID, reason); err != nil {
-		return nil, fmt.Errorf("revoke invalid department manager grants: %w", err)
-	}
-	if err := s.replaceDepartmentGroupPool(ctx, tenantKey, deptID, groupIDs, input.ActorUserID); err != nil {
-		return nil, fmt.Errorf("replace department group pool: %w", err)
-	}
-	for _, userID := range affectedUserIDs {
-		if err := s.recalculateUserAllowedGroups(ctx, userID); err != nil {
-			return nil, fmt.Errorf("recalculate allowed groups for user %d: %w", userID, err)
+	var affectedUserIDs []int64
+	err := s.withTransaction(ctx, func(txService *FeishuOrgPermissionService) error {
+		var err error
+		affectedUserIDs, err = txService.listUsersWithInvalidDepartmentManagerGrants(ctx, deptID, groupIDs)
+		if err != nil {
+			return fmt.Errorf("list invalid department manager grants: %w", err)
 		}
-		if s.authCacheInvalidator != nil {
+		for _, userID := range affectedUserIDs {
+			if err := txService.lockPermissionUser(ctx, userID); err != nil {
+				return fmt.Errorf("lock permission user %d: %w", userID, err)
+			}
+			if err := txService.reconcileSuperAdminOverrides(ctx, userID, input.ActorUserID); err != nil {
+				return fmt.Errorf("reconcile allowed groups for user %d: %w", userID, err)
+			}
+		}
+		if err := txService.revokeInvalidDepartmentManagerGrants(ctx, deptID, groupIDs, input.ActorUserID, reason); err != nil {
+			return fmt.Errorf("revoke invalid department manager grants: %w", err)
+		}
+		if err := txService.replaceDepartmentGroupPool(ctx, tenantKey, deptID, groupIDs, input.ActorUserID); err != nil {
+			return fmt.Errorf("replace department group pool: %w", err)
+		}
+		for _, userID := range affectedUserIDs {
+			if err := txService.recalculateUserAllowedGroups(ctx, userID); err != nil {
+				return fmt.Errorf("recalculate allowed groups for user %d: %w", userID, err)
+			}
+		}
+		if err := txService.appendAuditLog(ctx, input.ActorUserID, 0, deptID, FeishuGrantSourceDepartmentManager, "auto_revoke", reason); err != nil {
+			return fmt.Errorf("append audit log: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if s.authCacheInvalidator != nil {
+		for _, userID := range affectedUserIDs {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 		}
-	}
-	if err := s.appendAuditLog(ctx, input.ActorUserID, 0, deptID, FeishuGrantSourceDepartmentManager, "auto_revoke", reason); err != nil {
-		return nil, fmt.Errorf("append audit log: %w", err)
 	}
 	return &FeishuDepartmentGroupPoolResult{
 		TenantKey:        tenantKey,
@@ -969,17 +1019,26 @@ func (s *FeishuOrgPermissionService) SetUserGroupGrants(ctx context.Context, inp
 	}
 	groupIDs := uniqueSortedInt64s(input.GroupIDs)
 
-	if err := s.ensureLegacyAllowedGroupsImported(ctx, input.TargetUserID, input.ActorUserID); err != nil {
-		return nil, fmt.Errorf("import legacy allowed groups: %w", err)
-	}
-	if err := s.replaceActiveSourceGrants(ctx, input.TargetUserID, source, sourceDeptID, groupIDs, input.ActorUserID, reason); err != nil {
-		return nil, fmt.Errorf("replace source grants: %w", err)
-	}
-	if err := s.recalculateUserAllowedGroups(ctx, input.TargetUserID); err != nil {
-		return nil, fmt.Errorf("recalculate allowed groups: %w", err)
-	}
-	if err := s.appendAuditLog(ctx, input.ActorUserID, input.TargetUserID, sourceDeptID, source, "grant", reason); err != nil {
-		return nil, fmt.Errorf("append audit log: %w", err)
+	err := s.withTransaction(ctx, func(txService *FeishuOrgPermissionService) error {
+		if err := txService.lockPermissionUser(ctx, input.TargetUserID); err != nil {
+			return fmt.Errorf("lock permission user: %w", err)
+		}
+		if err := txService.reconcileSuperAdminOverrides(ctx, input.TargetUserID, input.ActorUserID); err != nil {
+			return fmt.Errorf("reconcile existing allowed groups: %w", err)
+		}
+		if err := txService.replaceActiveSourceGrants(ctx, input.TargetUserID, source, sourceDeptID, groupIDs, input.ActorUserID, reason); err != nil {
+			return fmt.Errorf("replace source grants: %w", err)
+		}
+		if err := txService.recalculateUserAllowedGroups(ctx, input.TargetUserID); err != nil {
+			return fmt.Errorf("recalculate allowed groups: %w", err)
+		}
+		if err := txService.appendAuditLog(ctx, input.ActorUserID, input.TargetUserID, sourceDeptID, source, "grant", reason); err != nil {
+			return fmt.Errorf("append audit log: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	if s.authCacheInvalidator != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, input.TargetUserID)
@@ -1067,13 +1126,31 @@ ORDER BY group_id`, tenantKey, deptID)
 	return uniqueSortedInt64s(ids), nil
 }
 
-func (s *FeishuOrgPermissionService) ensureLegacyAllowedGroupsImported(ctx context.Context, userID, actorUserID int64) error {
-	var count int64
-	if err := scanFeishuSingleRow(ctx, s.db, "SELECT COUNT(*) FROM feishu_user_group_grants WHERE user_id = $1", []any{userID}, &count); err != nil {
+func (s *FeishuOrgPermissionService) lockPermissionUser(ctx context.Context, userID int64) error {
+	var lockedUserID int64
+	return scanFeishuSingleRow(ctx, s.db, "SELECT id FROM users WHERE id = $1 FOR UPDATE", []any{userID}, &lockedUserID)
+}
+
+// reconcileSuperAdminOverrides captures changes made through the legacy/admin user
+// editor before rebuilding the effective allowed-group table from the grant ledger.
+// Groups already backed by another active source are not duplicated as overrides.
+func (s *FeishuOrgPermissionService) reconcileSuperAdminOverrides(ctx context.Context, userID, actorUserID int64) error {
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE feishu_user_group_grants grant_row
+SET revoked_at = NOW(),
+    revoked_by_user_id = NULLIF($2, 0),
+    revoke_reason = 'admin_allowed_groups_reconciled',
+    updated_at = NOW()
+WHERE grant_row.user_id = $1
+  AND grant_row.source = 'super_admin_override'
+  AND grant_row.revoked_at IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM user_allowed_groups allowed
+      WHERE allowed.user_id = $1
+        AND allowed.group_id = grant_row.group_id
+  )`, userID, actorUserID); err != nil {
 		return err
-	}
-	if count > 0 {
-		return nil
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO feishu_user_group_grants (
@@ -1092,6 +1169,14 @@ SELECT user_id,
        'legacy_import'
 FROM user_allowed_groups
 WHERE user_id = $1
+  AND NOT EXISTS (
+      SELECT 1
+      FROM feishu_user_group_grants existing
+      WHERE existing.user_id = $1
+        AND existing.group_id = user_allowed_groups.group_id
+        AND existing.source <> 'super_admin_override'
+        AND existing.revoked_at IS NULL
+  )
 ON CONFLICT (user_id, group_id, source, source_open_department_id) WHERE revoked_at IS NULL
 DO NOTHING`, userID, actorUserID)
 	return err
