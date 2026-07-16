@@ -34,6 +34,7 @@ import UserDashboardRecentUsage from '@/components/user/dashboard/UserDashboardR
 import type { UsageLog, TrendDataPoint, ModelStat, PlatformQuotaItem } from '@/types'
 import { getMyPlatformQuotas } from '@/api/user'
 import feishuOrgAPI from '@/api/admin/feishuOrg'
+import { formatDateLocalInput } from '@/utils/format'
 
 const authStore = useAuthStore(); const user = computed(() => authStore.user)
 const stats = ref<UserStatsType | null>(null); const loading = ref(false); const loadingUsage = ref(false); const loadingCharts = ref(false)
@@ -44,8 +45,7 @@ const usageScope = ref<UsageScope>('personal')
 const canViewTeamUsage = ref(false)
 const isTeamScope = computed(() => canViewTeamUsage.value && usageScope.value === 'team')
 
-const formatLD = (d: Date) => d.toISOString().split('T')[0]
-const startDate = ref(formatLD(new Date(Date.now() - 6 * 86400000))); const endDate = ref(formatLD(new Date())); const granularity = ref('day')
+const startDate = ref(formatDateLocalInput(new Date(Date.now() - 6 * 86400000))); const endDate = ref(formatDateLocalInput(new Date())); const granularity = ref('day')
 
 const usageDateParams = () => ({ start_date: startDate.value, end_date: endDate.value, timezone: getClientTimeZone() })
 const getClientTimeZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined } catch { return undefined } }
