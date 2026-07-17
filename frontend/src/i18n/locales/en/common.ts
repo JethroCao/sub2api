@@ -192,6 +192,9 @@ export default {
     riskControl: 'Risk Control',
     feishuOrg: 'Feishu Organization',
     orgManager: 'Department Grants',
+    securityAudit: 'Security Audit',
+    contentModeration: 'Content Moderation',
+    promptAudit: 'Prompt Audit',
     auditLogs: 'Audit Logs',
   },
 
