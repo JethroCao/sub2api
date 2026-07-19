@@ -10,6 +10,8 @@ const {
   getDashboardSnapshotV2,
   list,
   getAvailable,
+  getManagerAccess,
+  listManagedUsers,
   showError,
   showWarning,
   showSuccess,
@@ -21,6 +23,8 @@ const {
   getDashboardSnapshotV2: vi.fn(),
   list: vi.fn(),
   getAvailable: vi.fn(),
+  getManagerAccess: vi.fn(),
+  listManagedUsers: vi.fn(),
   showError: vi.fn(),
   showWarning: vi.fn(),
   showSuccess: vi.fn(),
@@ -81,6 +85,13 @@ vi.mock('@/api', () => ({
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ showError, showWarning, showSuccess, showInfo }),
+}))
+
+vi.mock('@/api/admin/feishuOrg', () => ({
+  default: {
+    getManagerAccess,
+    listManagedUsers,
+  },
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -155,6 +166,8 @@ describe('user UsageView', () => {
     getDashboardSnapshotV2.mockReset()
     list.mockReset()
     getAvailable.mockReset()
+    getManagerAccess.mockReset()
+    listManagedUsers.mockReset()
     showError.mockReset()
     showWarning.mockReset()
     showSuccess.mockReset()
@@ -189,6 +202,8 @@ describe('user UsageView', () => {
     })
     list.mockResolvedValue({ items: [{ id: 1, name: 'demo-key' }] })
     getAvailable.mockResolvedValue([{ id: 1, name: 'default' }])
+    getManagerAccess.mockResolvedValue({ has_access: false })
+    listManagedUsers.mockResolvedValue({ items: [], total: 0 })
   })
 
   it('loads logs, stats, model stats, and snapshot on first render', async () => {

@@ -276,7 +276,7 @@ const appStore = useAppStore()
 type PendingOAuthProvider = 'oidc' | 'feishu'
 
 const oauthProvider = computed<PendingOAuthProvider>(() =>
-  route.path.startsWith('/auth/feishu') ? 'feishu' : 'oidc'
+  String(route.path ?? '').startsWith('/auth/feishu') ? 'feishu' : 'oidc'
 )
 const providerI18nBase = computed(() => `auth.${oauthProvider.value}`)
 const isProcessing = ref(true)

@@ -994,14 +994,13 @@ const switchToErrors = () => {
   if (errorRows.value.length === 0) void loadErrors()
 }
 
-onMounted(async () => {
+onMounted(() => {
   loadSavedColumns()
   loadSavedErrColumns()
   document.addEventListener('click', handleColumnClickOutside)
-  await detectTeamUsageAccess()
   void loadFilterOptions()
-  void loadManagedUsers()
   refreshData()
+  void detectTeamUsageAccess().then(loadManagedUsers)
 })
 
 onUnmounted(() => {
