@@ -238,6 +238,9 @@ func newTestBackupService(repo *mockSettingRepo, dumper DBDumper, store *mockObj
 			User:   "test",
 			DBName: "testdb",
 		},
+		// A fixed encryption key is the supported production posture: persisting
+		// an S3 secret requires it (#4524).
+		Totp: config.TotpConfig{EncryptionKeyConfigured: true},
 	}
 	factory := func(_ context.Context, _ *BackupS3Config) (BackupObjectStore, error) {
 		return store, nil
@@ -253,8 +256,22 @@ func newTestBackupServiceWithFactory(repo *mockSettingRepo, dumper DBDumper, fac
 			User:   "test",
 			DBName: "testdb",
 		},
+		Totp: config.TotpConfig{EncryptionKeyConfigured: true},
 	}
 	return NewBackupService(repo, cfg, &plainEncryptor{}, factory, dumper)
+}
+
+// newTestBackupServiceEphemeralKey mirrors a deployment that never set
+// TOTP_ENCRYPTION_KEY, so the secret encryption key is auto-generated.
+func newTestBackupServiceEphemeralKey(repo *mockSettingRepo) *BackupService {
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Host: "localhost", Port: 5432, User: "test", DBName: "testdb"},
+		Totp:     config.TotpConfig{EncryptionKeyConfigured: false},
+	}
+	factory := func(_ context.Context, _ *BackupS3Config) (BackupObjectStore, error) {
+		return newMockObjectStore(), nil
+	}
+	return NewBackupService(repo, cfg, &plainEncryptor{}, factory, &mockDumper{})
 }
 
 func seedS3Config(t *testing.T, repo *mockSettingRepo) {
@@ -434,6 +451,42 @@ func TestBackupService_RecreatesObjectStoreWhenS3ConfigChangesInSettings(t *test
 	require.NotSame(t, storeA, storeB, "cached object store must be rebuilt when another instance changes S3 settings")
 	require.Equal(t, 2, factory.CallCount())
 	require.Equal(t, "bucket-b", factory.configs[1].Bucket)
+}
+
+func TestBackupService_UpdateS3Config_RejectsEphemeralKey(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupServiceEphemeralKey(repo)
+
+	// 提供新 secret 但密钥为自动生成 -> 必须拒绝，避免重启后无法解密（#4524）。
+	_, err := svc.UpdateS3Config(context.Background(), BackupS3Config{
+		Bucket:          "my-bucket",
+		AccessKeyID:     "AKID",
+		SecretAccessKey: "my-secret",
+		Prefix:          "backups",
+	})
+	require.ErrorIs(t, err, ErrSecretEncryptionKeyNotConfigured)
+
+	// 不应写入任何配置。
+	raw, _ := repo.GetValue(context.Background(), settingKeyBackupS3Config)
+	require.Empty(t, raw)
+}
+
+func TestBackupService_UpdateS3Config_NoSecretAllowedWithEphemeralKey(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupServiceEphemeralKey(repo)
+
+	// 不含 secret 的更新（如只改 bucket）不触碰加密路径，应放行。
+	_, err := svc.UpdateS3Config(context.Background(), BackupS3Config{
+		Bucket:      "my-bucket",
+		AccessKeyID: "AKID",
+	})
+	require.NoError(t, err)
+}
+
+func TestBackupService_EncryptionKeyConfigured(t *testing.T) {
+	repo := newMockSettingRepo()
+	require.True(t, newTestBackupService(repo, &mockDumper{}, newMockObjectStore()).EncryptionKeyConfigured())
+	require.False(t, newTestBackupServiceEphemeralKey(repo).EncryptionKeyConfigured())
 }
 
 func TestBackupService_SaveRecordConcurrency(t *testing.T) {
