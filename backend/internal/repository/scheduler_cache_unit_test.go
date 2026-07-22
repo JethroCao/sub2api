@@ -303,6 +303,10 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 		ID:       42,
 		Platform: service.PlatformOpenAI,
 		Type:     service.AccountTypeOAuth,
+		Credentials: map[string]any{
+			service.OpenAICustomInstructionsCredentialKey: "account suffix",
+			"unrelated_credential":                        "must not be cached",
+		},
 		Extra: map[string]any{
 			"openai_oauth_responses_websockets_v2_enabled": true,
 			"openai_oauth_responses_websockets_v2_mode":    service.OpenAIWSIngressModePassthrough,
@@ -325,6 +329,8 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	require.Equal(t, service.OpenAIJSONSchemaModeForceJSONObject, got.Extra[service.OpenAIJSONSchemaModeExtraKey])
 	require.Equal(t, true, got.Extra["mixed_scheduling"])
 	require.Nil(t, got.Extra["unused_large_field"])
+	require.Equal(t, "account suffix", got.Credentials[service.OpenAICustomInstructionsCredentialKey])
+	require.Nil(t, got.Credentials["unrelated_credential"])
 }
 
 func TestBuildSchedulerMetadataAccount_KeepsGrokMediaEligibility(t *testing.T) {

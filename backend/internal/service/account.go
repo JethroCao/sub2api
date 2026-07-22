@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
@@ -103,6 +104,11 @@ const (
 )
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
+
+const (
+	OpenAICustomInstructionsCredentialKey = "openai_custom_instructions"
+	OpenAICustomInstructionsMaxBytes      = 16 * 1024
+)
 
 // GrokMediaEligibleExtraKey is an optional per-account override stored in
 // accounts.extra. true forces media routing on, false disables it, and an
@@ -317,6 +323,38 @@ func (a *Account) GetCredential(key string) string {
 	default:
 		return ""
 	}
+}
+
+func (a *Account) GetOpenAICustomInstructions() string {
+	if a == nil || a.Platform != PlatformOpenAI {
+		return ""
+	}
+	raw, ok := a.Credentials[OpenAICustomInstructionsCredentialKey].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(raw)
+}
+
+func ValidateOpenAICustomInstructionsCredentials(platform string, credentials map[string]any) error {
+	raw, exists := credentials[OpenAICustomInstructionsCredentialKey]
+	if !exists || raw == nil {
+		return nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_INVALID", "openai custom instructions must be a string")
+	}
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	if platform != PlatformOpenAI {
+		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_UNSUPPORTED_PLATFORM", "openai custom instructions are only supported for OpenAI accounts")
+	}
+	if len([]byte(value)) > OpenAICustomInstructionsMaxBytes {
+		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_TOO_LONG", "openai custom instructions exceed the maximum size")
+	}
+	return nil
 }
 
 // GetCredentialAsTime 解析凭证中的时间戳字段，支持多种格式
