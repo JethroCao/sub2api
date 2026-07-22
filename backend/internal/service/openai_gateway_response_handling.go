@@ -1306,7 +1306,7 @@ func extractOpenAINonStreamingFailurePayload(body []byte) ([]byte, bool) {
 		eventType := strings.TrimSpace(gjson.GetBytes(body, "type").String())
 		status := strings.TrimSpace(gjson.GetBytes(body, "status").String())
 		responseStatus := strings.TrimSpace(gjson.GetBytes(body, "response.status").String())
-		if eventType == "error" || eventType == "response.failed" || status == "failed" || responseStatus == "failed" {
+		if eventType == "error" || eventType == "response.failed" || status == "failed" || responseStatus == "failed" || hasOpenAITopLevelErrorObject(body) {
 			return append([]byte(nil), body...), true
 		}
 		return nil, false
@@ -1316,6 +1316,11 @@ func extractOpenAINonStreamingFailurePayload(body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return payload, true
+}
+
+func hasOpenAITopLevelErrorObject(payload []byte) bool {
+	errorValue := gjson.GetBytes(payload, "error")
+	return errorValue.IsObject() || strings.TrimSpace(gjson.GetBytes(payload, "error.message").String()) != ""
 }
 
 func (s *OpenAIGatewayService) handleOpenAINonStreamingFailure(

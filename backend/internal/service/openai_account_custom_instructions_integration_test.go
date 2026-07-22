@@ -528,6 +528,8 @@ func TestAccountCustomInstructionsRedactsBufferedHTTP200Failures(t *testing.T) {
 		body        string
 	}{
 		{name: "direct failed response", contentType: "application/json", body: directFailure},
+		{name: "canonical error envelope literal suffix", contentType: "application/json", body: `{"error":{"type":"server_error","message":"temporary upstream failure; echoed account instructions: ` + suffix + `"}}`},
+		{name: "canonical error envelope escaped suffix", contentType: "application/json", body: `{"error":{"type":"server_error","message":"temporary upstream failure; echoed account instructions: ` + escapedSuffix + `"}}`},
 		{name: "SSE response.failed fallback", contentType: "text/event-stream", body: responseFailedSSE},
 		{name: "SSE bare error", contentType: "text/event-stream", body: bareErrorSSE},
 	}
@@ -589,7 +591,7 @@ func TestAccountCustomInstructionsPreservesSuccessfulBufferedOutput(t *testing.T
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder, c := accountInstructionsErrorContext(t, "/v1/responses", requestBody)
-			upstreamBody := `{"id":"resp_ok","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"` + suffix + `"}]}],"usage":{"input_tokens":3,"output_tokens":1}}`
+			upstreamBody := `{"id":"resp_ok","status":"completed","error":null,"output":[{"type":"message","content":[{"type":"output_text","text":"` + suffix + `"}]}],"usage":{"input_tokens":3,"output_tokens":1}}`
 			upstream := &httpUpstreamRecorder{resp: &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -730,6 +732,56 @@ func TestChatCompletionsBufferedBareErrorRedactsAndFailsOver(t *testing.T) {
 	require.ErrorAs(t, err, &failoverErr)
 	assertAccountInstructionsNotExposed(t, c, recorder, err, suffix)
 	require.NotContains(t, string(failoverErr.ResponseBody), escapedSuffix)
+}
+
+func TestChatCompletionsBufferedCanonicalErrorEnvelopeRedactsAndFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const suffix = "ACCOUNT/INSTRUCTION-SECRET"
+	const escapedSuffix = `ACCOUNT\/INSTRUCTION-SECRET`
+	requestBody := []byte(`{"model":"gpt-5.4","messages":[{"role":"system","content":"client instructions"},{"role":"user","content":"hello"}],"stream":false}`)
+
+	sink, releaseLogs := captureStructuredLog(t)
+	defer releaseLogs()
+	for _, tt := range []struct {
+		name       string
+		bodySuffix string
+	}{
+		{name: "literal suffix", bodySuffix: suffix},
+		{name: "JSON escaped suffix", bodySuffix: escapedSuffix},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder, c := accountInstructionsErrorContext(t, "/v1/chat/completions", requestBody)
+			upstreamBody := `{"error":{"type":"server_error","message":"temporary upstream failure; echoed account instructions: ` + tt.bodySuffix + `"}}`
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+					"x-request-id": []string{"rid_account_instructions_chat_canonical_error"},
+				},
+				Body: io.NopCloser(strings.NewReader(upstreamBody)),
+			}}
+			svc := &OpenAIGatewayService{cfg: accountInstructionsErrorTestConfig(), httpUpstream: upstream}
+			account := openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil)
+
+			result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, requestBody, "", "gpt-5.4")
+
+			require.Error(t, err)
+			require.Nil(t, result)
+			require.NotContains(t, err.Error(), "missing terminal event")
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			assertAccountInstructionsNotExposed(t, c, recorder, err, suffix)
+			require.NotContains(t, err.Error(), escapedSuffix)
+			require.NotContains(t, recorder.Body.String(), escapedSuffix)
+			require.NotContains(t, string(failoverErr.ResponseBody), escapedSuffix)
+		})
+	}
+	require.False(t, sink.ContainsMessage(suffix), "structured logs must not expose account instructions")
+	for _, field := range []string{"error", "body", "detail", "message", "cause", "close_reason"} {
+		require.False(t, sink.ContainsFieldValue(field, suffix), "structured log field %q must not expose account instructions", field)
+		require.False(t, sink.ContainsFieldValue(field, escapedSuffix), "structured log field %q must not expose escaped account instructions", field)
+	}
 }
 
 func TestAccountCustomInstructionsRedactsWebSocketPrewarmAndWriteErrors(t *testing.T) {

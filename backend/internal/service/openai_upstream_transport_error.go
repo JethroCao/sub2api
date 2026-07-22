@@ -125,7 +125,7 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 	// Client disconnected: do NOT fail over to another account and do NOT evict
 	// this one — the upstream never had a chance to exhibit a fault.
 	if errors.Is(err, context.Canceled) {
-		return err
+		return presentationErr
 	}
 
 	if classifyOpenAITransportError(err).Persistent {

@@ -876,7 +876,8 @@ func isOpenAICompatDirectJSONFailure(payload []byte) bool {
 	if eventType == "response.failed" || eventType == "error" {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(payload, "status").String()), "failed") ||
+	return hasOpenAITopLevelErrorObject(payload) ||
+		strings.EqualFold(strings.TrimSpace(gjson.GetBytes(payload, "status").String()), "failed") ||
 		strings.EqualFold(strings.TrimSpace(gjson.GetBytes(payload, "response.status").String()), "failed")
 }
 

@@ -133,18 +133,41 @@ func TestHandleOpenAIUpstreamTransportError_ContextCanceled_NoFailoverNoEviction
 
 // context.Canceled wrapped inside another error must also avoid failover.
 func TestHandleOpenAIUpstreamTransportError_WrappedContextCanceled_NoFailover(t *testing.T) {
-	repo := &openaiTransportAccountRepoStub{}
-	svc := &OpenAIGatewayService{accountRepo: repo}
-	account := &Account{ID: 78, Name: "healthy2", Platform: PlatformOpenAI}
-	c, _ := newOpenAITransportErrTestContext()
+	for _, tt := range []struct {
+		name        string
+		suffix      string
+		errorSuffix string
+	}{
+		{name: "literal suffix", suffix: "private cancellation suffix", errorSuffix: "private cancellation suffix"},
+		{name: "JSON escaped suffix", suffix: "private 中\n suffix", errorSuffix: `private \u4e2d\n suffix`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &openaiTransportAccountRepoStub{}
+			svc := &OpenAIGatewayService{accountRepo: repo}
+			account := &Account{
+				ID:       78,
+				Name:     "healthy2",
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					OpenAICustomInstructionsCredentialKey: tt.suffix,
+				},
+			}
+			c, _ := newOpenAITransportErrTestContext()
 
-	wrapped := fmt.Errorf("http request failed: %w", context.Canceled)
-	err := svc.handleOpenAIUpstreamTransportError(context.Background(), c, account, wrapped, false)
+			wrapped := fmt.Errorf("http request failed with %s: %w", tt.errorSuffix, context.Canceled)
+			err := svc.handleOpenAIUpstreamTransportError(context.Background(), c, account, wrapped, false)
 
-	var fo *UpstreamFailoverError
-	require.False(t, errors.As(err, &fo), "wrapped context.Canceled must NOT return *UpstreamFailoverError")
-	require.Empty(t, repo.tempUnschedCalls)
-	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+			var fo *UpstreamFailoverError
+			require.False(t, errors.As(err, &fo), "wrapped context.Canceled must NOT return *UpstreamFailoverError")
+			require.ErrorIs(t, err, context.Canceled, "sanitized error must preserve cancellation identity")
+			require.ErrorIs(t, err, wrapped, "sanitized error must preserve the original wrapped-error identity")
+			require.NotContains(t, err.Error(), tt.suffix)
+			require.NotContains(t, err.Error(), tt.errorSuffix)
+			require.Empty(t, repo.tempUnschedCalls)
+			require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+		})
+	}
 }
 
 // When accountRepo is nil (no DB), in-memory block must still happen but the
