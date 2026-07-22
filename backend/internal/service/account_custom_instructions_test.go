@@ -16,8 +16,8 @@ func TestAccountGetOpenAICustomInstructions(t *testing.T) {
 	}{
 		{name: "nil account", want: ""},
 		{name: "non OpenAI account", account: &Account{Platform: PlatformGemini, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "instructions"}}, want: ""},
-		{name: "wrong credential type", account: &Account{Platform: PlatformOpenAI, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: true}}, want: ""},
-		{name: "blank value", account: &Account{Platform: PlatformOpenAI, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: " \n\t "}}, want: ""},
+		{name: "wrong credential type", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: true}}, want: ""},
+		{name: "blank value", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: " \n\t "}}, want: ""},
 		{name: "OAuth value trims outer whitespace", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "  first\nsecond  "}}, want: "first\nsecond"},
 		{name: "setup token value trims outer whitespace", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "  first\nsecond  "}}, want: "first\nsecond"},
 		{name: "API key value trims outer whitespace", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "\n first\nsecond \t"}}, want: "first\nsecond"},
@@ -69,4 +69,25 @@ func TestValidateOpenAICustomInstructionsCredentialsRejectsOversize(t *testing.T
 	require.Error(t, err)
 	require.Equal(t, "OPENAI_CUSTOM_INSTRUCTIONS_TOO_LONG", infraerrors.Reason(err))
 	require.NotContains(t, err.Error(), "界界界")
+}
+
+func TestValidateOpenAICustomInstructionsCredentialsRejectsOversizeBlankValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "ASCII whitespace", value: strings.Repeat(" ", OpenAICustomInstructionsMaxBytes+1)},
+		{name: "Unicode whitespace", value: strings.Repeat("\u3000", OpenAICustomInstructionsMaxBytes)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateOpenAICustomInstructionsCredentials(PlatformOpenAI, AccountTypeOAuth, map[string]any{
+				OpenAICustomInstructionsCredentialKey: tt.value,
+			})
+
+			require.Error(t, err)
+			require.Equal(t, "OPENAI_CUSTOM_INSTRUCTIONS_TOO_LONG", infraerrors.Reason(err))
+		})
+	}
 }

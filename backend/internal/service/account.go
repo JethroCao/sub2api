@@ -363,11 +363,11 @@ func ValidateOpenAICustomInstructionsCredentials(platform, accountType string, c
 	if !ok {
 		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_INVALID", "openai custom instructions must be a string")
 	}
+	if len(value) > OpenAICustomInstructionsMaxBytes {
+		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_TOO_LONG", "openai custom instructions exceed the maximum size")
+	}
 	if strings.TrimSpace(value) == "" {
 		return nil
-	}
-	if len([]byte(value)) > OpenAICustomInstructionsMaxBytes {
-		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_TOO_LONG", "openai custom instructions exceed the maximum size")
 	}
 	return nil
 }
