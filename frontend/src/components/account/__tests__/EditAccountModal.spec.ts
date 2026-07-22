@@ -588,6 +588,45 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_supported).toBe(false)
   })
 
+  it('loads and submits the OpenAI APIKey JSON Schema compatibility mode', async () => {
+    const account = buildAccount()
+    account.extra = {
+      openai_json_schema_mode: 'force_json_object'
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect((wrapper.get('[data-testid="openai-json-schema-mode-select"]').element as HTMLSelectElement).value)
+      .toBe('force_json_object')
+
+    await wrapper.get('[data-testid="openai-json-schema-mode-select"]').setValue('passthrough')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_json_schema_mode).toBe('passthrough')
+  })
+
+  it('clears the OpenAI APIKey JSON Schema compatibility override when set to auto', async () => {
+    const account = buildAccount()
+    account.extra = {
+      openai_json_schema_mode: 'force_json_object'
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="openai-json-schema-mode-select"]').setValue('auto')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_json_schema_mode')
+  })
+
   it('submits the account upstream billing auto-probe setting', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()

@@ -930,6 +930,42 @@
         </div>
       </div>
 
+      <!-- OpenAI APIKey JSON Schema compatibility -->
+      <div v-if="allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-openai-json-schema-mode-label"
+              class="input-label mb-0"
+              for="bulk-edit-openai-json-schema-mode-enabled"
+            >
+              {{ t('admin.accounts.openai.jsonSchemaMode') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.jsonSchemaModeDesc') }}
+            </p>
+          </div>
+          <input
+            v-model="enableOpenAIJSONSchemaMode"
+            id="bulk-edit-openai-json-schema-mode-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-openai-json-schema-mode"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-openai-json-schema-mode"
+          :class="!enableOpenAIJSONSchemaMode && 'pointer-events-none opacity-50'"
+        >
+          <Select
+            v-model="openAIJSONSchemaMode"
+            data-testid="bulk-edit-openai-json-schema-mode-select"
+            :options="openAIJSONSchemaModeOptions"
+            aria-labelledby="bulk-edit-openai-json-schema-mode-label"
+          />
+        </div>
+      </div>
+
       <!-- OpenAI Compact mode -->
       <div v-if="allOpenAIPassthroughCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1244,7 +1280,7 @@ import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { Proxy as ProxyConfig, AdminGroup, AccountPlatform, AccountType, OpenAICompactMode } from '@/types'
+import type { Proxy as ProxyConfig, AdminGroup, AccountPlatform, AccountType, OpenAICompactMode, OpenAIJSONSchemaMode } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -1404,6 +1440,7 @@ const enableUpstreamBillingAutoProbe = ref(false)
 const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
+const enableOpenAIJSONSchemaMode = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
 const enableRpmLimit = ref(false)
 
@@ -1435,6 +1472,7 @@ const upstreamBillingAutoProbeMode = ref<'enabled' | 'disabled'>('enabled')
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
+const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const rpmLimitEnabled = ref(false)
 const bulkBaseRpm = ref<number | null>(null)
@@ -1483,6 +1521,11 @@ const openAICompactModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.compactModeAuto') },
   { value: 'force_on', label: t('admin.accounts.openai.compactModeForceOn') },
   { value: 'force_off', label: t('admin.accounts.openai.compactModeForceOff') }
+])
+const openAIJSONSchemaModeOptions = computed(() => [
+  { value: 'auto', label: t('admin.accounts.openai.jsonSchemaModeAuto') },
+  { value: 'passthrough', label: t('admin.accounts.openai.jsonSchemaModePassthrough') },
+  { value: 'force_json_object', label: t('admin.accounts.openai.jsonSchemaModeForceJSONObject') }
 ])
 const openAIWSModeConcurrencyHintKey = computed(() =>
   resolveOpenAIWSModeConcurrencyHintKey(openaiOAuthResponsesWebSocketV2Mode.value)
@@ -1718,6 +1761,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     extra.openai_compact_mode = openAICompactMode.value
   }
 
+  if (enableOpenAIJSONSchemaMode.value) {
+    const extra = ensureExtra()
+    extra.openai_json_schema_mode = openAIJSONSchemaMode.value
+  }
+
   if (enableOpenAICompactModelMapping.value) {
     credentials.compact_model_mapping = buildOpenAICompactModelMapping() ?? {}
     credentialsChanged = true
@@ -1823,6 +1871,7 @@ const handleSubmit = async () => {
     enableCodexCLIOnly.value ||
     enableCodexCLIOnlyAppServer.value ||
     enableOpenAICompactMode.value ||
+    enableOpenAIJSONSchemaMode.value ||
     enableOpenAICompactModelMapping.value ||
     enableRpmLimit.value ||
     userMsgQueueMode.value !== null
@@ -1952,6 +2001,7 @@ watch(
       enableCodexCLIOnly.value = false
       enableCodexCLIOnlyAppServer.value = false
       enableOpenAICompactMode.value = false
+      enableOpenAIJSONSchemaMode.value = false
       enableOpenAICompactModelMapping.value = false
       enableRpmLimit.value = false
 
@@ -1979,6 +2029,7 @@ watch(
       codexCLIOnlyEnabled.value = false
       codexCLIOnlyAppServerEnabled.value = false
       openAICompactMode.value = 'auto'
+      openAIJSONSchemaMode.value = 'auto'
       openAICompactModelMappings.value = []
       rpmLimitEnabled.value = false
       bulkBaseRpm.value = null

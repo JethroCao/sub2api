@@ -1618,6 +1618,26 @@
         </div>
       </div>
 
+      <!-- OpenAI APIKey JSON Schema compatibility -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.jsonSchemaMode') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.jsonSchemaModeDesc') }}
+          </p>
+        </div>
+        <div class="w-56">
+          <Select
+            v-model="openAIJSONSchemaMode"
+            :options="openAIJSONSchemaModeOptions"
+            data-testid="openai-json-schema-mode-select"
+          />
+        </div>
+      </div>
+
       <div
         v-if="account?.platform === 'openai' && account?.type === 'apikey'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -2598,6 +2618,7 @@ import type {
   CheckMixedChannelResponse,
   OpenAICompactMode,
   OpenAIResponsesMode,
+  OpenAIJSONSchemaMode,
   OpenAIEndpointCapability
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -2834,6 +2855,7 @@ const openAILongContextBillingEnabled = ref(false)
 const editPlanType = ref<string>('')
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
+const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -2967,6 +2989,11 @@ const openAIResponsesModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.responsesModeAuto') },
   { value: 'force_responses', label: t('admin.accounts.openai.responsesModeForceResponses') },
   { value: 'force_chat_completions', label: t('admin.accounts.openai.responsesModeForceChatCompletions') }
+])
+const openAIJSONSchemaModeOptions = computed(() => [
+  { value: 'auto', label: t('admin.accounts.openai.jsonSchemaModeAuto') },
+  { value: 'passthrough', label: t('admin.accounts.openai.jsonSchemaModePassthrough') },
+  { value: 'force_json_object', label: t('admin.accounts.openai.jsonSchemaModeForceJSONObject') }
 ])
 const openAITextEndpointCapabilityLabel = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -3268,6 +3295,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   editPlanType.value = ''
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
+  openAIJSONSchemaMode.value = 'auto'
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openAICompactModelMappings.value = []
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -3289,6 +3317,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
     if (newAccount.type === 'apikey') {
       openAIResponsesMode.value = normalizeOpenAIResponsesMode(extra?.openai_responses_mode)
+      openAIJSONSchemaMode.value = (extra?.openai_json_schema_mode as OpenAIJSONSchemaMode) || 'auto'
       openAIEndpointCapabilities.value = readOpenAIEndpointCapabilities(
         newAccount.credentials as Record<string, unknown> | undefined
       )
@@ -4530,6 +4559,11 @@ const handleSubmit = async () => {
         } else {
           newExtra.openai_responses_mode = openAIResponsesMode.value
         }
+		if (openAIJSONSchemaMode.value === 'auto') {
+			delete newExtra.openai_json_schema_mode
+		} else {
+			newExtra.openai_json_schema_mode = openAIJSONSchemaMode.value
+		}
 			newExtra.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
 		}
 		if (autoPause5hThreshold.value != null && autoPause5hThreshold.value > 0) {

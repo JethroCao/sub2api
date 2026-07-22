@@ -474,6 +474,12 @@ export default {
         responsesModeForceChatCompletions: 'Force Chat Completions',
         responsesModeTextDisabledHint:
           'Not applicable when the Responses / Chat Completions endpoint is not enabled.',
+        jsonSchemaMode: 'JSON Schema compatibility',
+        jsonSchemaModeDesc:
+          'OpenAI API Key accounts only. Force JSON Object downgrades unsupported json_schema requests to json_object and keeps the original schema as an instruction; strict schema enforcement is no longer guaranteed.',
+        jsonSchemaModeAuto: 'Auto',
+        jsonSchemaModePassthrough: 'Passthrough',
+        jsonSchemaModeForceJSONObject: 'Force JSON Object',
         endpointCapabilities: 'Endpoint capabilities',
         endpointCapabilitiesDesc:
           'Used by account routing. The text endpoint follows the Responses API support setting above and is shown as Responses, Chat Completions, or auto mode; Embeddings independently controls /v1/embeddings.',

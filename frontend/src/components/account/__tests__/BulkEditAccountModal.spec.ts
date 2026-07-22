@@ -385,6 +385,25 @@ describe('BulkEditAccountModal', () => {
     expect(wrapper.find('#bulk-edit-upstream-billing-auto-probe-enabled').exists()).toBe(false)
   })
 
+  it('OpenAI API Key 批量编辑可设置 JSON Schema 兼容模式', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey']
+    })
+
+    await wrapper.get('#bulk-edit-openai-json-schema-mode-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-openai-json-schema-mode-select"]').setValue('force_json_object')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: {
+        openai_json_schema_mode: 'force_json_object'
+      }
+    })
+  })
+
   it('筛选结果批量编辑可统一开启上游倍率自动探测', async () => {
     const wrapper = mountModal({
       accountIds: [],

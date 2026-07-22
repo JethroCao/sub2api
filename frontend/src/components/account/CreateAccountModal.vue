@@ -3047,6 +3047,26 @@
         </div>
       </div>
 
+      <!-- OpenAI APIKey JSON Schema compatibility -->
+      <div
+        v-if="form.platform === 'openai' && accountCategory === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.jsonSchemaMode') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.jsonSchemaModeDesc') }}
+          </p>
+        </div>
+        <div class="w-56">
+          <Select
+            v-model="openAIJSONSchemaMode"
+            :options="openAIJSONSchemaModeOptions"
+            data-testid="openai-json-schema-mode-select"
+          />
+        </div>
+      </div>
+
       <div>
         <div class="flex items-center justify-between">
           <div>
@@ -3530,6 +3550,7 @@ import type {
   CodexSessionImportMessage,
   OpenAICompactMode,
   OpenAIResponsesMode,
+  OpenAIJSONSchemaMode,
   OpenAIEndpointCapability
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -3782,6 +3803,7 @@ const openAILongContextBillingEnabled = ref(false)
 const openAILongContextBillingTouched = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
+const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -3853,6 +3875,11 @@ const openAIResponsesModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.responsesModeAuto') },
   { value: 'force_responses', label: t('admin.accounts.openai.responsesModeForceResponses') },
   { value: 'force_chat_completions', label: t('admin.accounts.openai.responsesModeForceChatCompletions') }
+])
+const openAIJSONSchemaModeOptions = computed(() => [
+  { value: 'auto', label: t('admin.accounts.openai.jsonSchemaModeAuto') },
+  { value: 'passthrough', label: t('admin.accounts.openai.jsonSchemaModePassthrough') },
+  { value: 'force_json_object', label: t('admin.accounts.openai.jsonSchemaModeForceJSONObject') }
 ])
 const openAITextEndpointCapabilityLabel = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -4660,6 +4687,7 @@ const resetForm = () => {
   openAILongContextBillingTouched.value = false
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
+  openAIJSONSchemaMode.value = 'auto'
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -4771,6 +4799,12 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     extra.openai_responses_mode = openAIResponsesMode.value
   } else {
     delete extra.openai_responses_mode
+  }
+
+  if (accountCategory.value === 'apikey' && openAIJSONSchemaMode.value !== 'auto') {
+    extra.openai_json_schema_mode = openAIJSONSchemaMode.value
+  } else {
+    delete extra.openai_json_schema_mode
   }
 
   return Object.keys(extra).length > 0 ? extra : undefined

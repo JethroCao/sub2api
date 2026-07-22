@@ -537,6 +537,12 @@ export default {
         responsesModeForceResponses: '强制 Responses',
         responsesModeForceChatCompletions: '强制 Chat Completions',
         responsesModeTextDisabledHint: '未启用 Responses / Chat Completions 端点时，此设置不适用。',
+        jsonSchemaMode: 'JSON Schema 兼容模式',
+        jsonSchemaModeDesc:
+          '仅对 OpenAI API Key 生效。强制 JSON Object 会把上游不支持的 json_schema 降级为 json_object，并将原 Schema 作为提示保留；不再保证严格 Schema 约束。',
+        jsonSchemaModeAuto: '自动',
+        jsonSchemaModePassthrough: '原样透传',
+        jsonSchemaModeForceJSONObject: '强制 JSON Object',
         endpointCapabilities: '端点能力',
         endpointCapabilitiesDesc:
           '用于调度筛选。文本端点会跟随上方 Responses API 支持显示为 Responses、Chat Completions 或自动模式；Embeddings 独立控制 /v1/embeddings。',
