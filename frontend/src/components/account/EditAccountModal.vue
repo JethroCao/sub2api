@@ -1452,7 +1452,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && !isSparkShadow && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="space-y-2 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label" for="edit-openai-custom-instructions">
@@ -2888,7 +2888,9 @@ const applyOpenAICustomInstructions = (credentials: Record<string, unknown>) => 
   if (value) {
     credentials.openai_custom_instructions = value
   } else {
-    delete credentials.openai_custom_instructions
+    // Explicit tombstone: an empty credentials object means "no credential update"
+    // to the backend, so omission cannot clear the last visible credential.
+    credentials.openai_custom_instructions = null
   }
 }
 const validateOpenAICustomInstructions = (): boolean => {
@@ -3355,7 +3357,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openAICustomInstructions.value =
-      typeof credentials?.openai_custom_instructions === 'string'
+      newAccount.parent_account_id == null && typeof credentials?.openai_custom_instructions === 'string'
         ? credentials.openai_custom_instructions
         : ''
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
@@ -4100,6 +4102,7 @@ const handleSubmit = async () => {
 
   if (
     props.account.platform === 'openai' &&
+    !isSparkShadow.value &&
     (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'apikey') &&
     !validateOpenAICustomInstructions()
   ) {
@@ -4377,6 +4380,7 @@ const handleSubmit = async () => {
 
     if (
       props.account.platform === 'openai' &&
+      !isSparkShadow.value &&
       (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'apikey')
     ) {
       const currentCredentials =

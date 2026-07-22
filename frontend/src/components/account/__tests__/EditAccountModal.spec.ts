@@ -343,12 +343,33 @@ describe('EditAccountModal', () => {
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty(
-      'openai_custom_instructions'
-    )
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_custom_instructions).toBeNull()
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.base_url).toBe(
       'https://api.openai.com'
     )
+  })
+
+  it('sends an explicit deletion when clearing the only visible OAuth credential', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = {
+      openai_custom_instructions: 'Existing instructions'
+    }
+    account.credentials_status = {
+      has_access_token: true,
+      has_refresh_token: true
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-openai-custom-instructions"]').setValue('   ')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toEqual({
+      openai_custom_instructions: null
+    })
   })
 
   it.each(['oauth', 'setup-token', 'apikey'])('shows the field for OpenAI %s accounts', (type) => {
@@ -359,6 +380,27 @@ describe('EditAccountModal', () => {
 
     expect(wrapper.find('[data-testid="edit-openai-custom-instructions"]').exists()).toBe(true)
   })
+
+  it.each(['oauth', 'setup-token', 'apikey'])(
+    'serializes trimmed custom instructions for OpenAI %s accounts',
+    async (type) => {
+      const account = buildAccount()
+      account.type = type
+      updateAccountMock.mockReset().mockResolvedValue(account)
+      checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+      const wrapper = mountModal(account)
+      await wrapper
+        .get('[data-testid="edit-openai-custom-instructions"]')
+        .setValue('  account suffix  ')
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+      expect(updateAccountMock).toHaveBeenCalledTimes(1)
+      expect(
+        updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_custom_instructions
+      ).toBe('account suffix')
+    }
+  )
 
   it.each([
     ['anthropic', 'apikey'],
@@ -619,12 +661,15 @@ describe('EditAccountModal', () => {
   it('only submits model mapping credentials when saving an OpenAI spark shadow account', async () => {
     authIsSimpleMode.value = false
     const account = buildOpenAISparkShadowAccount()
+    account.credentials.openai_custom_instructions = 'must not be editable on a shadow'
     updateAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="edit-openai-custom-instructions"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="set-shadow-group"]').trigger('click')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')

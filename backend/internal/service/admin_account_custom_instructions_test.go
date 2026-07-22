@@ -136,3 +136,29 @@ func TestUpdateAccountValidatesOpenAICustomInstructionsAgainstFinalType(t *testi
 		})
 	}
 }
+
+func TestUpdateAccountClearsOpenAICustomInstructionsWithoutDroppingRedactedSensitiveCredentials(t *testing.T) {
+	accountID := int64(2)
+	repo := &upstreamBillingProbeAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+		accountID: {
+			ID:       accountID,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Status:   StatusActive,
+			Credentials: map[string]any{
+				"access_token":                        "sensitive-access-token",
+				"refresh_token":                       "sensitive-refresh-token",
+				OpenAICustomInstructionsCredentialKey: "account suffix",
+			},
+		},
+	}}}
+
+	updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: nil},
+	})
+
+	require.NoError(t, err)
+	require.NotContains(t, updated.Credentials, OpenAICustomInstructionsCredentialKey)
+	require.Equal(t, "sensitive-access-token", updated.Credentials["access_token"])
+	require.Equal(t, "sensitive-refresh-token", updated.Credentials["refresh_token"])
+}
