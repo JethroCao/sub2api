@@ -632,6 +632,22 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			firstClientMessage = capped
 		}
 	}
+	withAccountInstructions, instructionsAppended, instructionsErr := appendOpenAIAccountInstructions(account, firstClientMessage)
+	if instructionsErr != nil {
+		return NewOpenAIWSClientCloseError(
+			coderws.StatusPolicyViolation,
+			"invalid websocket instructions",
+			instructionsErr,
+		)
+	}
+	if instructionsAppended {
+		firstClientMessage = withAccountInstructions
+		logOpenAIWSModeInfo(
+			"ingress_ws_passthrough_account_instructions_appended account_id=%d bytes=%d",
+			account.ID,
+			len(account.GetOpenAICustomInstructions()),
+		)
+	}
 	requestModel := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String())
 	requestPreviousResponseID := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "previous_response_id").String())
 	logOpenAIWSV2Passthrough(
@@ -876,6 +892,22 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					if capped, changed := ApplyOpenAIReasoningEffortPolicy(payload, hooks.MaxReasoningEffort, hooks.ReasoningEffortMappings); changed {
 						payload = capped
 					}
+				}
+				withAccountInstructions, instructionsAppended, instructionsErr := appendOpenAIAccountInstructions(account, payload)
+				if instructionsErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(
+						coderws.StatusPolicyViolation,
+						"invalid websocket instructions",
+						instructionsErr,
+					)
+				}
+				if instructionsAppended {
+					payload = withAccountInstructions
+					logOpenAIWSModeInfo(
+						"ingress_ws_passthrough_account_instructions_appended account_id=%d bytes=%d",
+						account.ID,
+						len(account.GetOpenAICustomInstructions()),
+					)
 				}
 			}
 			if isResponseCreate && hooks != nil && hooks.BeforeRequest != nil {
