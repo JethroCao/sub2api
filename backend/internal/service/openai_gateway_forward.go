@@ -142,6 +142,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if err != nil {
 			return nil, err
 		}
+		updatedBody, appended, appendErr := appendOpenAIAccountInstructions(account, originalBody)
+		if appendErr != nil {
+			return nil, appendErr
+		}
+		if appended {
+			originalBody = updatedBody
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Appended account custom instructions: account_id=%d bytes=%d", account.ID, len(account.GetOpenAICustomInstructions()))
+		}
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel)
 		// 国产模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
 		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
@@ -499,6 +507,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	body, err = normalizeOpenAIJSONSchemaForForward(account, body, openAIJSONSchemaProtocolResponses, upstreamModel)
 	if err != nil {
 		return nil, err
+	}
+	updatedBody, appended, appendErr := appendOpenAIAccountInstructions(account, body)
+	if appendErr != nil {
+		return nil, appendErr
+	}
+	if appended {
+		body = updatedBody
+		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Appended account custom instructions: account_id=%d bytes=%d", account.ID, len(account.GetOpenAICustomInstructions()))
 	}
 	requestView = newOpenAIRequestView(body)
 	reqBody = nil

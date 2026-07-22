@@ -238,6 +238,14 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if err != nil {
 		return nil, err
 	}
+	updatedBody, appended, appendErr := appendOpenAIAccountInstructions(account, responsesBody)
+	if appendErr != nil {
+		return nil, appendErr
+	}
+	if appended {
+		responsesBody = updatedBody
+		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Appended account custom instructions: account_id=%d bytes=%d", account.ID, len(account.GetOpenAICustomInstructions()))
+	}
 
 	// 4b. Apply OpenAI fast policy (may filter service_tier or block the request).
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, responsesBody)
