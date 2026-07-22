@@ -1,7 +1,9 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -130,6 +132,38 @@ func TestRedactOpenAIAccountInstructionsFromEscapedJSONBody(t *testing.T) {
 	require.NotContains(t, string(redacted), `line\/\u4e2d\nquote\"`)
 	require.NotContains(t, gjson.GetBytes(redacted, "error.message").String(), account.GetOpenAICustomInstructions())
 	require.Contains(t, gjson.GetBytes(redacted, "error.message").String(), openAIAccountInstructionsRedaction)
+}
+
+func TestRedactOpenAIAccountInstructionsFromJSONWithTrailingText(t *testing.T) {
+	account := customInstructionsAccount("account suffix")
+	body := []byte(`{"error":"safe"} echoed account suffix`)
+
+	redacted := redactOpenAIAccountInstructionsFromUpstreamBody(account, body)
+
+	require.Equal(t, `{"error":"safe"} echoed `+openAIAccountInstructionsRedaction, string(redacted))
+	require.NotContains(t, string(redacted), account.GetOpenAICustomInstructions())
+}
+
+func TestRedactOpenAIAccountInstructionsFromEveryDuplicateJSONKeyAndValue(t *testing.T) {
+	account := customInstructionsAccount("account 中 suffix")
+	body := []byte(`{"message":"account \u4e2d suffix","message":"safe","account \u4e2d suffix":"first","account 中 suffix":"second"}`)
+
+	redacted := redactOpenAIAccountInstructionsFromUpstreamBody(account, body)
+
+	require.True(t, json.Valid(redacted))
+	require.JSONEq(t, `{"message":"[redacted account instructions]","message":"safe","[redacted account instructions]":"first","[redacted account instructions]":"second"}`, string(redacted))
+	require.NotContains(t, string(redacted), account.GetOpenAICustomInstructions())
+	require.NotContains(t, string(redacted), `account \u4e2d suffix`)
+	require.Equal(t, 3, strings.Count(string(redacted), openAIAccountInstructionsRedaction))
+}
+
+func TestRedactOpenAIAccountInstructionsLeavesNonmatchingDuplicateJSONUnchanged(t *testing.T) {
+	account := customInstructionsAccount("account suffix")
+	body := []byte(" {\n  \"message\" : \"safe\", \"message\" : \"still safe\", \"escaped\" : \"\\u4e2d\"\n} \n")
+
+	redacted := redactOpenAIAccountInstructionsFromUpstreamBody(account, body)
+
+	require.Equal(t, body, redacted)
 }
 
 func TestRedactOpenAIAccountInstructionsFromEscapedNonJSONError(t *testing.T) {

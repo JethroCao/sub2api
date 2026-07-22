@@ -54,17 +54,16 @@ func redactOpenAIAccountInstructionsFromUpstreamBody(account *Account, body []by
 		return body
 	}
 
-	// Decode valid JSON so equivalent escape forms (for example / vs \/ and a
-	// literal Unicode rune vs \uXXXX) are redacted by their string value.
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	var payload any
-	if err := decoder.Decode(&payload); err == nil {
-		redactedPayload, changed := redactOpenAIAccountInstructionsJSONValue(payload, suffix)
-		if !changed {
-			return body
-		}
-		if redacted, marshalErr := json.Marshal(redactedPayload); marshalErr == nil {
+	// Validate the complete document before taking the JSON path. Decode every
+	// raw JSON string independently instead of unmarshalling into maps: maps
+	// collapse duplicate keys and could leave an earlier secret occurrence in
+	// the original body. This also preserves an entirely nonmatching document
+	// byte-for-byte, including duplicate keys and whitespace.
+	if json.Valid(body) {
+		if redacted, changed, err := redactOpenAIAccountInstructionsJSONStrings(body, suffix); err == nil {
+			if !changed {
+				return body
+			}
 			return redacted
 		}
 	}
@@ -76,6 +75,59 @@ func redactOpenAIAccountInstructionsFromUpstreamBody(account *Account, body []by
 	// with JSON escapes, mixed literal runes, or surrogate pairs.
 	redacted := strings.ReplaceAll(string(body), suffix, openAIAccountInstructionsRedaction)
 	return []byte(redactOpenAIAccountInstructionsJSONStyleText(redacted, suffix))
+}
+
+func redactOpenAIAccountInstructionsJSONStrings(body []byte, suffix string) ([]byte, bool, error) {
+	var redacted bytes.Buffer
+	lastWritten := 0
+	changed := false
+
+	for offset := 0; offset < len(body); {
+		if body[offset] != '"' {
+			offset++
+			continue
+		}
+
+		start := offset
+		offset++
+		for offset < len(body) {
+			switch body[offset] {
+			case '\\':
+				offset += 2
+			case '"':
+				offset++
+				goto stringComplete
+			default:
+				offset++
+			}
+		}
+		return nil, false, errors.New("unterminated JSON string")
+
+	stringComplete:
+		var decoded string
+		if err := json.Unmarshal(body[start:offset], &decoded); err != nil {
+			return nil, false, err
+		}
+		next := strings.ReplaceAll(decoded, suffix, openAIAccountInstructionsRedaction)
+		if next == decoded {
+			continue
+		}
+
+		encoded, err := json.Marshal(next)
+		if err != nil {
+			return nil, false, err
+		}
+		redacted.Write(body[lastWritten:start])
+		redacted.Write(encoded)
+		lastWritten = offset
+		changed = true
+	}
+
+	if !changed {
+		return body, false, nil
+	}
+	redacted.Write(body[lastWritten:])
+	return redacted.Bytes(), true, nil
 }
 
 func redactOpenAIAccountInstructionsJSONStyleText(text, suffix string) string {
@@ -191,39 +243,4 @@ func redactOpenAIAccountInstructionsFromUpstreamError(account *Account, err erro
 		return err
 	}
 	return errors.New(redacted)
-}
-
-func redactOpenAIAccountInstructionsJSONValue(value any, suffix string) (any, bool) {
-	switch typed := value.(type) {
-	case string:
-		redacted := strings.ReplaceAll(typed, suffix, openAIAccountInstructionsRedaction)
-		return redacted, redacted != typed
-	case []any:
-		changed := false
-		for i, item := range typed {
-			redacted, itemChanged := redactOpenAIAccountInstructionsJSONValue(item, suffix)
-			if itemChanged {
-				typed[i] = redacted
-				changed = true
-			}
-		}
-		return typed, changed
-	case map[string]any:
-		changed := false
-		redactedMap := make(map[string]any, len(typed))
-		for key, item := range typed {
-			redactedKey := strings.ReplaceAll(key, suffix, openAIAccountInstructionsRedaction)
-			redactedItem, itemChanged := redactOpenAIAccountInstructionsJSONValue(item, suffix)
-			redactedMap[redactedKey] = redactedItem
-			if redactedKey != key || itemChanged {
-				changed = true
-			}
-		}
-		if changed {
-			return redactedMap, true
-		}
-		return typed, false
-	default:
-		return value, false
-	}
 }
