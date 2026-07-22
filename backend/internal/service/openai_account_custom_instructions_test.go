@@ -143,6 +143,36 @@ func TestRedactOpenAIAccountInstructionsFromEscapedNonJSONError(t *testing.T) {
 	require.Contains(t, redacted.Error(), openAIAccountInstructionsRedaction)
 }
 
+func TestRedactOpenAIAccountInstructionsFromLiteralBackslashSequencesInNonJSONError(t *testing.T) {
+	for _, suffix := range []string{
+		`Use \n literally`,
+		`Use \t literally`,
+		`Use \" literally`,
+		`Use \/ literally`,
+		`Use \\ literally`,
+		`Use \u4E2D literally`,
+	} {
+		t.Run(suffix, func(t *testing.T) {
+			account := customInstructionsAccount(suffix)
+			err := errors.New(`websocket close: reason="prefix ` + suffix + ` suffix"`)
+
+			redacted := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
+
+			require.NotContains(t, redacted.Error(), suffix)
+			require.Contains(t, redacted.Error(), openAIAccountInstructionsRedaction)
+		})
+	}
+}
+
+func TestRedactOpenAIAccountInstructionsDoesNotTreatJSONEscapeAsLiteralSuffix(t *testing.T) {
+	account := customInstructionsAccount(`\n`)
+	body := []byte(`{"error":{"message":"unrelated line\nbreak"}}`)
+
+	redacted := redactOpenAIAccountInstructionsFromUpstreamBody(account, body)
+
+	require.Equal(t, body, redacted)
+}
+
 func TestRedactOpenAIAccountInstructionsFromMixedJSONEscapesInNonJSONError(t *testing.T) {
 	account := customInstructionsAccount("中<&😀")
 	tests := []struct {

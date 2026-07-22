@@ -60,18 +60,22 @@ func redactOpenAIAccountInstructionsFromUpstreamBody(account *Account, body []by
 	decoder.UseNumber()
 	var payload any
 	if err := decoder.Decode(&payload); err == nil {
-		if redactedPayload, changed := redactOpenAIAccountInstructionsJSONValue(payload, suffix); changed {
-			if redacted, marshalErr := json.Marshal(redactedPayload); marshalErr == nil {
-				return redacted
-			}
+		redactedPayload, changed := redactOpenAIAccountInstructionsJSONValue(payload, suffix)
+		if !changed {
+			return body
+		}
+		if redacted, marshalErr := json.Marshal(redactedPayload); marshalErr == nil {
+			return redacted
 		}
 	}
 
-	// Preserve non-JSON error bodies while matching the suffix by its semantic
-	// string value. WebSocket close errors commonly wrap an escaped JSON reason
-	// inside otherwise non-JSON text, and one value may mix literal runes with
-	// \uXXXX forms, uppercase hex, escaped punctuation, and surrogate pairs.
-	return []byte(redactOpenAIAccountInstructionsJSONStyleText(string(body), suffix))
+	// Preserve non-JSON error bodies. Replace the exact configured bytes before
+	// interpreting JSON-style escapes: a configured literal `\n` must not be
+	// mistaken for a newline while searching for the configured suffix. Then
+	// retain semantic matching for upstreams that encoded the same string value
+	// with JSON escapes, mixed literal runes, or surrogate pairs.
+	redacted := strings.ReplaceAll(string(body), suffix, openAIAccountInstructionsRedaction)
+	return []byte(redactOpenAIAccountInstructionsJSONStyleText(redacted, suffix))
 }
 
 func redactOpenAIAccountInstructionsJSONStyleText(text, suffix string) string {

@@ -728,6 +728,76 @@ func TestAccountCustomInstructionsRedactsWebSocketPrewarmAndWriteErrors(t *testi
 	}
 }
 
+func TestAccountCustomInstructionsRedactsLiteralBackslashesFromWebSocketCloseAndWriteErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const suffix = `Use \n, \t, \", \/, \\, and \u4E2D literally`
+	account := openAIAccountForCustomInstructionsIntegration(
+		AccountTypeAPIKey,
+		suffix,
+		map[string]any{"responses_websockets_v2_enabled": true},
+	)
+	payload := map[string]any{
+		"type":         "response.create",
+		"model":        "gpt-5.4",
+		"instructions": "client instructions\n\n" + suffix,
+	}
+	sink, releaseLogs := captureStructuredLog(t)
+	defer releaseLogs()
+
+	for _, tt := range []struct {
+		name     string
+		prewarm  bool
+		writeErr error
+		readErr  error
+	}{
+		{
+			name:    "websocket close",
+			prewarm: true,
+			readErr: coderws.CloseError{Code: coderws.StatusPolicyViolation, Reason: "echoed account instructions: " + suffix},
+		},
+		{
+			name:     "websocket write",
+			writeErr: errors.New("echoed account instructions: " + suffix),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := accountInstructionsWebSocketErrorTestConfig(tt.prewarm)
+			svc := &OpenAIGatewayService{cfg: cfg, toolCorrector: NewCodexToolCorrector()}
+			conn := &accountInstructionsWSStageErrorConn{writeErr: tt.writeErr, readErr: tt.readErr}
+			lease := &openAIWSConnLease{
+				accountID: account.ID,
+				conn:      newOpenAIWSConn("account_instructions_literal_backslash_error", account.ID, conn, nil),
+			}
+
+			var err error
+			if tt.prewarm {
+				err = svc.performOpenAIWSGeneratePrewarm(
+					context.Background(),
+					lease,
+					OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+					payload,
+					"",
+					payload,
+					account,
+					nil,
+					0,
+				)
+			} else {
+				err = accountInstructionsForwardWSMainWriteForTest(t, svc, cfg, account, conn, payload)
+			}
+
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), suffix)
+			require.Contains(t, err.Error(), openAIAccountInstructionsRedaction)
+		})
+	}
+	require.False(t, sink.ContainsMessage(suffix), "structured websocket logs must not expose literal account instructions")
+	for _, field := range []string{"error", "body", "detail", "message", "cause", "close_reason"} {
+		require.False(t, sink.ContainsFieldValue(field, suffix), "structured websocket log field %q must not expose literal account instructions", field)
+	}
+}
+
 func TestForwardAccountCustomInstructionsRedactsUpstreamWebSocketReadCloseError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
