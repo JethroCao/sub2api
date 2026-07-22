@@ -508,7 +508,7 @@ export default {
         customInstructionsDesc:
           '每次使用此账号请求时，都会在客户端原有 instructions 末尾追加这里的内容。适用于 Responses、Chat Completions 转换和 Compact 请求。',
         customInstructionsNonSecretWarning:
-          '请勿填写密码、令牌或其他敏感信息。此内容会随请求发送给上游模型。',
+          '请勿填写密码、令牌或其他敏感信息。此内容会随请求发送给上游模型，并可能出现在上游返回的 Responses 数据中。',
         customInstructionsMaxBytes: '账号附加指令不能超过 16 KiB（按 UTF-8 字节计算）。',
         oauthPassthrough: '自动透传（仅替换认证）',
         oauthPassthroughDesc:

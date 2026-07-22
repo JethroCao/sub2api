@@ -441,7 +441,7 @@ export default {
         customInstructionsDesc:
           'Appends this text after the client instructions on every request using this account. Applies to Responses, converted Chat Completions, and Compact requests.',
         customInstructionsNonSecretWarning:
-          'Do not enter passwords, tokens, or other secrets. This text is sent to the upstream model.',
+          'Do not enter passwords, tokens, or other secrets. This text is sent to the upstream model and may appear in Responses data returned by the upstream.',
         customInstructionsMaxBytes:
           'Account instructions must not exceed 16 KiB when encoded as UTF-8.',
         oauthPassthrough: 'Auto passthrough (auth only)',
