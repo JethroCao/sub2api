@@ -93,6 +93,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(upstreamBody, upstreamModel); normalized {
 		upstreamBody = normalizedBody
 	}
+	upstreamBody, err := normalizeOpenAIJSONSchemaForForward(account, upstreamBody, openAIJSONSchemaProtocolChat, upstreamModel)
+	if err != nil {
+		return nil, err
+	}
 
 	// 4. Apply OpenAI fast policy on the CC body
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, upstreamBody)

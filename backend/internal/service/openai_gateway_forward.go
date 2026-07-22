@@ -138,6 +138,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
 		mappedModel := account.GetMappedModel(reqModel)
+		originalBody, err = normalizeOpenAIJSONSchemaForForward(account, originalBody, openAIJSONSchemaProtocolResponses, mappedModel)
+		if err != nil {
+			return nil, err
+		}
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel)
 		// 国产模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
 		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
@@ -492,6 +496,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			requestView = newOpenAIRequestView(body)
 		}
 	}
+	body, err = normalizeOpenAIJSONSchemaForForward(account, body, openAIJSONSchemaProtocolResponses, upstreamModel)
+	if err != nil {
+		return nil, err
+	}
+	requestView = newOpenAIRequestView(body)
+	reqBody = nil
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 type openAIJSONSchemaProtocol string
@@ -18,6 +20,26 @@ const (
 )
 
 const openAIJSONSchemaCompatibilityInstruction = "The upstream model does not support strict JSON Schema output. Return only one JSON object that matches the following schema exactly. Use the exact property names and value types, include every required property, and do not add properties that the schema forbids.\nJSON Schema:\n"
+
+func normalizeOpenAIJSONSchemaForForward(
+	account *Account,
+	body []byte,
+	protocol openAIJSONSchemaProtocol,
+	upstreamModel string,
+) ([]byte, error) {
+	normalized, changed, err := normalizeOpenAIJSONSchemaForAccount(account, body, protocol)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		logger.L().Debug("openai json_schema downgraded",
+			zap.Int64("account_id", account.ID),
+			zap.String("upstream_model", upstreamModel),
+			zap.String("protocol", string(protocol)),
+		)
+	}
+	return normalized, nil
+}
 
 func normalizeOpenAIJSONSchemaForAccount(
 	account *Account,
@@ -82,6 +104,10 @@ func downgradeOpenAIChatJSONSchema(body []byte, formatPath, hint string) ([]byte
 	if !messages.IsArray() {
 		return body, false, fmt.Errorf("normalize OpenAI JSON schema compatibility: chat messages must be an array")
 	}
+	var existingMessages []json.RawMessage
+	if err := json.Unmarshal([]byte(messages.Raw), &existingMessages); err != nil {
+		return body, false, fmt.Errorf("decode OpenAI chat messages for JSON schema compatibility: %w", err)
+	}
 
 	messageJSON, err := json.Marshal(map[string]string{
 		"role":    "system",
@@ -90,11 +116,18 @@ func downgradeOpenAIChatJSONSchema(body []byte, formatPath, hint string) ([]byte
 	if err != nil {
 		return body, false, fmt.Errorf("marshal OpenAI JSON schema compatibility message: %w", err)
 	}
+	normalizedMessages := make([]json.RawMessage, 0, len(existingMessages)+1)
+	normalizedMessages = append(normalizedMessages, json.RawMessage(messageJSON))
+	normalizedMessages = append(normalizedMessages, existingMessages...)
+	messagesJSON, err := json.Marshal(normalizedMessages)
+	if err != nil {
+		return body, false, fmt.Errorf("marshal OpenAI chat messages for JSON schema compatibility: %w", err)
+	}
 	normalized, err := sjson.SetRawBytes(body, formatPath, []byte(`{"type":"json_object"}`))
 	if err != nil {
 		return body, false, fmt.Errorf("downgrade OpenAI chat response format: %w", err)
 	}
-	normalized, err = sjson.SetRawBytes(normalized, "messages.-1", messageJSON)
+	normalized, err = sjson.SetRawBytes(normalized, "messages", messagesJSON)
 	if err != nil {
 		return body, false, fmt.Errorf("append OpenAI JSON schema compatibility message: %w", err)
 	}
