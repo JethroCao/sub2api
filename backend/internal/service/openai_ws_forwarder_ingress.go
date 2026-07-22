@@ -328,6 +328,23 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			imageInputSize = imageCfg.InputSize
 		}
 
+		withAccountInstructions, instructionsAppended, instructionsErr := appendOpenAIAccountInstructions(account, normalized)
+		if instructionsErr != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"invalid websocket instructions",
+				instructionsErr,
+			)
+		}
+		if instructionsAppended {
+			normalized = withAccountInstructions
+			logOpenAIWSModeInfo(
+				"ingress_ws_account_instructions_appended account_id=%d bytes=%d",
+				account.ID,
+				len(account.GetOpenAICustomInstructions()),
+			)
+		}
+
 		// Apply OpenAI Fast Policy on the response.create frame using the same
 		// evaluator/normalize/scope rules as the HTTP entrypoints. This is the
 		// single integration point for all WS ingress turns (first + follow-up
