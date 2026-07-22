@@ -32,6 +32,36 @@ func TestAppendOpenAIAccountInstructionsPreservesClientInstructions(t *testing.T
 	require.Equal(t, "client instructions\n\naccount suffix", gjson.GetBytes(got, "instructions").String())
 }
 
+func TestAppendOpenAIAccountInstructionsPreservesClientInstructionBoundaryWhitespace(t *testing.T) {
+	account := customInstructionsAccount("account suffix")
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "ASCII whitespace",
+			body: `{"instructions":"  client instructions  "}`,
+			want: "  client instructions  \n\naccount suffix",
+		},
+		{
+			name: "Unicode whitespace",
+			body: `{"instructions":"\u3000客户说明\u00a0"}`,
+			want: "\u3000客户说明\u00a0\n\naccount suffix",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed, err := appendOpenAIAccountInstructions(account, []byte(tt.body))
+
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.Equal(t, tt.want, gjson.GetBytes(got, "instructions").String())
+		})
+	}
+}
+
 func TestAppendOpenAIAccountInstructionsPreservesUnicode(t *testing.T) {
 	got, changed, err := appendOpenAIAccountInstructions(customInstructionsAccount("账户说明：保持中文"), []byte(`{"instructions":"客户说明：保留 Unicode"}`))
 

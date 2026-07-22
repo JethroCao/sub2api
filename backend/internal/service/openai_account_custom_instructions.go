@@ -19,14 +19,15 @@ func appendOpenAIAccountInstructions(account *Account, body []byte) ([]byte, boo
 		return body, false, errors.New("OpenAI instructions must be a string")
 	}
 
-	existing := strings.TrimSpace(current.String())
-	if existing == suffix || strings.HasSuffix(existing, "\n\n"+suffix) {
+	existingRaw := current.String()
+	existingTrimmed := strings.TrimSpace(existingRaw)
+	if existingTrimmed == suffix || strings.HasSuffix(existingTrimmed, "\n\n"+suffix) {
 		return body, false, nil
 	}
 
 	combined := suffix
-	if existing != "" {
-		combined = existing + "\n\n" + suffix
+	if existingTrimmed != "" {
+		combined = existingRaw + "\n\n" + suffix
 	}
 	next, err := sjson.SetBytes(body, "instructions", combined)
 	return next, err == nil, err
