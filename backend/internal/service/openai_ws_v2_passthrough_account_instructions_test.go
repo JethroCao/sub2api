@@ -319,6 +319,75 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsTransportErrors(t *t
 	require.NotContains(t, logs.String(), `transport private \u4e2d\n suffix`)
 }
 
+func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsNonResponseWriteErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+	account := passthroughLifecycleAccount()
+	const suffix = "write private 中\n suffix"
+	const escapedSuffix = `write private \u4e2d\n suffix`
+	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
+	upstream := newStagedPassthroughConn()
+	server, serverErr := startPassthroughLifecycleServer(
+		t,
+		controlCtx,
+		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		account,
+	)
+	defer server.Close()
+
+	var logs bytes.Buffer
+	previousLogWriter := log.Writer()
+	previousLogFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousLogWriter)
+		log.SetFlags(previousLogFlags)
+	})
+
+	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
+	defer func() { _ = clientConn.CloseNow() }()
+	_ = requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+
+	// The relay starts reading follow-up client frames after the first
+	// downstream frame. A successful non-response.create frame must remain an
+	// exact passthrough before the next write exercises the failure path.
+	upstream.Send(`{"type":"response.created","response":{"id":"resp_write_error","model":"gpt-5.1"}}`)
+	_, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	const successfulFrame = `{"type":"session.update","session":{"model":"gpt-5.1"}}`
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	require.NoError(t, clientConn.Write(writeCtx, coderws.MessageText, []byte(successfulFrame)))
+	cancelWrite()
+	require.Equal(t, successfulFrame, string(requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)))
+
+	upstream.SendWriteError(errors.New("upstream write failed: " + suffix + "; escaped: " + escapedSuffix))
+	writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
+	require.NoError(t, clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"conversation.item.create","item":{"type":"message"}}`)))
+	cancelWrite()
+
+	_, clientReadErr := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.Error(t, clientReadErr)
+	require.NotContains(t, clientReadErr.Error(), suffix)
+	require.NotContains(t, clientReadErr.Error(), escapedSuffix)
+
+	select {
+	case err := <-serverErr:
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), suffix)
+		require.NotContains(t, err.Error(), escapedSuffix)
+		require.Contains(t, err.Error(), openAIAccountInstructionsRedaction)
+	case <-time.After(3 * time.Second):
+		t.Fatal("passthrough non-response write-error server did not exit")
+	}
+	require.Contains(t, logs.String(), "relay_trace")
+	require.Contains(t, logs.String(), "read_client_fail")
+	require.Contains(t, logs.String(), openAIAccountInstructionsRedaction)
+	require.NotContains(t, logs.String(), suffix)
+	require.NotContains(t, logs.String(), escapedSuffix)
+}
+
 func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsUpstreamCloseErrors(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())
