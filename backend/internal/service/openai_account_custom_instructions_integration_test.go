@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	coderws "github.com/coder/websocket"
@@ -503,6 +505,229 @@ func TestAccountCustomInstructionsRedactsBareStreamingErrorEvents(t *testing.T) 
 	}
 }
 
+func TestAccountCustomInstructionsRedactsBufferedHTTP200Failures(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const suffix = "ACCOUNT/INSTRUCTION-SECRET"
+	const escapedSuffix = `ACCOUNT\/INSTRUCTION-SECRET`
+	directFailure := `{"id":"resp_failed","status":"failed","error":{"type":"server_error","code":"server_error","message":"temporary upstream failure; echoed account instructions: ` + escapedSuffix + `"},"usage":{"input_tokens":3,"output_tokens":1}}`
+	responseFailedSSE := strings.Join([]string{
+		`event: response.failed`,
+		`data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"type":"server_error","code":"server_error","message":"temporary upstream failure; echoed account instructions: ` + escapedSuffix + `"},"usage":{"input_tokens":3,"output_tokens":1}}}`,
+		"",
+	}, "\n") + "\n"
+	bareErrorSSE := strings.Join([]string{
+		`event: error`,
+		`data: {"type":"error","error":{"type":"server_error","code":"server_error","message":"temporary upstream failure; echoed account instructions: ` + escapedSuffix + `"}}`,
+		"",
+	}, "\n") + "\n"
+
+	forms := []struct {
+		name        string
+		contentType string
+		body        string
+	}{
+		{name: "direct failed response", contentType: "application/json", body: directFailure},
+		{name: "SSE response.failed fallback", contentType: "text/event-stream", body: responseFailedSSE},
+		{name: "SSE bare error", contentType: "text/event-stream", body: bareErrorSSE},
+	}
+	paths := []struct {
+		name    string
+		account *Account
+	}{
+		{name: "native", account: openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil)},
+		{name: "passthrough", account: openAIAccountForCustomInstructionsIntegration(AccountTypeAPIKey, suffix, map[string]any{"openai_passthrough": true, "openai_responses_supported": true})},
+	}
+
+	sink, releaseLogs := captureStructuredLog(t)
+	defer releaseLogs()
+	for _, path := range paths {
+		for _, form := range forms {
+			t.Run(path.name+"/"+form.name, func(t *testing.T) {
+				requestBody := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"client instructions","input":"hello"}`)
+				recorder, c := accountInstructionsErrorContext(t, "/v1/responses", requestBody)
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{form.contentType},
+						"x-request-id": []string{"rid_account_instructions_buffered_failure"},
+					},
+					Body: io.NopCloser(strings.NewReader(form.body)),
+				}}
+				svc := &OpenAIGatewayService{cfg: accountInstructionsErrorTestConfig(), httpUpstream: upstream}
+
+				result, err := svc.Forward(context.Background(), c, path.account, requestBody)
+
+				require.Error(t, err)
+				require.Nil(t, result)
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, err, &failoverErr, "buffered server errors must remain eligible for failover")
+				assertAccountInstructionsNotExposed(t, c, recorder, err, suffix)
+				require.NotContains(t, recorder.Body.String(), escapedSuffix)
+				require.NotContains(t, string(failoverErr.ResponseBody), escapedSuffix)
+			})
+		}
+	}
+	require.False(t, sink.ContainsMessage(suffix), "structured logs must not expose account instructions")
+	for _, field := range []string{"error", "body", "detail", "message", "cause", "close_reason"} {
+		require.False(t, sink.ContainsFieldValue(field, suffix), "structured log field %q must not expose account instructions", field)
+		require.False(t, sink.ContainsFieldValue(field, escapedSuffix), "structured log field %q must not expose escaped account instructions", field)
+	}
+}
+
+func TestAccountCustomInstructionsPreservesSuccessfulBufferedOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const suffix = "ACCOUNT-INSTRUCTION-SECRET"
+	requestBody := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"client instructions","input":"hello"}`)
+	for _, tt := range []struct {
+		name    string
+		account *Account
+	}{
+		{name: "native", account: openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil)},
+		{name: "passthrough", account: openAIAccountForCustomInstructionsIntegration(AccountTypeAPIKey, suffix, map[string]any{"openai_passthrough": true, "openai_responses_supported": true})},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder, c := accountInstructionsErrorContext(t, "/v1/responses", requestBody)
+			upstreamBody := `{"id":"resp_ok","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"` + suffix + `"}]}],"usage":{"input_tokens":3,"output_tokens":1}}`
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+			}}
+			svc := &OpenAIGatewayService{cfg: accountInstructionsErrorTestConfig(), httpUpstream: upstream}
+
+			result, err := svc.Forward(context.Background(), c, tt.account, requestBody)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Contains(t, recorder.Body.String(), suffix, "successful model output matching the suffix must remain unchanged")
+		})
+	}
+}
+
+func TestChatCompletionsBufferedBareErrorRedactsAndFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const suffix = "ACCOUNT/INSTRUCTION-SECRET"
+	const escapedSuffix = `ACCOUNT\/INSTRUCTION-SECRET`
+	requestBody := []byte(`{"model":"gpt-5.4","messages":[{"role":"system","content":"client instructions"},{"role":"user","content":"hello"}],"stream":false}`)
+	recorder, c := accountInstructionsErrorContext(t, "/v1/chat/completions", requestBody)
+	upstreamSSE := strings.Join([]string{
+		`event: error`,
+		`data: {"type":"error","error":{"type":"server_error","code":"server_error","message":"temporary upstream failure; echoed account instructions: ` + escapedSuffix + `"}}`,
+		"",
+	}, "\n") + "\n"
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			"x-request-id": []string{"rid_account_instructions_chat_buffered_error"},
+		},
+		Body: io.NopCloser(strings.NewReader(upstreamSSE)),
+	}}
+	svc := &OpenAIGatewayService{cfg: accountInstructionsErrorTestConfig(), httpUpstream: upstream}
+	account := openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil)
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, requestBody, "", "gpt-5.4")
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.NotContains(t, err.Error(), "missing terminal event")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	assertAccountInstructionsNotExposed(t, c, recorder, err, suffix)
+	require.NotContains(t, string(failoverErr.ResponseBody), escapedSuffix)
+}
+
+func TestAccountCustomInstructionsRedactsWebSocketPrewarmAndWriteErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const suffix = "ACCOUNT-INSTRUCTION-SECRET"
+	account := openAIAccountForCustomInstructionsIntegration(
+		AccountTypeAPIKey,
+		suffix,
+		map[string]any{"responses_websockets_v2_enabled": true},
+	)
+	payload := map[string]any{
+		"type":         "response.create",
+		"model":        "gpt-5.4",
+		"instructions": "client instructions\n\n" + suffix,
+	}
+	sink, releaseLogs := captureStructuredLog(t)
+	defer releaseLogs()
+
+	for _, tt := range []struct {
+		name      string
+		prewarm   bool
+		writeErr  error
+		readErr   error
+		readEvent []byte
+	}{
+		{
+			name:     "prewarm write",
+			prewarm:  true,
+			writeErr: errors.New("prewarm write echoed account instructions: " + suffix),
+		},
+		{
+			name:    "prewarm read close",
+			prewarm: true,
+			readErr: coderws.CloseError{Code: coderws.StatusPolicyViolation, Reason: "prewarm close echoed account instructions: " + suffix},
+		},
+		{
+			name:      "prewarm error event",
+			prewarm:   true,
+			readEvent: []byte(fmt.Sprintf(`{"type":"error","error":{"type":"server_error","code":"server_error","message":%q}}`, "prewarm error echoed account instructions: "+suffix)),
+		},
+		{
+			name:     "main request write",
+			prewarm:  false,
+			writeErr: errors.New("main write echoed account instructions: " + suffix),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := accountInstructionsWebSocketErrorTestConfig(tt.prewarm)
+			svc := &OpenAIGatewayService{cfg: cfg, toolCorrector: NewCodexToolCorrector()}
+			conn := &accountInstructionsWSStageErrorConn{
+				writeErr: tt.writeErr,
+				readErr:  tt.readErr,
+			}
+			if tt.readEvent != nil {
+				conn.events = [][]byte{tt.readEvent}
+			}
+			lease := &openAIWSConnLease{
+				accountID: account.ID,
+				conn:      newOpenAIWSConn("account_instructions_error", account.ID, conn, nil),
+			}
+
+			var err error
+			if tt.prewarm {
+				err = svc.performOpenAIWSGeneratePrewarm(
+					context.Background(),
+					lease,
+					OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+					payload,
+					"",
+					payload,
+					account,
+					nil,
+					0,
+				)
+			} else {
+				svc.openaiWSPool = &openAIWSConnPool{}
+				err = accountInstructionsForwardWSMainWriteForTest(t, svc, cfg, account, conn, payload)
+			}
+
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), suffix, "returned websocket error must not expose account instructions")
+		})
+	}
+	require.False(t, sink.ContainsMessage(suffix), "structured websocket logs must not expose account instructions")
+	for _, field := range []string{"error", "body", "detail", "message", "cause", "close_reason"} {
+		require.False(t, sink.ContainsFieldValue(field, suffix), "structured websocket log field %q must not expose account instructions", field)
+	}
+}
+
 func TestForwardAccountCustomInstructionsRedactsUpstreamWebSocketReadCloseError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -618,6 +843,101 @@ func (d *accountInstructionsWSErrorDialer) Dial(
 	string,
 ) (openAIWSClientConn, int, http.Header, error) {
 	return d.conn, http.StatusSwitchingProtocols, nil, nil
+}
+
+type accountInstructionsWSStageErrorConn struct {
+	mu       sync.Mutex
+	writeErr error
+	readErr  error
+	events   [][]byte
+	closed   bool
+}
+
+func (c *accountInstructionsWSStageErrorConn) WriteJSON(context.Context, any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errOpenAIWSConnClosed
+	}
+	return c.writeErr
+}
+
+func (c *accountInstructionsWSStageErrorConn) ReadMessage(context.Context) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, errOpenAIWSConnClosed
+	}
+	if len(c.events) > 0 {
+		event := append([]byte(nil), c.events[0]...)
+		c.events = c.events[1:]
+		return event, nil
+	}
+	if c.readErr != nil {
+		return nil, c.readErr
+	}
+	return nil, io.EOF
+}
+
+func (c *accountInstructionsWSStageErrorConn) Ping(context.Context) error { return nil }
+
+func (c *accountInstructionsWSStageErrorConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	return nil
+}
+
+func accountInstructionsWebSocketErrorTestConfig(prewarm bool) *config.Config {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = prewarm
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+	return cfg
+}
+
+func accountInstructionsForwardWSMainWriteForTest(
+	t *testing.T,
+	svc *OpenAIGatewayService,
+	cfg *config.Config,
+	account *Account,
+	conn openAIWSClientConn,
+	payload map[string]any,
+) error {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(&accountInstructionsWSErrorDialer{conn: conn})
+	svc.openaiWSPool = pool
+	agentTaskRecoveryTried := false
+	_, err := svc.forwardOpenAIWSV2(
+		context.Background(),
+		c,
+		account,
+		payload,
+		"sk-test",
+		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+		false,
+		false,
+		"gpt-5.4",
+		"gpt-5.4",
+		time.Now(),
+		0,
+		"",
+		&agentTaskRecoveryTried,
+	)
+	return err
 }
 
 func accountInstructionsErrorContext(t *testing.T, path string, body []byte) (*httptest.ResponseRecorder, *gin.Context) {

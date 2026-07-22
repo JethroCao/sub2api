@@ -1107,6 +1107,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
+	if failurePayload, failed := extractOpenAINonStreamingFailurePayload(body); failed {
+		return nil, s.handleOpenAINonStreamingFailure(resp, c, account, false, failurePayload)
+	}
 
 	// Detect SSE responses for ALL account types via Content-Type header.
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
@@ -1283,7 +1286,7 @@ func extractOpenAISSETerminalEvent(body string) (string, []byte, bool) {
 		}
 		eventType := strings.TrimSpace(gjson.GetBytes(data, "type").String())
 		switch eventType {
-		case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+		case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
 			terminalType = eventType
 			terminalPayload = append([]byte(nil), data...)
 		}
@@ -1292,6 +1295,78 @@ func extractOpenAISSETerminalEvent(body string) (string, []byte, bool) {
 		return terminalType, terminalPayload, true
 	}
 	return "", nil, false
+}
+
+func extractOpenAINonStreamingFailurePayload(body []byte) ([]byte, bool) {
+	if len(body) == 0 {
+		return nil, false
+	}
+	if gjson.ValidBytes(body) {
+		eventType := strings.TrimSpace(gjson.GetBytes(body, "type").String())
+		status := strings.TrimSpace(gjson.GetBytes(body, "status").String())
+		responseStatus := strings.TrimSpace(gjson.GetBytes(body, "response.status").String())
+		if eventType == "error" || eventType == "response.failed" || status == "failed" || responseStatus == "failed" {
+			return append([]byte(nil), body...), true
+		}
+		return nil, false
+	}
+	eventType, payload, ok := extractOpenAISSETerminalEvent(string(body))
+	if !ok || (eventType != "response.failed" && eventType != "error") {
+		return nil, false
+	}
+	return payload, true
+}
+
+func (s *OpenAIGatewayService) handleOpenAINonStreamingFailure(
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	passthrough bool,
+	payload []byte,
+) error {
+	payload = redactOpenAIAccountInstructionsFromUpstreamBody(account, payload)
+	message := redactOpenAIAccountInstructionsFromUpstreamText(account, extractOpenAISSEErrorMessage(payload))
+	if message == "" {
+		message = "OpenAI upstream response failed"
+	}
+	requestID := ""
+	if resp != nil {
+		requestID = resp.Header.Get("x-request-id")
+	}
+
+	if hit, code, cyberMessage := detectOpenAICyberPolicy(payload); hit {
+		MarkOpsCyberPolicy(c, CyberPolicyMark{
+			Code:           code,
+			Message:        cyberMessage,
+			Body:           truncateString(string(payload), 4096),
+			UpstreamStatus: http.StatusOK,
+		})
+		if cyberMessage != "" {
+			message = cyberMessage
+		}
+		message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, requestID, "http_error", payload, message)
+		return s.writeOpenAINonStreamingProtocolError(resp, c, message)
+	}
+
+	if account != nil {
+		if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, payload, message); matched {
+			message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, requestID, "http_error", payload, message)
+			if errMsg == "" {
+				errMsg = message
+			}
+			MarkResponseCommitted(c)
+			if c != nil {
+				c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+				c.JSON(status, gin.H{"error": gin.H{"type": errType, "message": errMsg}})
+			}
+			return fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
+		}
+	}
+	if openAIStreamFailedEventShouldFailover(payload, message) {
+		return s.newOpenAIStreamFailoverError(c, account, passthrough, requestID, payload, message)
+	}
+	message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, requestID, "http_error", payload, message)
+	return s.writeOpenAINonStreamingProtocolError(resp, c, message)
 }
 
 func extractOpenAISSEErrorMessage(payload []byte) string {

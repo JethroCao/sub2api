@@ -314,14 +314,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
 		lease.MarkBroken()
+		safeErr := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
 		logOpenAIWSModeInfo(
 			"write_request_fail account_id=%d conn_id=%s cause=%s payload_bytes=%d",
 			account.ID,
 			connID,
-			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
+			truncateOpenAIWSLogValue(safeErr.Error(), openAIWSLogValueMaxLen),
 			resolvePayloadBytes(),
 		)
-		return nil, wrapOpenAIWSFallback("write_request", err)
+		return nil, wrapOpenAIWSFallback("write_request", safeErr)
 	}
 	if debugEnabled {
 		logOpenAIWSModeDebug(

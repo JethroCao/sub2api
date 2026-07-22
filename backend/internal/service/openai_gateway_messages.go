@@ -530,6 +530,10 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
 	if err != nil {
+		var failureErr *openAICompatBufferedFailureError
+		if errors.As(err, &failureErr) {
+			return nil, s.handleOpenAICompatBufferedFailure(c, account, requestID, failureErr.payload, writeAnthropicError)
+		}
 		return nil, err
 	}
 
@@ -636,6 +640,60 @@ func isOpenAICompatDoneSentinelLine(line string) bool {
 	return ok && strings.TrimSpace(payload) == "[DONE]"
 }
 
+type openAICompatBufferedFailureError struct {
+	payload []byte
+}
+
+func (e *openAICompatBufferedFailureError) Error() string {
+	return "openai buffered upstream failure event"
+}
+
+func (s *OpenAIGatewayService) handleOpenAICompatBufferedFailure(
+	c *gin.Context,
+	account *Account,
+	requestID string,
+	payload []byte,
+	writeError compatErrorWriter,
+) error {
+	payload = redactOpenAIAccountInstructionsFromUpstreamBody(account, payload)
+	message := redactOpenAIAccountInstructionsFromUpstreamText(account, extractOpenAISSEErrorMessage(payload))
+	if message == "" {
+		message = "OpenAI upstream response failed"
+	}
+	if hit, code, cyberMessage := detectOpenAICyberPolicy(payload); hit {
+		MarkOpsCyberPolicy(c, CyberPolicyMark{
+			Code:           code,
+			Message:        cyberMessage,
+			Body:           truncateString(string(payload), 4096),
+			UpstreamStatus: http.StatusOK,
+		})
+		if cyberMessage != "" {
+			message = cyberMessage
+		}
+		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
+		writeError(c, http.StatusBadRequest, "invalid_request_error", message)
+		return fmt.Errorf("openai cyber_policy: %s", message)
+	}
+	if openAIStreamFailedEventShouldFailover(payload, message) {
+		return s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message)
+	}
+	message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
+	status, errType, errMessage := http.StatusBadGateway, "upstream_error", message
+	if account != nil {
+		if matchedStatus, matchedType, matchedMessage, matched := applyOpenAIStreamFailedErrorPassthroughRule(
+			c, account.Platform, payload, message,
+		); matched {
+			status, errType = matchedStatus, matchedType
+			if matchedMessage != "" {
+				errMessage = matchedMessage
+			}
+			MarkResponseCommitted(c)
+		}
+	}
+	writeError(c, status, errType, errMessage)
+	return fmt.Errorf("upstream response failed: %s", errMessage)
+}
+
 func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
 	logPrefix string,
@@ -719,6 +777,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 					payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
+						if strings.TrimSpace(event.Type) == "error" {
+							return nil, usage, acc, &openAICompatBufferedFailureError{payload: []byte(payload)}
+						}
 						acc.ProcessEvent(&event)
 						if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
 							if event.Usage != nil {
@@ -763,6 +824,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 					zap.String("request_id", requestID),
 				)
 				continue
+			}
+			if strings.TrimSpace(event.Type) == "error" {
+				return nil, usage, acc, &openAICompatBufferedFailureError{payload: []byte(payload)}
 			}
 
 			acc.ProcessEvent(&event)

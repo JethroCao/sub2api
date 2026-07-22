@@ -80,13 +80,14 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 
 	if err := lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeout()); err != nil {
 		lease.MarkBroken()
+		safeErr := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
 		logOpenAIWSModeInfo(
 			"prewarm_write_fail account_id=%d conn_id=%s cause=%s",
 			account.ID,
 			connID,
-			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
+			truncateOpenAIWSLogValue(safeErr.Error(), openAIWSLogValueMaxLen),
 		)
-		return wrapOpenAIWSFallback("prewarm_write", err)
+		return wrapOpenAIWSFallback("prewarm_write", safeErr)
 	}
 	logOpenAIWSModeInfo("prewarm_write_sent account_id=%d conn_id=%s payload_bytes=%d", account.ID, connID, len(prewarmPayloadJSON))
 
@@ -98,16 +99,18 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		if readErr != nil {
 			lease.MarkBroken()
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
+			closeReason = redactOpenAIAccountInstructionsFromUpstreamText(account, closeReason)
+			safeReadErr := redactOpenAIAccountInstructionsFromUpstreamError(account, readErr)
 			logOpenAIWSModeInfo(
 				"prewarm_read_fail account_id=%d conn_id=%s close_status=%s close_reason=%s cause=%s events=%d",
 				account.ID,
 				connID,
 				closeStatus,
 				closeReason,
-				truncateOpenAIWSLogValue(readErr.Error(), openAIWSLogValueMaxLen),
+				truncateOpenAIWSLogValue(safeReadErr.Error(), openAIWSLogValueMaxLen),
 				prewarmEventCount,
 			)
-			return wrapOpenAIWSFallback("prewarm_"+classifyOpenAIWSReadFallbackReason(readErr), readErr)
+			return wrapOpenAIWSFallback("prewarm_"+classifyOpenAIWSReadFallbackReason(readErr), safeReadErr)
 		}
 
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(message)
@@ -130,6 +133,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		}
 
 		if eventType == "error" {
+			message = redactOpenAIAccountInstructionsFromUpstreamBody(account, message)
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
 			s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
 			errMsg := strings.TrimSpace(errMsgRaw)

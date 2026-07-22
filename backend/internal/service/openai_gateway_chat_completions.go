@@ -432,6 +432,10 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai chat_completions buffered", requestID)
 	if err != nil {
+		var failureErr *openAICompatBufferedFailureError
+		if errors.As(err, &failureErr) {
+			return nil, s.handleOpenAICompatBufferedFailure(c, account, requestID, failureErr.payload, writeChatCompletionsError)
+		}
 		return nil, err
 	}
 
