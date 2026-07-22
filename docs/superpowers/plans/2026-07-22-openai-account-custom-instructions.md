@@ -146,7 +146,7 @@ Expected: FAIL because the helper does not exist.
 
 - [ ] **Step 3: Implement the minimal raw-JSON helper**
 
-Use `gjson` to inspect `instructions`, reject an existing non-string value, and `sjson.SetBytes` to set the combined string. Idempotency must compare the final trimmed value against either the exact suffix or `"\n\n"+suffix`; it must not use a substring match.
+Use `gjson` to inspect `instructions`, reject an existing non-string value, and `sjson.SetBytes` to set the combined string. Preserve the original non-empty client string byte-for-byte; trimming is allowed only to decide whether the value is blank and for the idempotency comparison. Idempotency must compare the final trimmed value against either the exact suffix or `"\n\n"+suffix`; it must not use a substring match.
 
 ```go
 func appendOpenAIAccountInstructions(account *Account, body []byte) ([]byte, bool, error) {
@@ -156,10 +156,11 @@ func appendOpenAIAccountInstructions(account *Account, body []byte) ([]byte, boo
 	if current.Exists() && current.Type != gjson.String {
 		return body, false, errors.New("OpenAI instructions must be a string")
 	}
-	existing := strings.TrimSpace(current.String())
-	if existing == suffix || strings.HasSuffix(existing, "\n\n"+suffix) { return body, false, nil }
+	existingRaw := current.String()
+	existingTrimmed := strings.TrimSpace(existingRaw)
+	if existingTrimmed == suffix || strings.HasSuffix(existingTrimmed, "\n\n"+suffix) { return body, false, nil }
 	combined := suffix
-	if existing != "" { combined = existing + "\n\n" + suffix }
+	if existingTrimmed != "" { combined = existingRaw + "\n\n" + suffix }
 	next, err := sjson.SetBytes(body, "instructions", combined)
 	return next, err == nil, err
 }
