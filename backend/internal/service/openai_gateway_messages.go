@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -704,6 +705,16 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	if resp == nil || resp.Body == nil {
 		return nil, usage, acc, errors.New("upstream response body is nil")
 	}
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json") {
+		payload, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, usage, acc, err
+		}
+		if isOpenAICompatDirectJSONFailure(payload) {
+			return nil, usage, acc, &openAICompatBufferedFailureError{payload: payload}
+		}
+		return nil, usage, acc, nil
+	}
 
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 
@@ -853,6 +864,18 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			return nil, usage, acc, fmt.Errorf("stream data interval timeout")
 		}
 	}
+}
+
+func isOpenAICompatDirectJSONFailure(payload []byte) bool {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return false
+	}
+	eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+	if eventType == "response.failed" || eventType == "error" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(payload, "status").String()), "failed") ||
+		strings.EqualFold(strings.TrimSpace(gjson.GetBytes(payload, "response.status").String()), "failed")
 }
 
 // handleAnthropicStreamingResponse reads Responses SSE events from upstream,

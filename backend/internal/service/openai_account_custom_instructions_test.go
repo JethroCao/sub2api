@@ -143,6 +143,56 @@ func TestRedactOpenAIAccountInstructionsFromEscapedNonJSONError(t *testing.T) {
 	require.Contains(t, redacted.Error(), openAIAccountInstructionsRedaction)
 }
 
+func TestRedactOpenAIAccountInstructionsFromMixedJSONEscapesInNonJSONError(t *testing.T) {
+	account := customInstructionsAccount("中<&😀")
+	tests := []struct {
+		name    string
+		encoded string
+	}{
+		{
+			name:    "uppercase hex and surrogate pair",
+			encoded: `\u4E2D\u003c\u0026\ud83d\ude00`,
+		},
+		{
+			name:    "mixed literal and escaped units",
+			encoded: `中\u003C&\uD83D\uDE00`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := errors.New(`websocket close: reason="prefix ` + tt.encoded + ` suffix"`)
+
+			redacted := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
+
+			require.NotContains(t, redacted.Error(), tt.encoded)
+			require.NotContains(t, redacted.Error(), account.GetOpenAICustomInstructions())
+			require.Contains(t, redacted.Error(), openAIAccountInstructionsRedaction)
+		})
+	}
+}
+
+func TestRedactOpenAIAccountInstructionsFromMixedEscapedSpecialCharacters(t *testing.T) {
+	account := customInstructionsAccount("quote\"/\nnext")
+	err := errors.New(`websocket close: reason="prefix quote\"\/\nnext suffix"`)
+
+	redacted := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
+
+	require.NotContains(t, redacted.Error(), `quote\"\/\nnext`)
+	require.NotContains(t, redacted.Error(), account.GetOpenAICustomInstructions())
+	require.Contains(t, redacted.Error(), openAIAccountInstructionsRedaction)
+}
+
+func TestRedactOpenAIAccountInstructionsDoesNotRedactNearSemanticMatch(t *testing.T) {
+	account := customInstructionsAccount("中<&😀")
+	err := errors.New(`websocket close: reason="prefix \u4E2D\u003c\u0026\ud83d\ude01 suffix"`)
+
+	redacted := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
+
+	require.Equal(t, err, redacted)
+	require.NotContains(t, redacted.Error(), openAIAccountInstructionsRedaction)
+}
+
 func customInstructionsAccount(instructions string) *Account {
 	return &Account{
 		Platform: PlatformOpenAI,

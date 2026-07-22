@@ -442,6 +442,71 @@ func TestForwardAsChatCompletions_BufferedContextWindowResponseFailedReturnsErro
 	require.Contains(t, rec.Body.String(), "input exceeds the context window")
 }
 
+func TestForwardAsChatCompletions_BufferedDirectJSONFailuresUseFailureHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name         string
+		upstreamBody string
+	}{
+		{
+			name: "top-level failed response",
+			upstreamBody: `{"id":"resp_failed","object":"response","model":"gpt-5.5","status":"failed","output":[],` +
+				`"error":{"code":"context_length_exceeded","message":"direct JSON input exceeds the context window"}}`,
+		},
+		{
+			name: "response.failed event envelope",
+			upstreamBody: `{"type":"response.failed","response":{"id":"resp_failed","object":"response","model":"gpt-5.5",` +
+				`"status":"failed","output":[],"error":{"code":"context_length_exceeded","message":"direct JSON input exceeds the context window"}}}`,
+		},
+		{
+			name:         "bare error event",
+			upstreamBody: `{"type":"error","error":{"code":"context_length_exceeded","message":"direct JSON input exceeds the context window"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"large prompt"}],"stream":false}`)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"application/json; charset=utf-8"},
+					"x-request-id": []string{"rid_chat_direct_json_failed"},
+				},
+				Body: io.NopCloser(strings.NewReader(tt.upstreamBody)),
+			}}
+			svc := &OpenAIGatewayService{httpUpstream: upstream}
+			account := &Account{
+				ID:          1,
+				Name:        "openai-oauth",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token":       "oauth-token",
+					"chatgpt_account_id": "chatgpt-acc",
+				},
+			}
+
+			result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.5")
+
+			require.Error(t, err)
+			require.Nil(t, result)
+			var failoverErr *UpstreamFailoverError
+			require.False(t, errors.As(err, &failoverErr))
+			require.True(t, c.Writer.Written())
+			require.Equal(t, http.StatusBadGateway, rec.Code)
+			require.Contains(t, rec.Body.String(), "direct JSON input exceeds the context window")
+		})
+	}
+}
+
 func TestForwardAsChatCompletions_StreamContextWindowResponseFailedReturnsErrorWithoutFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -65,32 +67,108 @@ func redactOpenAIAccountInstructionsFromUpstreamBody(account *Account, body []by
 		}
 	}
 
-	// Preserve non-JSON error bodies while still removing exact literal and
-	// JSON-escaped renderings of the configured suffix. WebSocket close errors
-	// commonly wrap an escaped JSON reason inside otherwise non-JSON text.
-	redacted := string(body)
-	terms := []string{suffix}
-	if quoted, err := json.Marshal(suffix); err == nil && len(quoted) >= 2 {
-		terms = appendOpenAIAccountInstructionsEscapedRedactionTerms(terms, string(quoted[1:len(quoted)-1]))
-	}
-	if quoted := strconv.QuoteToASCII(suffix); len(quoted) >= 2 {
-		terms = appendOpenAIAccountInstructionsEscapedRedactionTerms(terms, quoted[1:len(quoted)-1])
-	}
-	for _, term := range terms {
-		redacted = strings.ReplaceAll(redacted, term, openAIAccountInstructionsRedaction)
-	}
-	return []byte(redacted)
+	// Preserve non-JSON error bodies while matching the suffix by its semantic
+	// string value. WebSocket close errors commonly wrap an escaped JSON reason
+	// inside otherwise non-JSON text, and one value may mix literal runes with
+	// \uXXXX forms, uppercase hex, escaped punctuation, and surrogate pairs.
+	return []byte(redactOpenAIAccountInstructionsJSONStyleText(string(body), suffix))
 }
 
-func appendOpenAIAccountInstructionsEscapedRedactionTerms(terms []string, encoded string) []string {
-	if encoded == "" {
-		return terms
+func redactOpenAIAccountInstructionsJSONStyleText(text, suffix string) string {
+	if text == "" || suffix == "" {
+		return text
 	}
-	terms = append(terms, encoded)
-	if slashEscaped := strings.ReplaceAll(encoded, "/", `\/`); slashEscaped != encoded {
-		terms = append(terms, slashEscaped)
+	target := []rune(suffix)
+	var redacted strings.Builder
+	redacted.Grow(len(text))
+	changed := false
+	for offset := 0; offset < len(text); {
+		if end, ok := matchOpenAIAccountInstructionsJSONStyleRunes(text, offset, target); ok {
+			redacted.WriteString(openAIAccountInstructionsRedaction)
+			offset = end
+			changed = true
+			continue
+		}
+		_, next := decodeOpenAIAccountInstructionsJSONStyleRune(text, offset)
+		redacted.WriteString(text[offset:next])
+		offset = next
 	}
-	return terms
+	if !changed {
+		return text
+	}
+	return redacted.String()
+}
+
+func matchOpenAIAccountInstructionsJSONStyleRunes(text string, offset int, target []rune) (int, bool) {
+	for _, want := range target {
+		if offset >= len(text) {
+			return offset, false
+		}
+		got, next := decodeOpenAIAccountInstructionsJSONStyleRune(text, offset)
+		if got != want {
+			return offset, false
+		}
+		offset = next
+	}
+	return offset, true
+}
+
+func decodeOpenAIAccountInstructionsJSONStyleRune(text string, offset int) (rune, int) {
+	if offset >= len(text) {
+		return utf8.RuneError, offset
+	}
+	if text[offset] != '\\' || offset+1 >= len(text) {
+		r, size := utf8.DecodeRuneInString(text[offset:])
+		return r, offset + size
+	}
+
+	switch text[offset+1] {
+	case '"':
+		return '"', offset + 2
+	case '\\':
+		return '\\', offset + 2
+	case '/':
+		return '/', offset + 2
+	case 'b':
+		return '\b', offset + 2
+	case 'f':
+		return '\f', offset + 2
+	case 'n':
+		return '\n', offset + 2
+	case 'r':
+		return '\r', offset + 2
+	case 't':
+		return '\t', offset + 2
+	case 'u':
+		first, ok := parseOpenAIAccountInstructionsJSONHexRune(text, offset)
+		if !ok {
+			return '\\', offset + 1
+		}
+		next := offset + 6
+		if utf16.IsSurrogate(first) {
+			if first >= 0xD800 && first <= 0xDBFF && next+6 <= len(text) && text[next] == '\\' && text[next+1] == 'u' {
+				second, secondOK := parseOpenAIAccountInstructionsJSONHexRune(text, next)
+				if secondOK && second >= 0xDC00 && second <= 0xDFFF {
+					return utf16.DecodeRune(first, second), next + 6
+				}
+			}
+			return utf8.RuneError, next
+		}
+		return first, next
+	default:
+		return '\\', offset + 1
+	}
+}
+
+func parseOpenAIAccountInstructionsJSONHexRune(text string, offset int) (rune, bool) {
+	if offset+6 > len(text) || text[offset] != '\\' || text[offset+1] != 'u' {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(text[offset+2:offset+6], 16, 16)
+	if err != nil {
+		return 0, false
+	}
+	return rune(value), true
 }
 
 func redactOpenAIAccountInstructionsFromUpstreamText(account *Account, text string) string {
