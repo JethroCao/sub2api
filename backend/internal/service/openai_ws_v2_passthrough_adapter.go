@@ -694,7 +694,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	requestModel := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String())
 	requestPreviousResponseID := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "previous_response_id").String())
-	logOpenAIWSV2Passthrough(
+	s.logOpenAIWSV2Passthrough(
 		"relay_start account_id=%d model=%s previous_response_id=%s first_message_type=%s first_message_bytes=%d",
 		account.ID,
 		truncateOpenAIWSLogValue(requestModel, openAIWSLogValueMaxLen),
@@ -770,7 +770,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		wsHost = normalizeOpenAIWSLogValue(parsedURL.Host)
 		wsPath = normalizeOpenAIWSLogValue(parsedURL.Path)
 	}
-	logOpenAIWSV2Passthrough(
+	s.logOpenAIWSV2Passthrough(
 		"relay_dial_start account_id=%d ws_host=%s ws_path=%s proxy_enabled=%v",
 		account.ID,
 		wsHost,
@@ -833,7 +833,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			continue
 		}
-		logOpenAIWSV2Passthrough(
+		s.logOpenAIWSV2Passthrough(
 			"relay_dial_failed account_id=%d status_code=%d err=%s",
 			account.ID,
 			statusCode,
@@ -852,7 +852,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	defer func() {
 		_ = upstreamConn.Close()
 	}()
-	logOpenAIWSV2Passthrough(
+	s.logOpenAIWSV2Passthrough(
 		"relay_dial_ok account_id=%d status_code=%d upstream_request_id=%s",
 		account.ID,
 		statusCode,
@@ -1071,7 +1071,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			StartClientAfterFirstDownstream: true,
 			ReadClientFrame:                 readNextClientFrame,
 			OnUsageParseFailure: func(eventType string, usageRaw string) {
-				logOpenAIWSV2Passthrough(
+				s.logOpenAIWSV2Passthrough(
 					"usage_parse_failed event_type=%s usage_raw=%s",
 					truncateOpenAIWSLogValue(eventType, openAIWSLogValueMaxLen),
 					truncateOpenAIWSLogValue(usageRaw, openAIWSLogValueMaxLen),
@@ -1098,7 +1098,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					Duration:              turn.Duration,
 					FirstTokenMs:          turn.FirstTokenMs,
 				}
-				logOpenAIWSV2Passthrough(
+				s.logOpenAIWSV2Passthrough(
 					"relay_turn_completed account_id=%d turn=%d request_id=%s terminal_event=%s duration_ms=%d first_token_ms=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d",
 					account.ID,
 					turnNo,
@@ -1154,7 +1154,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return nil
 				}
 				s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
-				logOpenAIWSV2Passthrough(
+				s.logOpenAIWSV2Passthrough(
 					"relay_rate_limit_failover account_id=%d err_code=%s err_type=%s err_message=%s",
 					account.ID,
 					truncateOpenAIWSLogValue(errCodeRaw, openAIWSLogValueMaxLen),
@@ -1168,7 +1168,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			},
 			OnTrace: func(event openaiwsv2.RelayTraceEvent) {
-				logOpenAIWSV2Passthrough(
+				s.logOpenAIWSV2Passthrough(
 					"relay_trace account_id=%d stage=%s direction=%s msg_type=%s bytes=%d graceful=%v wrote_downstream=%v err=%s",
 					account.ID,
 					truncateOpenAIWSLogValue(event.Stage, openAIWSLogValueMaxLen),
@@ -1216,7 +1216,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 
 	turnCount := int(completedTurns.Load())
 	if relayExit == nil {
-		logOpenAIWSV2Passthrough(
+		s.logOpenAIWSV2Passthrough(
 			"relay_completed account_id=%d request_id=%s terminal_event=%s duration_ms=%d c2u_frames=%d u2c_frames=%d dropped_frames=%d turns=%d",
 			account.ID,
 			truncateOpenAIWSLogValue(result.RequestID, openAIWSIDValueMaxLen),
@@ -1233,7 +1233,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 		return nil
 	}
-	logOpenAIWSV2Passthrough(
+	s.logOpenAIWSV2Passthrough(
 		"relay_failed account_id=%d stage=%s wrote_downstream=%v err=%s duration_ms=%d c2u_frames=%d u2c_frames=%d dropped_frames=%d turns=%d",
 		account.ID,
 		truncateOpenAIWSLogValue(relayExit.Stage, openAIWSLogValueMaxLen),
@@ -1411,4 +1411,12 @@ func logOpenAIWSV2Passthrough(format string, args ...any) {
 		"[OpenAI WS v2 passthrough] %s "+format,
 		append([]any{openaiWSV2PassthroughModeFields}, args...)...,
 	)
+}
+
+func (s *OpenAIGatewayService) logOpenAIWSV2Passthrough(format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	if s != nil && s.openaiWSPassthroughLogObserver != nil {
+		s.openaiWSPassthroughLogObserver(message)
+	}
+	logOpenAIWSV2Passthrough("%s", message)
 }

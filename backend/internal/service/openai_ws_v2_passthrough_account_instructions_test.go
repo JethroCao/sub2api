@@ -1,11 +1,10 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +13,23 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+type passthroughLogCapture struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (c *passthroughLogCapture) Observe(message string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.messages = append(c.messages, message)
+}
+
+func (c *passthroughLogCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.messages, "\n")
+}
 
 func dialPassthroughAccountInstructionsClient(t *testing.T, serverURL string, firstPayload string) *coderws.Conn {
 	t.Helper()
@@ -232,23 +248,16 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsRateLimitDiagnostics
 	const suffix = "rate private 中\n suffix"
 	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
 	upstream := newStagedPassthroughConn()
+	var logs passthroughLogCapture
+	svc := newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream)
+	svc.openaiWSPassthroughLogObserver = logs.Observe
 	server, serverErr := startPassthroughLifecycleServer(
 		t,
 		controlCtx,
-		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		svc,
 		account,
 	)
 	defer server.Close()
-
-	var logs bytes.Buffer
-	previousLogWriter := log.Writer()
-	previousLogFlags := log.Flags()
-	log.SetOutput(&logs)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(previousLogWriter)
-		log.SetFlags(previousLogFlags)
-	})
 
 	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
 	defer func() { _ = clientConn.CloseNow() }()
@@ -267,6 +276,8 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsRateLimitDiagnostics
 	require.NotContains(t, string(failoverErr.ResponseBody), suffix)
 	require.NotContains(t, string(failoverErr.ResponseBody), `rate private \u4e2d\n suffix`)
 	require.Contains(t, string(failoverErr.ResponseBody), openAIAccountInstructionsRedaction)
+	require.Contains(t, logs.String(), "relay_rate_limit_failover")
+	require.Contains(t, logs.String(), openAIAccountInstructionsRedaction)
 	require.NotContains(t, logs.String(), suffix)
 	require.NotContains(t, logs.String(), `rate private \u4e2d\n suffix`)
 }
@@ -279,23 +290,16 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsTransportErrors(t *t
 	const suffix = "transport private 中\n suffix"
 	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
 	upstream := newStagedPassthroughConn()
+	var logs passthroughLogCapture
+	svc := newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream)
+	svc.openaiWSPassthroughLogObserver = logs.Observe
 	server, serverErr := startPassthroughLifecycleServer(
 		t,
 		controlCtx,
-		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		svc,
 		account,
 	)
 	defer server.Close()
-
-	var logs bytes.Buffer
-	previousLogWriter := log.Writer()
-	previousLogFlags := log.Flags()
-	log.SetOutput(&logs)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(previousLogWriter)
-		log.SetFlags(previousLogFlags)
-	})
 
 	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
 	defer func() { _ = clientConn.CloseNow() }()
@@ -315,6 +319,8 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsTransportErrors(t *t
 	case <-time.After(3 * time.Second):
 		t.Fatal("passthrough transport-error server did not exit")
 	}
+	require.Contains(t, logs.String(), "read_upstream_fail")
+	require.Contains(t, logs.String(), openAIAccountInstructionsRedaction)
 	require.NotContains(t, logs.String(), suffix)
 	require.NotContains(t, logs.String(), `transport private \u4e2d\n suffix`)
 }
@@ -328,23 +334,16 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsNonResponseWriteErro
 	const escapedSuffix = `write private \u4e2d\n suffix`
 	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
 	upstream := newStagedPassthroughConn()
+	var logs passthroughLogCapture
+	svc := newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream)
+	svc.openaiWSPassthroughLogObserver = logs.Observe
 	server, serverErr := startPassthroughLifecycleServer(
 		t,
 		controlCtx,
-		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		svc,
 		account,
 	)
 	defer server.Close()
-
-	var logs bytes.Buffer
-	previousLogWriter := log.Writer()
-	previousLogFlags := log.Flags()
-	log.SetOutput(&logs)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(previousLogWriter)
-		log.SetFlags(previousLogFlags)
-	})
 
 	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
 	defer func() { _ = clientConn.CloseNow() }()
@@ -396,23 +395,16 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsUpstreamCloseErrors(
 	const suffix = "close private 中 suffix"
 	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
 	upstream := newStagedPassthroughConn()
+	var logs passthroughLogCapture
+	svc := newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream)
+	svc.openaiWSPassthroughLogObserver = logs.Observe
 	server, serverErr := startPassthroughLifecycleServer(
 		t,
 		controlCtx,
-		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		svc,
 		account,
 	)
 	defer server.Close()
-
-	var logs bytes.Buffer
-	previousLogWriter := log.Writer()
-	previousLogFlags := log.Flags()
-	log.SetOutput(&logs)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(previousLogWriter)
-		log.SetFlags(previousLogFlags)
-	})
 
 	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
 	defer func() { _ = clientConn.CloseNow() }()
@@ -430,6 +422,8 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsUpstreamCloseErrors(
 	case <-time.After(3 * time.Second):
 		t.Fatal("passthrough upstream-close server did not exit")
 	}
+	require.Contains(t, logs.String(), "read_upstream_fail")
+	require.Contains(t, logs.String(), openAIAccountInstructionsRedaction)
 	require.NotContains(t, logs.String(), suffix)
 }
 

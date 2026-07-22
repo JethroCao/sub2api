@@ -438,6 +438,11 @@ type OpenAIGatewayService struct {
 	codexModelsManifestCache            codexModelsManifestCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+
+	// Instance-local copy of the already-formatted passthrough log message.
+	// Kept optional so tests can observe the exact production log input without
+	// mutating the process-global logger.
+	openaiWSPassthroughLogObserver func(message string)
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
