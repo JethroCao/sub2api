@@ -326,7 +326,7 @@ func (a *Account) GetCredential(key string) string {
 }
 
 func (a *Account) GetOpenAICustomInstructions() string {
-	if a == nil || a.Platform != PlatformOpenAI {
+	if a == nil || !SupportsOpenAICustomInstructions(a.Platform, a.Type) {
 		return ""
 	}
 	raw, ok := a.Credentials[OpenAICustomInstructionsCredentialKey].(string)
@@ -336,10 +336,28 @@ func (a *Account) GetOpenAICustomInstructions() string {
 	return strings.TrimSpace(raw)
 }
 
-func ValidateOpenAICustomInstructionsCredentials(platform string, credentials map[string]any) error {
+func SupportsOpenAICustomInstructions(platform, accountType string) bool {
+	if platform != PlatformOpenAI {
+		return false
+	}
+	switch accountType {
+	case AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidateOpenAICustomInstructionsCredentials(platform, accountType string, credentials map[string]any) error {
 	raw, exists := credentials[OpenAICustomInstructionsCredentialKey]
 	if !exists || raw == nil {
 		return nil
+	}
+	if platform != PlatformOpenAI {
+		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_UNSUPPORTED_PLATFORM", "openai custom instructions are only supported for OpenAI accounts")
+	}
+	if !SupportsOpenAICustomInstructions(platform, accountType) {
+		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_UNSUPPORTED_ACCOUNT_TYPE", "openai custom instructions are only supported for OpenAI OAuth, setup-token, and API key accounts")
 	}
 	value, ok := raw.(string)
 	if !ok {
@@ -347,9 +365,6 @@ func ValidateOpenAICustomInstructionsCredentials(platform string, credentials ma
 	}
 	if strings.TrimSpace(value) == "" {
 		return nil
-	}
-	if platform != PlatformOpenAI {
-		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_UNSUPPORTED_PLATFORM", "openai custom instructions are only supported for OpenAI accounts")
 	}
 	if len([]byte(value)) > OpenAICustomInstructionsMaxBytes {
 		return infraerrors.BadRequest("OPENAI_CUSTOM_INSTRUCTIONS_TOO_LONG", "openai custom instructions exceed the maximum size")

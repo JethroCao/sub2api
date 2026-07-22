@@ -9,11 +9,11 @@ import (
 )
 
 func TestFilterSchedulerCredentialsKeepsSubscriptionPlanType(t *testing.T) {
-	filtered := filterSchedulerCredentials(map[string]any{
+	filtered := filterSchedulerCredentials(service.Account{Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: map[string]any{
 		"plan_type":     "plus",
 		"access_token":  "secret-access-token",
 		"refresh_token": "secret-refresh-token",
-	})
+	}})
 
 	require.Equal(t, "plus", filtered["plan_type"])
 	require.NotContains(t, filtered, "access_token")

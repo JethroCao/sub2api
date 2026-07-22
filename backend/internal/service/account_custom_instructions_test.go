@@ -19,7 +19,9 @@ func TestAccountGetOpenAICustomInstructions(t *testing.T) {
 		{name: "wrong credential type", account: &Account{Platform: PlatformOpenAI, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: true}}, want: ""},
 		{name: "blank value", account: &Account{Platform: PlatformOpenAI, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: " \n\t "}}, want: ""},
 		{name: "OAuth value trims outer whitespace", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "  first\nsecond  "}}, want: "first\nsecond"},
+		{name: "setup token value trims outer whitespace", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "  first\nsecond  "}}, want: "first\nsecond"},
 		{name: "API key value trims outer whitespace", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "\n first\nsecond \t"}}, want: "first\nsecond"},
+		{name: "unsupported OpenAI type", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeUpstream, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "instructions"}}, want: ""},
 	}
 
 	for _, tt := range tests {
@@ -33,19 +35,22 @@ func TestValidateOpenAICustomInstructionsCredentials(t *testing.T) {
 	tests := []struct {
 		name        string
 		platform    string
+		accountType string
 		credentials map[string]any
 		wantReason  string
 	}{
-		{name: "absent value", platform: PlatformOpenAI, credentials: map[string]any{}},
-		{name: "nil value", platform: PlatformOpenAI, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: nil}},
-		{name: "blank value", platform: PlatformOpenAI, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: " \n\t "}},
-		{name: "non string value", platform: PlatformOpenAI, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: 42}, wantReason: "OPENAI_CUSTOM_INSTRUCTIONS_INVALID"},
-		{name: "non OpenAI usage", platform: PlatformGemini, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "instructions"}, wantReason: "OPENAI_CUSTOM_INSTRUCTIONS_UNSUPPORTED_PLATFORM"},
+		{name: "absent value", platform: PlatformOpenAI, accountType: AccountTypeOAuth, credentials: map[string]any{}},
+		{name: "nil value", platform: PlatformOpenAI, accountType: AccountTypeOAuth, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: nil}},
+		{name: "blank value", platform: PlatformOpenAI, accountType: AccountTypeOAuth, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: " \n\t "}},
+		{name: "setup token value", platform: PlatformOpenAI, accountType: AccountTypeSetupToken, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "instructions"}},
+		{name: "non string value", platform: PlatformOpenAI, accountType: AccountTypeOAuth, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: 42}, wantReason: "OPENAI_CUSTOM_INSTRUCTIONS_INVALID"},
+		{name: "non OpenAI usage", platform: PlatformGemini, accountType: AccountTypeOAuth, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "instructions"}, wantReason: "OPENAI_CUSTOM_INSTRUCTIONS_UNSUPPORTED_PLATFORM"},
+		{name: "unsupported OpenAI type", platform: PlatformOpenAI, accountType: AccountTypeUpstream, credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "instructions"}, wantReason: "OPENAI_CUSTOM_INSTRUCTIONS_UNSUPPORTED_ACCOUNT_TYPE"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateOpenAICustomInstructionsCredentials(tt.platform, tt.credentials)
+			err := ValidateOpenAICustomInstructionsCredentials(tt.platform, tt.accountType, tt.credentials)
 			if tt.wantReason == "" {
 				require.NoError(t, err)
 				return
@@ -57,7 +62,7 @@ func TestValidateOpenAICustomInstructionsCredentials(t *testing.T) {
 }
 
 func TestValidateOpenAICustomInstructionsCredentialsRejectsOversize(t *testing.T) {
-	err := ValidateOpenAICustomInstructionsCredentials(PlatformOpenAI, map[string]any{
+	err := ValidateOpenAICustomInstructionsCredentials(PlatformOpenAI, AccountTypeOAuth, map[string]any{
 		OpenAICustomInstructionsCredentialKey: strings.Repeat("界", OpenAICustomInstructionsMaxBytes),
 	})
 

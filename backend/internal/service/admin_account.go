@@ -547,12 +547,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
-	if err := ValidateOpenAICustomInstructionsCredentials(input.Platform, input.Credentials); err != nil {
-		return nil, err
-	}
-
 	account, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
+		return nil, err
+	}
+	if err := ValidateOpenAICustomInstructionsCredentials(account.Platform, account.Type, account.Credentials); err != nil {
 		return nil, err
 	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
@@ -664,7 +663,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 	}
-	if err := ValidateOpenAICustomInstructionsCredentials(account.Platform, account.Credentials); err != nil {
+	if err := ValidateOpenAICustomInstructionsCredentials(account.Platform, account.Type, account.Credentials); err != nil {
 		return nil, err
 	}
 	// Extra 使用 map：需要区分“未提供(nil)”与“显式清空({})”。

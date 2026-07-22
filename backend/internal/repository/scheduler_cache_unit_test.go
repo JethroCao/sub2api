@@ -333,6 +333,32 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	require.Nil(t, got.Credentials["unrelated_credential"])
 }
 
+func TestSchedulerCacheSnapshotOmitsCustomInstructionsForUnsupportedOpenAIType(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	bucket := service.SchedulerBucket{GroupID: 43, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	account := service.Account{
+		ID:       43,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeUpstream,
+		Credentials: map[string]any{
+			service.OpenAICustomInstructionsCredentialKey: "must not be cached",
+			"plan_type": "plus",
+		},
+	}
+
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{account}))
+
+	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, snapshot, 1)
+	require.NotContains(t, snapshot[0].Credentials, service.OpenAICustomInstructionsCredentialKey)
+	require.Equal(t, "plus", snapshot[0].Credentials["plan_type"])
+}
+
 func TestBuildSchedulerMetadataAccount_KeepsGrokMediaEligibility(t *testing.T) {
 	t.Run("explicit override", func(t *testing.T) {
 		account := service.Account{

@@ -889,7 +889,7 @@ func buildSchedulerMetadataAccount(account service.Account) service.Account {
 		QuotaDimension:          account.QuotaDimension,
 		AccountGroups:           filterSchedulerAccountGroups(account.AccountGroups),
 		GroupIDs:                filterSchedulerGroupIDs(account.GroupIDs, account.AccountGroups),
-		Credentials:             filterSchedulerCredentials(account.Credentials),
+		Credentials:             filterSchedulerCredentials(account),
 		Extra:                   filterSchedulerExtra(account.Extra),
 	}
 }
@@ -950,14 +950,17 @@ func filterSchedulerGroupIDs(groupIDs []int64, accountGroups []service.AccountGr
 	return filtered
 }
 
-func filterSchedulerCredentials(credentials map[string]any) map[string]any {
-	if len(credentials) == 0 {
+func filterSchedulerCredentials(account service.Account) map[string]any {
+	if len(account.Credentials) == 0 {
 		return nil
 	}
-	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type", service.OpenAICustomInstructionsCredentialKey}
+	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type"}
+	if service.SupportsOpenAICustomInstructions(account.Platform, account.Type) {
+		keys = append(keys, service.OpenAICustomInstructionsCredentialKey)
+	}
 	filtered := make(map[string]any)
 	for _, key := range keys {
-		if value, ok := credentials[key]; ok && value != nil {
+		if value, ok := account.Credentials[key]; ok && value != nil {
 			filtered[key] = value
 		}
 	}
