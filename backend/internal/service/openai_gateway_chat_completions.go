@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -299,6 +301,11 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			}
 			return s.ForwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel)
 		}
+		respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
+		respBody = redactOpenAIAccountInstructionsFromUpstreamBody(account, respBody)
+		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		upstreamMsg = strings.TrimSpace(extractUpstreamErrorMessage(respBody))
+		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 		if account.Type == AccountTypeAPIKey &&
 			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
 			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {

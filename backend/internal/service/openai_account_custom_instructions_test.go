@@ -120,6 +120,17 @@ func TestAppendOpenAIAccountInstructionsUsesCurrentAccountForEachOriginalBody(t 
 	require.Equal(t, "client instructions\n\naccount B", gjson.GetBytes(gotB, "instructions").String())
 }
 
+func TestRedactOpenAIAccountInstructionsFromEscapedJSONBody(t *testing.T) {
+	account := customInstructionsAccount("line/中\nquote\"")
+	body := []byte(`{"error":{"message":"prefix line\/\u4e2d\nquote\" suffix"}}`)
+
+	redacted := redactOpenAIAccountInstructionsFromUpstreamBody(account, body)
+
+	require.NotContains(t, string(redacted), `line\/\u4e2d\nquote\"`)
+	require.NotContains(t, gjson.GetBytes(redacted, "error.message").String(), account.GetOpenAICustomInstructions())
+	require.Contains(t, gjson.GetBytes(redacted, "error.message").String(), openAIAccountInstructionsRedaction)
+}
+
 func customInstructionsAccount(instructions string) *Account {
 	return &Account{
 		Platform: PlatformOpenAI,
