@@ -391,6 +391,118 @@ func TestAccountCustomInstructionsRedactsStreamingFailureEvents(t *testing.T) {
 	}
 }
 
+func TestAccountCustomInstructionsRedactsBareStreamingErrorEvents(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const suffix = "ACCOUNT/INSTRUCTION-SECRET"
+	const escapedSuffix = `ACCOUNT\/INSTRUCTION-SECRET`
+	errorEvent := strings.Join([]string{
+		`event: error`,
+		`data: {"type":"error","error":{"type":"server_error","code":"server_error","message":"temporary upstream failure; echoed account instructions: ` + escapedSuffix + `"}}`,
+		"",
+	}, "\n") + "\n"
+	partialEvent := strings.Join([]string{
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		"",
+	}, "\n") + "\n"
+
+	tests := []struct {
+		name    string
+		path    string
+		body    []byte
+		account *Account
+		forward func(*OpenAIGatewayService, *gin.Context, *Account, []byte) (*OpenAIForwardResult, error)
+	}{
+		{
+			name:    "native responses",
+			path:    "/v1/responses",
+			body:    []byte(`{"model":"gpt-5.4","stream":true,"instructions":"client instructions","input":"hello"}`),
+			account: openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil),
+			forward: func(svc *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.Forward(context.Background(), c, account, body)
+			},
+		},
+		{
+			name: "passthrough",
+			path: "/v1/responses",
+			body: []byte(`{"model":"gpt-5.4","stream":true,"instructions":"client instructions","input":"hello"}`),
+			account: openAIAccountForCustomInstructionsIntegration(
+				AccountTypeAPIKey,
+				suffix,
+				map[string]any{"openai_passthrough": true, "openai_responses_supported": true},
+			),
+			forward: func(svc *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.Forward(context.Background(), c, account, body)
+			},
+		},
+		{
+			name:    "chat completions bridge",
+			path:    "/v1/chat/completions",
+			body:    []byte(`{"model":"gpt-5.4","stream":true,"messages":[{"role":"system","content":"client instructions"},{"role":"user","content":"hello"}]}`),
+			account: openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil),
+			forward: func(svc *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.4")
+			},
+		},
+	}
+
+	sink, releaseLogs := captureStructuredLog(t)
+	defer releaseLogs()
+	for _, tt := range tests {
+		for _, afterOutput := range []bool{false, true} {
+			name := "before output"
+			upstreamSSE := errorEvent
+			if afterOutput {
+				name = "after output"
+				upstreamSSE = partialEvent + errorEvent
+			}
+			t.Run(tt.name+"/"+name, func(t *testing.T) {
+				recorder, c := accountInstructionsErrorContext(t, tt.path, tt.body)
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"text/event-stream"},
+						"x-request-id": []string{"rid_account_instructions_bare_error_echo"},
+					},
+					Body: io.NopCloser(strings.NewReader(upstreamSSE)),
+				}}
+				svc := &OpenAIGatewayService{cfg: accountInstructionsErrorTestConfig(), httpUpstream: upstream}
+
+				_, err := tt.forward(svc, c, tt.account, tt.body)
+
+				require.Error(t, err)
+				assertAccountInstructionsNotExposed(t, c, recorder, err, suffix)
+				require.NotContains(t, recorder.Body.String(), escapedSuffix, "escaped account instructions must not reach the client")
+				for _, key := range []string{OpsUpstreamErrorMessageKey, OpsUpstreamErrorDetailKey} {
+					if value, ok := c.Get(key); ok {
+						require.NotContains(t, fmt.Sprint(value), escapedSuffix, "escaped account instructions must not reach ops context")
+					}
+				}
+				if value, ok := c.Get(OpsUpstreamErrorsKey); ok {
+					require.NotContains(t, fmt.Sprint(value), escapedSuffix, "escaped account instructions must not reach ops events")
+				}
+				if afterOutput {
+					require.Contains(t, recorder.Body.String(), "partial", "prior successful output must be preserved")
+					require.Contains(t, recorder.Body.String(), openAIAccountInstructionsRedaction, "redacted upstream error must reach the client")
+					var failoverErr *UpstreamFailoverError
+					require.False(t, errors.As(err, &failoverErr), "cannot fail over after client output")
+					return
+				}
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, err, &failoverErr, "bare server errors before output must remain eligible for failover")
+				require.NotContains(t, string(failoverErr.ResponseBody), suffix)
+				require.NotContains(t, string(failoverErr.ResponseBody), escapedSuffix)
+			})
+		}
+	}
+	require.False(t, sink.ContainsMessage(suffix), "structured logs must not expose account instructions")
+	for _, field := range []string{"error", "body", "detail", "message", "cause", "close_reason"} {
+		require.False(t, sink.ContainsFieldValue(field, suffix), "structured log field %q must not expose account instructions", field)
+		require.False(t, sink.ContainsFieldValue(field, escapedSuffix), "structured log field %q must not expose escaped account instructions", field)
+	}
+}
+
 func TestForwardAccountCustomInstructionsRedactsUpstreamWebSocketReadCloseError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

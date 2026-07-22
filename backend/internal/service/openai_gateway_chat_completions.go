@@ -583,9 +583,17 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			)
 			return false
 		}
-		refusalDetector.ObservePayload([]byte(payload))
+		eventType := strings.TrimSpace(event.Type)
+		isBareErrorEvent := eventType == "error"
+		isFailureEvent := eventType == "response.failed" || isBareErrorEvent
+		payloadBytes := []byte(payload)
+		if isFailureEvent {
+			payloadBytes = redactOpenAIAccountInstructionsFromUpstreamBody(account, payloadBytes)
+			payload = string(payloadBytes)
+		}
+		refusalDetector.ObservePayload(payloadBytes)
 
-		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)
+		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(eventType) || isBareErrorEvent
 		if isTerminalEvent {
 			if event.Usage != nil {
 				usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
@@ -594,8 +602,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 			}
 		}
-		if strings.TrimSpace(event.Type) == "response.failed" {
-			payloadBytes := redactOpenAIAccountInstructionsFromUpstreamBody(account, []byte(payload))
+		if isFailureEvent {
 			message := extractOpenAISSEErrorMessage(payloadBytes)
 			if hit, code, msg := detectOpenAICyberPolicy(payloadBytes); hit {
 				// cyber_policy 致命且不可重试：不 failover。下发标准 error chunk +
@@ -628,7 +635,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				}
 				return true
 			}
-			if openAIStreamFailedEventShouldFailover(payloadBytes, message) {
+			if !clientOutputStarted && openAIStreamFailedEventShouldFailover(payloadBytes, message) {
 				streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
 				return true
 			}

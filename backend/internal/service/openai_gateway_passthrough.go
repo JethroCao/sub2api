@@ -1079,7 +1079,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				}
 			}
 			eventType := strings.TrimSpace(gjson.Get(trimmedData, "type").String())
-			if eventType == "response.failed" {
+			isBareErrorEvent := eventType == "error"
+			if eventType == "response.failed" || isBareErrorEvent {
 				dataBytes = redactOpenAIAccountInstructionsFromUpstreamBody(account, dataBytes)
 				trimmedData = strings.TrimSpace(string(dataBytes))
 				line = "data: " + string(dataBytes)
@@ -1118,13 +1119,14 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 							s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, dataBytes, failedMessage)
 					}
 				}
+				failedMessage = s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "http_error", dataBytes, failedMessage)
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
 			}
 			if trimmedData == "[DONE]" {
 				sawDone = true
 			}
-			if openAIStreamEventIsTerminal(trimmedData) {
+			if openAIStreamEventIsTerminal(trimmedData) || isBareErrorEvent {
 				sawTerminalEvent = true
 			}
 			if responseID == "" {
