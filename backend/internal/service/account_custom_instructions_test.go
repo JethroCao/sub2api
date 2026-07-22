@@ -22,6 +22,10 @@ func TestAccountGetOpenAICustomInstructions(t *testing.T) {
 		{name: "setup token value trims outer whitespace", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "  first\nsecond  "}}, want: "first\nsecond"},
 		{name: "API key value trims outer whitespace", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "\n first\nsecond \t"}}, want: "first\nsecond"},
 		{name: "unsupported OpenAI type", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeUpstream, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "instructions"}}, want: ""},
+		{name: "spark shadow ignores dirty seeded value", account: func() *Account {
+			parentID := int64(1)
+			return &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID, QuotaDimension: QuotaDimensionSpark, Credentials: map[string]any{OpenAICustomInstructionsCredentialKey: "must stay private"}}
+		}(), want: ""},
 	}
 
 	for _, tt := range tests {

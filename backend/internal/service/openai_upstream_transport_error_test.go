@@ -3,12 +3,18 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"syscall"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 // TestClassifyOpenAITransportError pins which transport-level upstream failures
@@ -79,6 +85,38 @@ func TestClassifyOpenAITransportError(t *testing.T) {
 			got := classifyOpenAITransportError(tc.err).Persistent
 			if got != tc.persistent {
 				t.Fatalf("classifyOpenAITransportError(%q).Persistent = %v, want %v", errString(tc.err), got, tc.persistent)
+			}
+		})
+	}
+}
+
+func TestHandleOpenAIUpstreamTransportErrorRedactsAccountInstructionsFromDiagnostics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tt := range []struct {
+		name   string
+		suffix string
+		err    error
+	}{
+		{name: "literal", suffix: "private transport suffix", err: errors.New("dial failed: private transport suffix")},
+		{name: "escaped", suffix: "private 中\n suffix", err: errors.New(`dial failed: private \u4e2d\n suffix`)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+			account := customInstructionsAccount(tt.suffix)
+			account.ID = 71
+			account.Name = "transport test"
+			svc := &OpenAIGatewayService{}
+
+			err := svc.handleOpenAIUpstreamTransportError(context.Background(), c, account, tt.err, false)
+
+			require.Error(t, err)
+			for _, key := range []string{OpsUpstreamErrorMessageKey, OpsUpstreamErrorDetailKey, OpsUpstreamErrorsKey} {
+				if value, ok := c.Get(key); ok {
+					require.NotContains(t, value, tt.suffix)
+					require.NotContains(t, value, `private \u4e2d\n suffix`)
+				}
 			}
 		})
 	}

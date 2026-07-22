@@ -326,7 +326,7 @@ func (a *Account) GetCredential(key string) string {
 }
 
 func (a *Account) GetOpenAICustomInstructions() string {
-	if a == nil || !SupportsOpenAICustomInstructions(a.Platform, a.Type) {
+	if a == nil || a.QuotaDimensionOrDefault() == QuotaDimensionSpark || !SupportsOpenAICustomInstructions(a.Platform, a.Type) {
 		return ""
 	}
 	raw, ok := a.Credentials[OpenAICustomInstructionsCredentialKey].(string)

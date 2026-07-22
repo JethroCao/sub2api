@@ -606,6 +606,98 @@ func TestAccountCustomInstructionsPreservesSuccessfulBufferedOutput(t *testing.T
 	}
 }
 
+func TestAccountCustomInstructionsRedactsHTTPStreamingReadErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const suffix = "private 中\n suffix"
+	const escapedSuffix = `private \u4e2d\n suffix`
+	tests := []struct {
+		name    string
+		path    string
+		body    []byte
+		account *Account
+		forward func(*OpenAIGatewayService, *gin.Context, *Account, []byte) (*OpenAIForwardResult, error)
+	}{
+		{
+			name: "native streaming", path: "/v1/responses",
+			body:    []byte(`{"model":"gpt-5.4","stream":true,"input":"hello"}`),
+			account: openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil),
+			forward: func(s *OpenAIGatewayService, c *gin.Context, a *Account, b []byte) (*OpenAIForwardResult, error) {
+				return s.Forward(context.Background(), c, a, b)
+			},
+		},
+		{
+			name: "passthrough streaming", path: "/v1/responses",
+			body:    []byte(`{"model":"gpt-5.4","stream":true,"input":"hello"}`),
+			account: openAIAccountForCustomInstructionsIntegration(AccountTypeAPIKey, suffix, map[string]any{"openai_passthrough": true, "openai_responses_supported": true}),
+			forward: func(s *OpenAIGatewayService, c *gin.Context, a *Account, b []byte) (*OpenAIForwardResult, error) {
+				return s.Forward(context.Background(), c, a, b)
+			},
+		},
+		{
+			name: "chat bridge streaming", path: "/v1/chat/completions",
+			body:    []byte(`{"model":"gpt-5.4","stream":true,"messages":[{"role":"user","content":"hello"}]}`),
+			account: openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil),
+			forward: func(s *OpenAIGatewayService, c *gin.Context, a *Account, b []byte) (*OpenAIForwardResult, error) {
+				return s.ForwardAsChatCompletions(context.Background(), c, a, b, "", "gpt-5.4")
+			},
+		},
+		{
+			name: "native buffered", path: "/v1/responses",
+			body:    []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`),
+			account: openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil),
+			forward: func(s *OpenAIGatewayService, c *gin.Context, a *Account, b []byte) (*OpenAIForwardResult, error) {
+				return s.Forward(context.Background(), c, a, b)
+			},
+		},
+		{
+			name: "chat bridge buffered", path: "/v1/chat/completions",
+			body:    []byte(`{"model":"gpt-5.4","stream":false,"messages":[{"role":"user","content":"hello"}]}`),
+			account: openAIAccountForCustomInstructionsIntegration(AccountTypeOAuth, suffix, nil),
+			forward: func(s *OpenAIGatewayService, c *gin.Context, a *Account, b []byte) (*OpenAIForwardResult, error) {
+				return s.ForwardAsChatCompletions(context.Background(), c, a, b, "", "gpt-5.4")
+			},
+		},
+	}
+	for _, tt := range tests {
+		for _, errText := range []string{"upstream read failed: " + suffix, "upstream read failed: " + escapedSuffix} {
+			t.Run(tt.name+"/"+fmt.Sprint(len(errText)), func(t *testing.T) {
+				recorder, c := accountInstructionsErrorContext(t, tt.path, tt.body)
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_read_error"}},
+					Body:       &accountInstructionsErrTailReader{data: []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"), err: errors.New(errText)},
+				}}
+				svc := &OpenAIGatewayService{cfg: accountInstructionsErrorTestConfig(), httpUpstream: upstream}
+				_, err := tt.forward(svc, c, tt.account, tt.body)
+				require.Error(t, err)
+				assertAccountInstructionsNotExposed(t, c, recorder, err, suffix)
+				require.NotContains(t, err.Error(), escapedSuffix)
+			})
+		}
+	}
+}
+
+type accountInstructionsErrTailReader struct {
+	data []byte
+	err  error
+}
+
+func (r *accountInstructionsErrTailReader) Read(p []byte) (int, error) {
+	if len(r.data) > 0 {
+		n := copy(p, r.data)
+		r.data = r.data[n:]
+		return n, nil
+	}
+	if r.err != nil {
+		err := r.err
+		r.err = nil
+		return 0, err
+	}
+	return 0, io.EOF
+}
+
+func (r *accountInstructionsErrTailReader) Close() error { return nil }
+
 func TestChatCompletionsBufferedBareErrorRedactsAndFailsOver(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -529,7 +529,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
+	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, account, "openai messages buffered", requestID)
 	if err != nil {
 		var failureErr *openAICompatBufferedFailureError
 		if errors.As(err, &failureErr) {
@@ -697,6 +697,7 @@ func (s *OpenAIGatewayService) handleOpenAICompatBufferedFailure(
 
 func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
+	account *Account,
 	logPrefix string,
 	requestID string,
 ) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, error) {
@@ -708,7 +709,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json") {
 		payload, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, usage, acc, err
+			return nil, usage, acc, redactOpenAIAccountInstructionsFromUpstreamError(account, err)
 		}
 		if isOpenAICompatDirectJSONFailure(payload) {
 			return nil, usage, acc, &openAICompatBufferedFailureError{payload: payload}
@@ -810,6 +811,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			}
 			resetTimeout()
 			if ev.err != nil {
+				ev.err = redactOpenAIAccountInstructionsFromUpstreamError(account, ev.err)
 				if !errors.Is(ev.err, context.Canceled) && !errors.Is(ev.err, context.DeadlineExceeded) {
 					logger.L().Warn(logPrefix+": read error",
 						zap.Error(ev.err),
@@ -1142,6 +1144,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 		}
 		if err := scanner.Err(); err != nil {
+			err = redactOpenAIAccountInstructionsFromUpstreamError(account, err)
 			handleScanErr(err)
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
 		}
@@ -1215,6 +1218,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				return missingTerminalErr()
 			}
 			if ev.err != nil {
+				ev.err = redactOpenAIAccountInstructionsFromUpstreamError(account, ev.err)
 				handleScanErr(ev.err)
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 			}

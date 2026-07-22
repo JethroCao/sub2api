@@ -330,6 +330,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 
 	if err := scanner.Err(); err != nil {
+		err = redactOpenAIAccountInstructionsFromUpstreamError(account, err)
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			logger.L().Warn("openai chat_completions raw: stream read error",
 				zap.Error(err),

@@ -611,6 +611,23 @@ func TestBuildSchedulerMetadataAccount_KeepsSparkShadowRoutingIdentity(t *testin
 	require.Nil(t, got.Credentials["access_token"])
 }
 
+func TestBuildSchedulerMetadataAccount_DropsDirtySparkShadowCustomInstructions(t *testing.T) {
+	parentID := int64(41)
+	account := service.Account{
+		ID:              42,
+		Platform:        service.PlatformOpenAI,
+		Type:            service.AccountTypeOAuth,
+		ParentAccountID: &parentID,
+		QuotaDimension:  service.QuotaDimensionSpark,
+		Credentials: map[string]any{
+			service.OpenAICustomInstructionsCredentialKey: "must not enter scheduler cache",
+		},
+	}
+
+	got := buildSchedulerMetadataAccount(account)
+	require.NotContains(t, got.Credentials, service.OpenAICustomInstructionsCredentialKey)
+}
+
 func TestSchedulerCacheBucketRetirementFencesWritersAndReopen(t *testing.T) {
 	ctx := context.Background()
 	cache, mr := newSchedulerCacheUnitWithRedis(t)

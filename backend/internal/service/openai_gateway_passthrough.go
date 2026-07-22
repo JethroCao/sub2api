@@ -1173,6 +1173,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		}
 	}
 	if err := documentScanner.Err(); err != nil {
+		err = redactOpenAIAccountInstructionsFromUpstreamError(account, err)
 		if sawTerminalEvent && !sawFailedEvent {
 			return resultWithUsage(), nil
 		}
@@ -1234,7 +1235,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 ) (*openaiNonStreamingResultPassthrough, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
-		return nil, err
+		return nil, redactOpenAIAccountInstructionsFromUpstreamError(account, err)
 	}
 	if failurePayload, failed := extractOpenAINonStreamingFailurePayload(body); failed {
 		return nil, s.handleOpenAINonStreamingFailure(resp, c, account, true, failurePayload)

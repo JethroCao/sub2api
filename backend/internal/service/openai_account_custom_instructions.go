@@ -9,6 +9,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	coderws "github.com/coder/websocket"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -73,11 +74,13 @@ func redactOpenAIAccountInstructionsFromUpstreamBody(account *Account, body []by
 	// mistaken for a newline while searching for the configured suffix. Then
 	// retain semantic matching for upstreams that encoded the same string value
 	// with JSON escapes, mixed literal runes, or surrogate pairs.
-	redacted := strings.ReplaceAll(string(body), suffix, openAIAccountInstructionsRedaction)
-	return []byte(redactOpenAIAccountInstructionsJSONStyleText(redacted, suffix))
+	replacement := safeOpenAIAccountInstructionsRedaction(suffix)
+	redacted := strings.ReplaceAll(string(body), suffix, replacement)
+	return []byte(redactOpenAIAccountInstructionsJSONStyleText(redacted, suffix, replacement))
 }
 
 func redactOpenAIAccountInstructionsJSONStrings(body []byte, suffix string) ([]byte, bool, error) {
+	replacement := safeOpenAIAccountInstructionsRedaction(suffix)
 	var redacted bytes.Buffer
 	lastWritten := 0
 	changed := false
@@ -108,7 +111,7 @@ func redactOpenAIAccountInstructionsJSONStrings(body []byte, suffix string) ([]b
 		if err := json.Unmarshal(body[start:offset], &decoded); err != nil {
 			return nil, false, err
 		}
-		next := strings.ReplaceAll(decoded, suffix, openAIAccountInstructionsRedaction)
+		next := strings.ReplaceAll(decoded, suffix, replacement)
 		if next == decoded {
 			continue
 		}
@@ -130,43 +133,86 @@ func redactOpenAIAccountInstructionsJSONStrings(body []byte, suffix string) ([]b
 	return redacted.Bytes(), true, nil
 }
 
-func redactOpenAIAccountInstructionsJSONStyleText(text, suffix string) string {
+func redactOpenAIAccountInstructionsJSONStyleText(text, suffix, replacement string) string {
 	if text == "" || suffix == "" {
 		return text
 	}
 	target := []rune(suffix)
+	if len(target) == 0 {
+		return text
+	}
+
+	// Decode the source exactly once while retaining byte spans. KMP then finds
+	// semantic matches in O(source+suffix), including mixed literal/JSON-escaped
+	// text, without the repeated-prefix quadratic behavior of probing the full
+	// suffix at every source byte.
+	type decodedUnit struct {
+		r     rune
+		start int
+		end   int
+	}
+	units := make([]decodedUnit, 0, utf8.RuneCountInString(text))
+	for offset := 0; offset < len(text); {
+		r, next := decodeOpenAIAccountInstructionsJSONStyleRune(text, offset)
+		units = append(units, decodedUnit{r: r, start: offset, end: next})
+		offset = next
+	}
+
+	failure := make([]int, len(target))
+	for i, matched := 1, 0; i < len(target); i++ {
+		for matched > 0 && target[i] != target[matched] {
+			matched = failure[matched-1]
+		}
+		if target[i] == target[matched] {
+			matched++
+		}
+		failure[i] = matched
+	}
+
 	var redacted strings.Builder
 	redacted.Grow(len(text))
+	lastWritten := 0
+	matched := 0
 	changed := false
-	for offset := 0; offset < len(text); {
-		if end, ok := matchOpenAIAccountInstructionsJSONStyleRunes(text, offset, target); ok {
-			redacted.WriteString(openAIAccountInstructionsRedaction)
-			offset = end
-			changed = true
+	for i, unit := range units {
+		for matched > 0 && unit.r != target[matched] {
+			matched = failure[matched-1]
+		}
+		if unit.r == target[matched] {
+			matched++
+		}
+		if matched != len(target) {
 			continue
 		}
-		_, next := decodeOpenAIAccountInstructionsJSONStyleRune(text, offset)
-		redacted.WriteString(text[offset:next])
-		offset = next
+		start := units[i-len(target)+1].start
+		redacted.WriteString(text[lastWritten:start])
+		redacted.WriteString(replacement)
+		lastWritten = unit.end
+		changed = true
+		// Match strings.ReplaceAll semantics: matches never overlap.
+		matched = 0
 	}
 	if !changed {
 		return text
 	}
+	redacted.WriteString(text[lastWritten:])
 	return redacted.String()
 }
 
-func matchOpenAIAccountInstructionsJSONStyleRunes(text string, offset int, target []rune) (int, bool) {
-	for _, want := range target {
-		if offset >= len(text) {
-			return offset, false
-		}
-		got, next := decodeOpenAIAccountInstructionsJSONStyleRune(text, offset)
-		if got != want {
-			return offset, false
-		}
-		offset = next
+func safeOpenAIAccountInstructionsRedaction(suffix string) string {
+	if suffix != "" && !strings.Contains(openAIAccountInstructionsRedaction, suffix) {
+		return openAIAccountInstructionsRedaction
 	}
-	return offset, true
+	// The configured value is capped at 16 KiB, so at least one private-use
+	// rune is absent. A one-rune marker that is not itself the one-rune suffix
+	// cannot contain any nonempty multi-rune suffix either.
+	for candidate := rune(0xE000); candidate <= 0xF8FF; candidate++ {
+		marker := string(candidate)
+		if marker != suffix {
+			return marker
+		}
+	}
+	return "" // unreachable for a validated configured suffix
 }
 
 func decodeOpenAIAccountInstructionsJSONStyleRune(text string, offset int) (rune, int) {
@@ -242,5 +288,37 @@ func redactOpenAIAccountInstructionsFromUpstreamError(account *Account, err erro
 	if redacted == err.Error() {
 		return err
 	}
-	return errors.New(redacted)
+	wrapped := &redactedOpenAIAccountInstructionsError{message: redacted, cause: err}
+	var closeErr coderws.CloseError
+	if errors.As(err, &closeErr) {
+		closeErr.Reason = redactOpenAIAccountInstructionsFromUpstreamText(account, closeErr.Reason)
+		wrapped.closeErr = &closeErr
+	}
+	return wrapped
+}
+
+// redactedOpenAIAccountInstructionsError changes only presentation. Unwrap
+// preserves cancellation, timeout, and sentinel identity for retry/failover
+// classification. As intercepts coderws.CloseError so consumers see the same
+// close code with a sanitized reason rather than rediscovering the private
+// reason through the original error chain.
+type redactedOpenAIAccountInstructionsError struct {
+	message  string
+	cause    error
+	closeErr *coderws.CloseError
+}
+
+func (e *redactedOpenAIAccountInstructionsError) Error() string { return e.message }
+func (e *redactedOpenAIAccountInstructionsError) Unwrap() error { return e.cause }
+
+func (e *redactedOpenAIAccountInstructionsError) As(target any) bool {
+	if e == nil || e.closeErr == nil {
+		return false
+	}
+	closeTarget, ok := target.(*coderws.CloseError)
+	if !ok || closeTarget == nil {
+		return false
+	}
+	*closeTarget = *e.closeErr
+	return true
 }

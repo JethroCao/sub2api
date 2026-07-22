@@ -106,7 +106,11 @@ func classifyOpenAITransportError(err error) openAITransportErrorClass {
 //
 // passthrough tags the Ops error event for the OpenAI passthrough forward path.
 func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool) error {
-	safeErr := sanitizeUpstreamErrorMessage(err.Error())
+	// Keep the original typed error for cancellation and persistence
+	// classification, but never expose its account-private instruction echo to
+	// operations state or logs.
+	presentationErr := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
+	safeErr := sanitizeUpstreamErrorMessage(presentationErr.Error())
 	setOpsUpstreamError(c, 0, safeErr, "")
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform:           account.Platform,

@@ -955,7 +955,7 @@ func filterSchedulerCredentials(account service.Account) map[string]any {
 		return nil
 	}
 	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type"}
-	if service.SupportsOpenAICustomInstructions(account.Platform, account.Type) {
+	if account.QuotaDimensionOrDefault() != service.QuotaDimensionSpark && service.SupportsOpenAICustomInstructions(account.Platform, account.Type) {
 		keys = append(keys, service.OpenAICustomInstructionsCredentialKey)
 	}
 	filtered := make(map[string]any)

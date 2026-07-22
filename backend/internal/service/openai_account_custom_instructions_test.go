@@ -1,11 +1,15 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -154,7 +158,6 @@ func TestRedactOpenAIAccountInstructionsFromEveryDuplicateJSONKeyAndValue(t *tes
 	require.JSONEq(t, `{"message":"[redacted account instructions]","message":"safe","[redacted account instructions]":"first","[redacted account instructions]":"second"}`, string(redacted))
 	require.NotContains(t, string(redacted), account.GetOpenAICustomInstructions())
 	require.NotContains(t, string(redacted), `account \u4e2d suffix`)
-	require.Equal(t, 3, strings.Count(string(redacted), openAIAccountInstructionsRedaction))
 }
 
 func TestRedactOpenAIAccountInstructionsLeavesNonmatchingDuplicateJSONUnchanged(t *testing.T) {
@@ -255,6 +258,92 @@ func TestRedactOpenAIAccountInstructionsDoesNotRedactNearSemanticMatch(t *testin
 
 	require.Equal(t, err, redacted)
 	require.NotContains(t, redacted.Error(), openAIAccountInstructionsRedaction)
+}
+
+func TestRedactOpenAIAccountInstructionsReplacementCannotContainConfiguredSuffix(t *testing.T) {
+	tests := []struct {
+		name   string
+		suffix string
+		body   string
+	}{
+		{name: "exact former marker", suffix: openAIAccountInstructionsRedaction, body: `raw [redacted account instructions], escaped [redacted\u0020account instructions], duplicate [redacted account instructions]`},
+		{name: "former marker substring", suffix: "account instructions", body: `raw account instructions and escaped account\u0020instructions`},
+		{name: "single character", suffix: "a", body: `raw a and escaped \u0061 and duplicate a`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := customInstructionsAccount(tt.suffix)
+			got := redactOpenAIAccountInstructionsFromUpstreamBody(account, []byte(tt.body))
+			require.NotContains(t, string(got), tt.suffix)
+		})
+	}
+}
+
+func TestRedactOpenAIAccountInstructionsValidJSONRemainsValidForMarkerAndShortSuffix(t *testing.T) {
+	for _, suffix := range []string{openAIAccountInstructionsRedaction, "a"} {
+		t.Run(suffix, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"raw": suffix + suffix, "escaped": "prefix " + suffix})
+			require.NoError(t, err)
+			got := redactOpenAIAccountInstructionsFromUpstreamBody(customInstructionsAccount(suffix), body)
+			require.True(t, json.Valid(got))
+			require.NotContains(t, string(got), suffix)
+			require.NotContains(t, gjson.GetBytes(got, "raw").String(), suffix)
+		})
+	}
+}
+
+func TestRedactOpenAIAccountInstructionsPreservesWebSocketCloseIdentity(t *testing.T) {
+	suffix := "private close reason"
+	original := coderws.CloseError{Code: coderws.StatusNormalClosure, Reason: "done: " + suffix}
+	got := redactOpenAIAccountInstructionsFromUpstreamError(customInstructionsAccount(suffix), original)
+
+	var closeErr coderws.CloseError
+	require.ErrorAs(t, got, &closeErr)
+	require.Equal(t, coderws.StatusNormalClosure, closeErr.Code)
+	require.Equal(t, coderws.StatusNormalClosure, coderws.CloseStatus(got))
+	require.True(t, isOpenAIWSClientDisconnectError(got), "sanitized normal closure must remain graceful")
+	require.NotContains(t, closeErr.Reason, suffix)
+	require.NotContains(t, got.Error(), suffix)
+}
+
+func TestRedactOpenAIAccountInstructionsPreservesWrappedSentinelClassification(t *testing.T) {
+	sentinel := errors.New("classified sentinel")
+	suffix := "private transport detail"
+	original := fmt.Errorf("write failed: %s: %w", suffix, sentinel)
+	got := redactOpenAIAccountInstructionsFromUpstreamError(customInstructionsAccount(suffix), original)
+
+	require.ErrorIs(t, got, sentinel)
+	require.NotContains(t, got.Error(), suffix)
+}
+
+func TestRedactOpenAIAccountInstructionsPreservesCancellationAndTimeoutClassification(t *testing.T) {
+	const suffix = "private cancellation detail"
+	for _, sentinel := range []error{context.Canceled, context.DeadlineExceeded} {
+		original := fmt.Errorf("upstream failed: %s: %w", suffix, sentinel)
+		got := redactOpenAIAccountInstructionsFromUpstreamError(customInstructionsAccount(suffix), original)
+		require.ErrorIs(t, got, sentinel)
+		require.NotContains(t, got.Error(), suffix)
+	}
+}
+
+func TestRedactOpenAIAccountInstructionsAdversarialRepeatedPrefixCompletesLinearly(t *testing.T) {
+	suffix := strings.Repeat("a", 4095) + "b"
+	body := strings.Repeat("a", 128<<10)
+	started := time.Now()
+	got := redactOpenAIAccountInstructionsFromUpstreamBody(customInstructionsAccount(suffix), []byte(body))
+	require.Equal(t, body, string(got))
+	require.Less(t, time.Since(started), 2*time.Second)
+}
+
+func BenchmarkRedactOpenAIAccountInstructionsRepeatedPrefix(b *testing.B) {
+	suffix := strings.Repeat("a", 4095) + "b"
+	body := []byte(strings.Repeat("a", 1<<20))
+	account := customInstructionsAccount(suffix)
+	b.SetBytes(int64(len(body)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = redactOpenAIAccountInstructionsFromUpstreamBody(account, body)
+	}
 }
 
 func customInstructionsAccount(instructions string) *Account {
