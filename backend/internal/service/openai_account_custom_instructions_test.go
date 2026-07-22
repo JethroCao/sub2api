@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -129,6 +130,17 @@ func TestRedactOpenAIAccountInstructionsFromEscapedJSONBody(t *testing.T) {
 	require.NotContains(t, string(redacted), `line\/\u4e2d\nquote\"`)
 	require.NotContains(t, gjson.GetBytes(redacted, "error.message").String(), account.GetOpenAICustomInstructions())
 	require.Contains(t, gjson.GetBytes(redacted, "error.message").String(), openAIAccountInstructionsRedaction)
+}
+
+func TestRedactOpenAIAccountInstructionsFromEscapedNonJSONError(t *testing.T) {
+	account := customInstructionsAccount("line/中\nquote\"")
+	err := errors.New(`status = policy and reason = "prefix line\/\u4e2d\nquote\" suffix"`)
+
+	redacted := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
+
+	require.NotContains(t, redacted.Error(), `line\/\u4e2d\nquote\"`)
+	require.NotContains(t, redacted.Error(), account.GetOpenAICustomInstructions())
+	require.Contains(t, redacted.Error(), openAIAccountInstructionsRedaction)
 }
 
 func customInstructionsAccount(instructions string) *Account {

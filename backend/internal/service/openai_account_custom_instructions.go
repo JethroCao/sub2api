@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -64,8 +65,50 @@ func redactOpenAIAccountInstructionsFromUpstreamBody(account *Account, body []by
 		}
 	}
 
-	// Preserve non-JSON error bodies while still removing a literal echo.
-	return bytes.ReplaceAll(body, []byte(suffix), []byte(openAIAccountInstructionsRedaction))
+	// Preserve non-JSON error bodies while still removing exact literal and
+	// JSON-escaped renderings of the configured suffix. WebSocket close errors
+	// commonly wrap an escaped JSON reason inside otherwise non-JSON text.
+	redacted := string(body)
+	terms := []string{suffix}
+	if quoted, err := json.Marshal(suffix); err == nil && len(quoted) >= 2 {
+		terms = appendOpenAIAccountInstructionsEscapedRedactionTerms(terms, string(quoted[1:len(quoted)-1]))
+	}
+	if quoted := strconv.QuoteToASCII(suffix); len(quoted) >= 2 {
+		terms = appendOpenAIAccountInstructionsEscapedRedactionTerms(terms, quoted[1:len(quoted)-1])
+	}
+	for _, term := range terms {
+		redacted = strings.ReplaceAll(redacted, term, openAIAccountInstructionsRedaction)
+	}
+	return []byte(redacted)
+}
+
+func appendOpenAIAccountInstructionsEscapedRedactionTerms(terms []string, encoded string) []string {
+	if encoded == "" {
+		return terms
+	}
+	terms = append(terms, encoded)
+	if slashEscaped := strings.ReplaceAll(encoded, "/", `\/`); slashEscaped != encoded {
+		terms = append(terms, slashEscaped)
+	}
+	return terms
+}
+
+func redactOpenAIAccountInstructionsFromUpstreamText(account *Account, text string) string {
+	if text == "" {
+		return text
+	}
+	return string(redactOpenAIAccountInstructionsFromUpstreamBody(account, []byte(text)))
+}
+
+func redactOpenAIAccountInstructionsFromUpstreamError(account *Account, err error) error {
+	if err == nil {
+		return nil
+	}
+	redacted := redactOpenAIAccountInstructionsFromUpstreamText(account, err.Error())
+	if redacted == err.Error() {
+		return err
+	}
+	return errors.New(redacted)
 }
 
 func redactOpenAIAccountInstructionsJSONValue(value any, suffix string) (any, bool) {

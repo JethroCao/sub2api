@@ -479,6 +479,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if readErr != nil {
 			lease.MarkBroken()
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
+			closeReason = redactOpenAIAccountInstructionsFromUpstreamText(account, closeReason)
+			safeReadErr := redactOpenAIAccountInstructionsFromUpstreamError(account, readErr)
 			logOpenAIWSModeInfo(
 				"read_fail account_id=%d conn_id=%s wrote_downstream=%v close_status=%s close_reason=%s cause=%s events=%d token_events=%d terminal_events=%d buffered_pending=%d buffered_flushed=%d first_event=%s last_event=%s",
 				account.ID,
@@ -486,7 +488,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				wroteDownstream,
 				closeStatus,
 				closeReason,
-				truncateOpenAIWSLogValue(readErr.Error(), openAIWSLogValueMaxLen),
+				truncateOpenAIWSLogValue(safeReadErr.Error(), openAIWSLogValueMaxLen),
 				eventCount,
 				tokenEventCount,
 				terminalEventCount,
@@ -496,15 +498,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				truncateOpenAIWSLogValue(lastEventType, openAIWSLogValueMaxLen),
 			)
 			if !wroteDownstream {
-				return nil, wrapOpenAIWSFallback(classifyOpenAIWSReadFallbackReason(readErr), readErr)
+				return nil, wrapOpenAIWSFallback(classifyOpenAIWSReadFallbackReason(readErr), safeReadErr)
 			}
 			if clientDisconnected {
 				break
 			}
-			setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(readErr.Error()), "")
-			return nil, fmt.Errorf("openai ws read event: %w", readErr)
+			setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(safeReadErr.Error()), "")
+			return nil, fmt.Errorf("openai ws read event: %w", safeReadErr)
 		}
-		message = redactOpenAIAccountInstructionsFromUpstreamBody(account, message)
 		if normalized, changed := normalizeCompletedImageGenerationStatus(message); changed {
 			message = normalized
 		}
@@ -512,6 +513,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
 		if eventType == "" {
 			continue
+		}
+		if eventType == "error" || eventType == "response.failed" {
+			message = redactOpenAIAccountInstructionsFromUpstreamBody(account, message)
+			eventType, eventResponseID, responseField = parseOpenAIWSEventEnvelope(message)
 		}
 		eventCount++
 		if firstEventType == "" {
