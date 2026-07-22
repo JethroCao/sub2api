@@ -1451,6 +1451,31 @@
         <p class="input-hint">{{ t('admin.accounts.expiresAtHint') }}</p>
       </div>
 
+      <div
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        class="space-y-2 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <label class="input-label" for="edit-openai-custom-instructions">
+          {{ t('admin.accounts.openai.customInstructions') }}
+        </label>
+        <textarea
+          id="edit-openai-custom-instructions"
+          v-model="openAICustomInstructions"
+          rows="5"
+          class="input font-mono"
+          :class="openAICustomInstructionsTooLong ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''"
+          :aria-invalid="openAICustomInstructionsTooLong"
+          data-testid="edit-openai-custom-instructions"
+        ></textarea>
+        <p class="input-hint">{{ t('admin.accounts.openai.customInstructionsDesc') }}</p>
+        <p class="text-xs text-amber-600 dark:text-amber-400">
+          {{ t('admin.accounts.openai.customInstructionsNonSecretWarning') }}
+        </p>
+        <p v-if="openAICustomInstructionsTooLong" class="text-xs text-red-600 dark:text-red-400">
+          {{ t('admin.accounts.openai.customInstructionsMaxBytes') }}
+        </p>
+      </div>
+
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -2850,6 +2875,27 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+const OPENAI_CUSTOM_INSTRUCTIONS_MAX_BYTES = 16 * 1024
+const openAICustomInstructions = ref('')
+const openAICustomInstructionsByteLength = computed(
+  () => new TextEncoder().encode(openAICustomInstructions.value).length
+)
+const openAICustomInstructionsTooLong = computed(
+  () => openAICustomInstructionsByteLength.value > OPENAI_CUSTOM_INSTRUCTIONS_MAX_BYTES
+)
+const applyOpenAICustomInstructions = (credentials: Record<string, unknown>) => {
+  const value = openAICustomInstructions.value.trim()
+  if (value) {
+    credentials.openai_custom_instructions = value
+  } else {
+    delete credentials.openai_custom_instructions
+  }
+}
+const validateOpenAICustomInstructions = (): boolean => {
+  if (!openAICustomInstructionsTooLong.value) return true
+  appStore.showError(t('admin.accounts.openai.customInstructionsMaxBytes'))
+  return false
+}
 const openAILongContextBillingEnabled = ref(false)
 // OpenAI 订阅档位（Plus/Pro/Free）手动覆盖值,存于 credentials.plan_type;'' 表示清空/自动识别
 const editPlanType = ref<string>('')
@@ -3291,6 +3337,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
+  openAICustomInstructions.value = ''
   openAILongContextBillingEnabled.value = false
   editPlanType.value = ''
   openAICompactMode.value = 'auto'
@@ -3307,6 +3354,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
+    openAICustomInstructions.value =
+      typeof credentials?.openai_custom_instructions === 'string'
+        ? credentials.openai_custom_instructions
+        : ''
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
     openAILongContextBillingEnabled.value = longContextBillingValue === true
@@ -3352,8 +3403,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
     }
-    const credentials = newAccount.credentials as Record<string, unknown> | undefined
-    const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
+    const openAICredentials = newAccount.credentials as Record<string, unknown> | undefined
+    const compactMappings = openAICredentials?.compact_model_mapping as Record<string, string> | undefined
     if (compactMappings && typeof compactMappings === 'object') {
       openAICompactModelMappings.value = Object.entries(compactMappings).map(([from, to]) => ({ from, to }))
     }
@@ -4047,6 +4098,14 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
+  if (
+    props.account.platform === 'openai' &&
+    (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'apikey') &&
+    !validateOpenAICustomInstructions()
+  ) {
+    return
+  }
+
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
     return
@@ -4313,6 +4372,18 @@ const handleSubmit = async () => {
         }
       }
 
+      updatePayload.credentials = newCredentials
+    }
+
+    if (
+      props.account.platform === 'openai' &&
+      (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'apikey')
+    ) {
+      const currentCredentials =
+        (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      applyOpenAICustomInstructions(newCredentials)
       updatePayload.credentials = newCredentials
     }
 

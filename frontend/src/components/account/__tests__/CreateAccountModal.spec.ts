@@ -7,16 +7,18 @@ const {
   probeUpstreamBillingMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  showErrorMock,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   probeUpstreamBillingMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  showErrorMock: vi.fn(),
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError: showErrorMock,
     showSuccess: vi.fn(),
     showWarning: vi.fn(),
   }),
@@ -184,6 +186,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    showErrorMock.mockReset()
   })
 
   it('sends false explicitly for normal OpenAI account creation by default', async () => {
@@ -330,5 +333,81 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await flushPromises()
 
     expect(createOpenAICodexPATMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(false)
+  })
+})
+
+describe('CreateAccountModal OpenAI custom instructions', () => {
+  beforeEach(() => {
+    createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
+    probeUpstreamBillingMock.mockReset().mockResolvedValue({})
+    showErrorMock.mockReset()
+  })
+
+  it('shows the field for OpenAI OAuth and API Key creation only', async () => {
+    const wrapper = mountModal()
+
+    expect(wrapper.find('[data-testid="create-openai-custom-instructions"]').exists()).toBe(false)
+
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(wrapper.find('[data-testid="create-openai-custom-instructions"]').exists()).toBe(true)
+
+    await selectButtonByText(wrapper, 'API Key')
+    expect(wrapper.find('[data-testid="create-openai-custom-instructions"]').exists()).toBe(true)
+
+    await selectButtonByText(wrapper, 'Grok')
+    expect(wrapper.find('[data-testid="create-openai-custom-instructions"]').exists()).toBe(false)
+  })
+
+  it('trims and serializes a configured value for an OpenAI API Key account', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('OpenAI account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('[data-testid="create-openai-custom-instructions"]').setValue('  Be GLM5.2.  ')
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials?.openai_custom_instructions).toBe(
+      'Be GLM5.2.'
+    )
+  })
+
+  it('accepts exactly 16 KiB of UTF-8 instructions', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('OpenAI account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    const exactLimit = '🙂'.repeat(4096)
+    await wrapper.get('[data-testid="create-openai-custom-instructions"]').setValue(exactLimit)
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials?.openai_custom_instructions).toBe(exactLimit)
+  })
+
+  it('blocks submission and shows the localized limit message above 16 KiB', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('OpenAI account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper
+      .get('[data-testid="create-openai-custom-instructions"]')
+      .setValue('🙂'.repeat(4097))
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith(
+      'admin.accounts.openai.customInstructionsMaxBytes'
+    )
+    expect(wrapper.text()).toContain('admin.accounts.openai.customInstructionsMaxBytes')
   })
 })

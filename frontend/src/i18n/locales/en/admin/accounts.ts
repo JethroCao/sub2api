@@ -437,6 +437,13 @@ export default {
       openai: {
         baseUrlHint: 'Leave default for official OpenAI API',
         apiKeyHint: 'Your OpenAI API Key',
+        customInstructions: 'Account instructions',
+        customInstructionsDesc:
+          'Appends this text after the client instructions on every request using this account. Applies to Responses, converted Chat Completions, and Compact requests.',
+        customInstructionsNonSecretWarning:
+          'Do not enter passwords, tokens, or other secrets. This text is sent to the upstream model.',
+        customInstructionsMaxBytes:
+          'Account instructions must not exceed 16 KiB when encoded as UTF-8.',
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',

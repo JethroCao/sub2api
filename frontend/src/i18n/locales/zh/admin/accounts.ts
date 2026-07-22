@@ -504,6 +504,12 @@ export default {
       openai: {
         baseUrlHint: '留空使用官方 OpenAI API',
         apiKeyHint: '您的 OpenAI API Key',
+        customInstructions: '账号附加指令',
+        customInstructionsDesc:
+          '每次使用此账号请求时，都会在客户端原有 instructions 末尾追加这里的内容。适用于 Responses、Chat Completions 转换和 Compact 请求。',
+        customInstructionsNonSecretWarning:
+          '请勿填写密码、令牌或其他敏感信息。此内容会随请求发送给上游模型。',
+        customInstructionsMaxBytes: '账号附加指令不能超过 16 KiB（按 UTF-8 字节计算）。',
         oauthPassthrough: '自动透传（仅替换认证）',
         oauthPassthroughDesc:
           '开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。',

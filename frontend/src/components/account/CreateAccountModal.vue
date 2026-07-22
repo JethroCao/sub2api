@@ -2751,6 +2751,31 @@
         <p class="input-hint">{{ t('admin.accounts.expiresAtHint') }}</p>
       </div>
 
+      <div
+        v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
+        class="space-y-2 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <label class="input-label" for="create-openai-custom-instructions">
+          {{ t('admin.accounts.openai.customInstructions') }}
+        </label>
+        <textarea
+          id="create-openai-custom-instructions"
+          v-model="openAICustomInstructions"
+          rows="5"
+          class="input font-mono"
+          :class="openAICustomInstructionsTooLong ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''"
+          :aria-invalid="openAICustomInstructionsTooLong"
+          data-testid="create-openai-custom-instructions"
+        ></textarea>
+        <p class="input-hint">{{ t('admin.accounts.openai.customInstructionsDesc') }}</p>
+        <p class="text-xs text-amber-600 dark:text-amber-400">
+          {{ t('admin.accounts.openai.customInstructionsNonSecretWarning') }}
+        </p>
+        <p v-if="openAICustomInstructionsTooLong" class="text-xs text-red-600 dark:text-red-400">
+          {{ t('admin.accounts.openai.customInstructionsMaxBytes') }}
+        </p>
+      </div>
+
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
         v-if="form.platform === 'openai'"
@@ -3799,6 +3824,27 @@ const applyGrokOAuthUpstreamConfig = (credentials: Record<string, unknown>) => {
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(true)
 const openaiPassthroughEnabled = ref(false)
+const OPENAI_CUSTOM_INSTRUCTIONS_MAX_BYTES = 16 * 1024
+const openAICustomInstructions = ref('')
+const openAICustomInstructionsByteLength = computed(
+  () => new TextEncoder().encode(openAICustomInstructions.value).length
+)
+const openAICustomInstructionsTooLong = computed(
+  () => openAICustomInstructionsByteLength.value > OPENAI_CUSTOM_INSTRUCTIONS_MAX_BYTES
+)
+const applyOpenAICustomInstructions = (credentials: Record<string, unknown>) => {
+  const value = openAICustomInstructions.value.trim()
+  if (value) {
+    credentials.openai_custom_instructions = value
+  } else {
+    delete credentials.openai_custom_instructions
+  }
+}
+const validateOpenAICustomInstructions = (): boolean => {
+  if (!openAICustomInstructionsTooLong.value) return true
+  appStore.showError(t('admin.accounts.openai.customInstructionsMaxBytes'))
+  return false
+}
 const openAILongContextBillingEnabled = ref(false)
 const openAILongContextBillingTouched = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
@@ -4683,6 +4729,7 @@ const resetForm = () => {
   interceptWarmupRequests.value = false
   autoPauseOnExpired.value = true
   openaiPassthroughEnabled.value = false
+  openAICustomInstructions.value = ''
   openAILongContextBillingEnabled.value = false
   openAILongContextBillingTouched.value = false
   openAICompactMode.value = 'auto'
@@ -4938,6 +4985,10 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
+  if (form.platform === 'openai' && !validateOpenAICustomInstructions()) {
+    return
+  }
+
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
     if (!isGrokSSOInputMethod.value && !form.name.trim()) {
@@ -5111,6 +5162,7 @@ const handleSubmit = async () => {
   }
   if (form.platform === 'openai') {
     applyOpenAIEndpointCapabilities(credentials)
+    applyOpenAICustomInstructions(credentials)
     const compactModelMapping = buildOpenAICompactModelMapping()
     if (compactModelMapping) {
       credentials.compact_model_mapping = compactModelMapping
@@ -5491,6 +5543,7 @@ const handleOpenAIExchange = async (authCode: string) => {
       }
     }
     if (shouldCreateOpenAI) {
+      applyOpenAICustomInstructions(credentials)
       const compactModelMapping = buildOpenAICompactModelMapping()
       if (compactModelMapping) {
         credentials.compact_model_mapping = compactModelMapping
@@ -5538,6 +5591,7 @@ const OPENAI_MOBILE_RT_CLIENT_ID = 'app_LlGpXReQgckcGGUo2JrYvtJK'
 
 const buildOpenAICodexImportCredentialExtras = (): Record<string, unknown> | null => {
   const credentials: Record<string, unknown> = {}
+  applyOpenAICustomInstructions(credentials)
   if (!isOpenAIModelRestrictionDisabled.value) {
     const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
     if (modelMapping) {
@@ -5773,6 +5827,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
           }
         }
         if (shouldCreateOpenAI) {
+          applyOpenAICustomInstructions(credentials)
           const compactModelMapping = buildOpenAICompactModelMapping()
           if (compactModelMapping) {
             credentials.compact_model_mapping = compactModelMapping

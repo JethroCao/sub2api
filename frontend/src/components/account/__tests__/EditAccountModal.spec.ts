@@ -2,15 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode, showErrorMock } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
-  authIsSimpleMode: { value: true }
+  authIsSimpleMode: { value: true },
+  showErrorMock: vi.fn()
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError: showErrorMock,
     showSuccess: vi.fn(),
     showInfo: vi.fn()
   })
@@ -314,6 +315,80 @@ function mountModal(account = buildAccount()) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    showErrorMock.mockReset()
+  })
+
+  it('loads, updates, and clears OpenAI custom instructions without dropping other credentials', async () => {
+    const account = buildAccount()
+    account.credentials.openai_custom_instructions = 'Existing instructions'
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const textarea = wrapper.get<HTMLTextAreaElement>('[data-testid="edit-openai-custom-instructions"]')
+    expect(textarea.element.value).toBe('Existing instructions')
+
+    await textarea.setValue('  Updated instructions  ')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      base_url: 'https://api.openai.com',
+      model_mapping: { 'gpt-5.2': 'gpt-5.2' },
+      openai_custom_instructions: 'Updated instructions'
+    })
+
+    updateAccountMock.mockClear()
+    await textarea.setValue('   ')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty(
+      'openai_custom_instructions'
+    )
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.base_url).toBe(
+      'https://api.openai.com'
+    )
+  })
+
+  it.each(['oauth', 'setup-token', 'apikey'])('shows the field for OpenAI %s accounts', (type) => {
+    const account = buildAccount()
+    account.type = type
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="edit-openai-custom-instructions"]').exists()).toBe(true)
+  })
+
+  it.each([
+    ['anthropic', 'apikey'],
+    ['grok', 'oauth']
+  ])('hides the field for unsupported %s %s accounts', (platform, type) => {
+    const account = buildAccount()
+    account.platform = platform
+    account.type = type
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="edit-openai-custom-instructions"]').exists()).toBe(false)
+  })
+
+  it('blocks updates above the 16 KiB UTF-8 limit', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    await wrapper
+      .get('[data-testid="edit-openai-custom-instructions"]')
+      .setValue('🙂'.repeat(4097))
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith(
+      'admin.accounts.openai.customInstructionsMaxBytes'
+    )
+    expect(wrapper.text()).toContain('admin.accounts.openai.customInstructionsMaxBytes')
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
