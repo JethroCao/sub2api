@@ -1,7 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -160,5 +163,237 @@ func TestOpenAIWSPassthroughAccountCustomInstructionsRejectsNonString(t *testing
 	case payload := <-upstream.writes:
 		t.Fatalf("invalid instructions reached upstream: %s", payload)
 	default:
+	}
+}
+
+func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsFailureEvents(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		payload   string
+	}{
+		{
+			name:      "bare error",
+			eventType: "error",
+			payload:   `{"type":"error","error":{"type":"invalid_request_error","code":"invalid_request","message":"echoed private \u4e2d\n\" suffix"}}`,
+		},
+		{
+			name:      "response failed",
+			eventType: "response.failed",
+			payload:   `{"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"type":"invalid_request_error","code":"invalid_request","message":"echoed private \u4e2d\n\" suffix"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			controlCtx, cancelControl := context.WithCancelCause(context.Background())
+			defer cancelControl(context.Canceled)
+			account := passthroughLifecycleAccount()
+			const suffix = "private 中\n\" suffix"
+			account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
+			upstream := newStagedPassthroughConn()
+			server, serverErr := startPassthroughLifecycleServer(
+				t,
+				controlCtx,
+				newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+				account,
+			)
+			defer server.Close()
+
+			clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
+			defer func() { _ = clientConn.CloseNow() }()
+			_ = requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+			upstream.Send(tt.payload)
+
+			got, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+			require.NoError(t, err)
+			require.Equal(t, tt.eventType, gjson.GetBytes(got, "type").String())
+			require.NotContains(t, string(got), suffix)
+			require.NotContains(t, string(got), `private \u4e2d\n\" suffix`)
+			require.Contains(t, string(got), openAIAccountInstructionsRedaction)
+
+			require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+			select {
+			case err := <-serverErr:
+				require.NoError(t, err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("passthrough failure-event server did not exit")
+			}
+		})
+	}
+}
+
+func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsRateLimitDiagnostics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+	account := passthroughLifecycleAccount()
+	const suffix = "rate private 中\n suffix"
+	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
+	upstream := newStagedPassthroughConn()
+	server, serverErr := startPassthroughLifecycleServer(
+		t,
+		controlCtx,
+		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		account,
+	)
+	defer server.Close()
+
+	var logs bytes.Buffer
+	previousLogWriter := log.Writer()
+	previousLogFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousLogWriter)
+		log.SetFlags(previousLogFlags)
+	})
+
+	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
+	defer func() { _ = clientConn.CloseNow() }()
+	_ = requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+	upstream.Send(`{"type":"error","error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"echoed rate private \u4e2d\n suffix"}}`)
+
+	var serverResult error
+	select {
+	case serverResult = <-serverErr:
+		require.Error(t, serverResult)
+	case <-time.After(3 * time.Second):
+		t.Fatal("passthrough rate-limit server did not exit")
+	}
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, serverResult, &failoverErr)
+	require.NotContains(t, string(failoverErr.ResponseBody), suffix)
+	require.NotContains(t, string(failoverErr.ResponseBody), `rate private \u4e2d\n suffix`)
+	require.Contains(t, string(failoverErr.ResponseBody), openAIAccountInstructionsRedaction)
+	require.NotContains(t, logs.String(), suffix)
+	require.NotContains(t, logs.String(), `rate private \u4e2d\n suffix`)
+}
+
+func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsTransportErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+	account := passthroughLifecycleAccount()
+	const suffix = "transport private 中\n suffix"
+	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
+	upstream := newStagedPassthroughConn()
+	server, serverErr := startPassthroughLifecycleServer(
+		t,
+		controlCtx,
+		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		account,
+	)
+	defer server.Close()
+
+	var logs bytes.Buffer
+	previousLogWriter := log.Writer()
+	previousLogFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousLogWriter)
+		log.SetFlags(previousLogFlags)
+	})
+
+	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
+	defer func() { _ = clientConn.CloseNow() }()
+	_ = requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+	upstream.SendReadError(errors.New(`upstream read failed: transport private \u4e2d\n suffix`))
+	_, clientReadErr := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.Error(t, clientReadErr)
+	require.NotContains(t, clientReadErr.Error(), suffix)
+	require.NotContains(t, clientReadErr.Error(), `transport private \u4e2d\n suffix`)
+
+	select {
+	case err := <-serverErr:
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), suffix)
+		require.NotContains(t, err.Error(), `transport private \u4e2d\n suffix`)
+		require.Contains(t, err.Error(), openAIAccountInstructionsRedaction)
+	case <-time.After(3 * time.Second):
+		t.Fatal("passthrough transport-error server did not exit")
+	}
+	require.NotContains(t, logs.String(), suffix)
+	require.NotContains(t, logs.String(), `transport private \u4e2d\n suffix`)
+}
+
+func TestOpenAIWSPassthroughAccountCustomInstructionsRedactsUpstreamCloseErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+	account := passthroughLifecycleAccount()
+	const suffix = "close private 中 suffix"
+	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
+	upstream := newStagedPassthroughConn()
+	server, serverErr := startPassthroughLifecycleServer(
+		t,
+		controlCtx,
+		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		account,
+	)
+	defer server.Close()
+
+	var logs bytes.Buffer
+	previousLogWriter := log.Writer()
+	previousLogFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousLogWriter)
+		log.SetFlags(previousLogFlags)
+	})
+
+	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
+	defer func() { _ = clientConn.CloseNow() }()
+	_ = requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+	upstream.SendReadError(coderws.CloseError{Code: coderws.StatusInternalError, Reason: "echoed " + suffix})
+	_, clientReadErr := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.Error(t, clientReadErr)
+	require.NotContains(t, clientReadErr.Error(), suffix)
+
+	select {
+	case err := <-serverErr:
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), suffix)
+		require.Contains(t, err.Error(), openAIAccountInstructionsRedaction)
+	case <-time.After(3 * time.Second):
+		t.Fatal("passthrough upstream-close server did not exit")
+	}
+	require.NotContains(t, logs.String(), suffix)
+}
+
+func TestOpenAIWSPassthroughAccountCustomInstructionsPreservesSuccessfulEvents(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+	account := passthroughLifecycleAccount()
+	const suffix = "success private suffix"
+	account.Credentials[OpenAICustomInstructionsCredentialKey] = suffix
+	upstream := newStagedPassthroughConn()
+	server, serverErr := startPassthroughLifecycleServer(
+		t,
+		controlCtx,
+		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		account,
+	)
+	defer server.Close()
+
+	clientConn := dialPassthroughAccountInstructionsClient(t, server.URL, `{"type":"response.create","model":"gpt-5.1"}`)
+	defer func() { _ = clientConn.CloseNow() }()
+	_ = requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+	success := `{"type":"response.completed","response":{"id":"resp_success","model":"gpt-5.1","output":[{"type":"message","content":[{"type":"output_text","text":"success private suffix"}]}],"usage":{"input_tokens":1,"output_tokens":1}}}`
+	upstream.Send(success)
+
+	got, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, success, string(got))
+	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+	select {
+	case err := <-serverErr:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("passthrough success server did not exit")
 	}
 }

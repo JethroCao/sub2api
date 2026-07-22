@@ -44,6 +44,50 @@ type openAIWSPolicyEnforcingFrameConn struct {
 
 var _ openaiwsv2.FrameConn = (*openAIWSPolicyEnforcingFrameConn)(nil)
 
+// openAIWSAccountInstructionsRedactingFrameConn is the privacy boundary for
+// passthrough upstream traffic. The selected account's private instruction
+// suffix may be echoed by upstream failure payloads or transport errors. Keep
+// successful frames byte-for-byte identical, but sanitize failure frames and
+// all connection errors before the relay can send them to clients or expose
+// them through failover diagnostics, operations state, traces, or logs.
+type openAIWSAccountInstructionsRedactingFrameConn struct {
+	inner   openaiwsv2.FrameConn
+	account *Account
+}
+
+var _ openaiwsv2.FrameConn = (*openAIWSAccountInstructionsRedactingFrameConn)(nil)
+
+func (c *openAIWSAccountInstructionsRedactingFrameConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
+	if c == nil || c.inner == nil {
+		return coderws.MessageText, nil, errOpenAIWSConnClosed
+	}
+	msgType, payload, err := c.inner.ReadFrame(ctx)
+	if err != nil {
+		return msgType, payload, redactOpenAIAccountInstructionsFromUpstreamError(c.account, err)
+	}
+	if msgType == coderws.MessageText {
+		switch strings.TrimSpace(gjson.GetBytes(payload, "type").String()) {
+		case "error", "response.failed":
+			payload = redactOpenAIAccountInstructionsFromUpstreamBody(c.account, payload)
+		}
+	}
+	return msgType, payload, nil
+}
+
+func (c *openAIWSAccountInstructionsRedactingFrameConn) WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error {
+	if c == nil || c.inner == nil {
+		return errOpenAIWSConnClosed
+	}
+	return redactOpenAIAccountInstructionsFromUpstreamError(c.account, c.inner.WriteFrame(ctx, msgType, payload))
+}
+
+func (c *openAIWSAccountInstructionsRedactingFrameConn) Close() error {
+	if c == nil || c.inner == nil {
+		return nil
+	}
+	return redactOpenAIAccountInstructionsFromUpstreamError(c.account, c.inner.Close())
+}
+
 func (c *openAIWSPolicyEnforcingFrameConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
 	if c == nil || c.inner == nil {
 		return coderws.MessageText, nil, errOpenAIWSConnClosed
@@ -819,8 +863,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
 	}
+	privacySafeUpstreamFrameConn := &openAIWSAccountInstructionsRedactingFrameConn{
+		inner:   upstreamFrameConn,
+		account: account,
+	}
 	relayUpstreamFrameConn := &openAIWSPassthroughFirstOutputFrameConn{
-		inner:             upstreamFrameConn,
+		inner:             privacySafeUpstreamFrameConn,
 		activeReadTimeout: s.openAIWSPassthroughIdleTimeout(),
 		deadlineChanged:   make(chan struct{}, 1),
 		resolveDeadline: func(payload []byte) openAIWSPassthroughFirstOutputDeadline {
