@@ -22,6 +22,9 @@ func (r *channelMonitorRepoStub) Delete(context.Context, int64) error           
 func (r *channelMonitorRepoStub) List(context.Context, ChannelMonitorListParams) ([]*ChannelMonitor, int64, error) {
 	return nil, 0, nil
 }
+func (r *channelMonitorRepoStub) FindByDuplicateOperationID(context.Context, string) (*ChannelMonitor, error) {
+	return nil, nil
+}
 func (r *channelMonitorRepoStub) ListEnabled(context.Context) ([]*ChannelMonitor, error) {
 	if r.monitor == nil || !r.monitor.Enabled {
 		return nil, nil
