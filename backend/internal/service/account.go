@@ -498,6 +498,13 @@ const (
 	OpenAICompactModeForceOff = "force_off"
 )
 
+const (
+	OpenAIJSONSchemaModeExtraKey        = "openai_json_schema_mode"
+	OpenAIJSONSchemaModeAuto            = "auto"
+	OpenAIJSONSchemaModePassthrough     = "passthrough"
+	OpenAIJSONSchemaModeForceJSONObject = "force_json_object"
+)
+
 func normalizeOpenAICompactMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case OpenAICompactModeForceOn:
@@ -506,6 +513,17 @@ func normalizeOpenAICompactMode(mode string) string {
 		return OpenAICompactModeForceOff
 	default:
 		return OpenAICompactModeAuto
+	}
+}
+
+func normalizeOpenAIJSONSchemaMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case OpenAIJSONSchemaModePassthrough:
+		return OpenAIJSONSchemaModePassthrough
+	case OpenAIJSONSchemaModeForceJSONObject:
+		return OpenAIJSONSchemaModeForceJSONObject
+	default:
+		return OpenAIJSONSchemaModeAuto
 	}
 }
 
@@ -826,6 +844,17 @@ func (a *Account) GetOpenAICompactMode() string {
 	}
 	mode, _ := a.Extra["openai_compact_mode"].(string)
 	return normalizeOpenAICompactMode(mode)
+}
+
+// GetOpenAIJSONSchemaMode returns the account-level structured-output
+// compatibility mode. Only OpenAI API-key accounts may opt into a downgrade;
+// every other account preserves the existing request behavior.
+func (a *Account) GetOpenAIJSONSchemaMode() string {
+	if a == nil || !a.IsOpenAI() || a.Type != AccountTypeAPIKey || a.Extra == nil {
+		return OpenAIJSONSchemaModeAuto
+	}
+	mode, _ := a.Extra[OpenAIJSONSchemaModeExtraKey].(string)
+	return normalizeOpenAIJSONSchemaMode(mode)
 }
 
 // OpenAICompactSupportKnown reports whether compact capability is known for this
