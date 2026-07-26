@@ -766,6 +766,52 @@
         </div>
       </div>
 
+      <!-- OpenAI OAuth mapped-model Responses Lite compatibility -->
+      <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-openai-strip-responses-lite-label"
+              class="input-label mb-0"
+              for="bulk-edit-openai-strip-responses-lite-enabled"
+            >
+              {{ t('admin.accounts.openai.stripResponsesLiteOnModelMapping') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.stripResponsesLiteOnModelMappingDesc') }}
+            </p>
+          </div>
+          <input
+            v-model="enableStripResponsesLiteOnModelMapping"
+            id="bulk-edit-openai-strip-responses-lite-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-openai-strip-responses-lite"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-openai-strip-responses-lite"
+          :class="!enableStripResponsesLiteOnModelMapping && 'pointer-events-none opacity-50'"
+        >
+          <button
+            type="button"
+            data-testid="bulk-edit-openai-strip-responses-lite-toggle"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              stripResponsesLiteOnModelMapping ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="stripResponsesLiteOnModelMapping = !stripResponsesLiteOnModelMapping"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                stripResponsesLiteOnModelMapping ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- OpenAI OAuth Codex CLI only -->
       <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1441,6 +1487,7 @@ const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
 const enableOpenAIJSONSchemaMode = ref(false)
+const enableStripResponsesLiteOnModelMapping = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
 const enableRpmLimit = ref(false)
 
@@ -1473,6 +1520,7 @@ const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
+const stripResponsesLiteOnModelMapping = ref(false)
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const rpmLimitEnabled = ref(false)
 const bulkBaseRpm = ref<number | null>(null)
@@ -1766,6 +1814,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     extra.openai_json_schema_mode = openAIJSONSchemaMode.value
   }
 
+  if (enableStripResponsesLiteOnModelMapping.value) {
+    const extra = ensureExtra()
+    extra.openai_strip_responses_lite_on_model_mapping = stripResponsesLiteOnModelMapping.value
+  }
+
   if (enableOpenAICompactModelMapping.value) {
     credentials.compact_model_mapping = buildOpenAICompactModelMapping() ?? {}
     credentialsChanged = true
@@ -1872,6 +1925,7 @@ const handleSubmit = async () => {
     enableCodexCLIOnlyAppServer.value ||
     enableOpenAICompactMode.value ||
     enableOpenAIJSONSchemaMode.value ||
+    enableStripResponsesLiteOnModelMapping.value ||
     enableOpenAICompactModelMapping.value ||
     enableRpmLimit.value ||
     userMsgQueueMode.value !== null
@@ -2002,6 +2056,7 @@ watch(
       enableCodexCLIOnlyAppServer.value = false
       enableOpenAICompactMode.value = false
       enableOpenAIJSONSchemaMode.value = false
+      enableStripResponsesLiteOnModelMapping.value = false
       enableOpenAICompactModelMapping.value = false
       enableRpmLimit.value = false
 
@@ -2030,6 +2085,7 @@ watch(
       codexCLIOnlyAppServerEnabled.value = false
       openAICompactMode.value = 'auto'
       openAIJSONSchemaMode.value = 'auto'
+      stripResponsesLiteOnModelMapping.value = false
       openAICompactModelMappings.value = []
       rpmLimitEnabled.value = false
       bulkBaseRpm.value = null

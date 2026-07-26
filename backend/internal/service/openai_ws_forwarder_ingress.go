@@ -289,6 +289,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
+		if shouldStripOpenAIResponsesLiteForMappedModel(account, originalModel, upstreamModel) && isOpenAIResponsesLiteWebSocketPayload(normalized) {
+			strippedPayload, _, stripErr := stripOpenAIResponsesLiteWebSocketMetadata(normalized)
+			if stripErr != nil {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(
+					coderws.StatusPolicyViolation,
+					"invalid websocket client metadata",
+					stripErr,
+				)
+			}
+			normalized = strippedPayload
+		}
 		if modelMissing || upstreamModel != originalModel {
 			next, setErr := applyPayloadMutation(normalized, "model", upstreamModel)
 			if setErr != nil {

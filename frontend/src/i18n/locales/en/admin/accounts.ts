@@ -536,6 +536,9 @@ export default {
         jsonSchemaModeAuto: 'Auto',
         jsonSchemaModePassthrough: 'Passthrough',
         jsonSchemaModeForceJSONObject: 'Force JSON Object',
+        stripResponsesLiteOnModelMapping: 'Remove Responses Lite after model mapping',
+        stripResponsesLiteOnModelMappingDesc:
+          'OpenAI OAuth/subscription accounts only. When model mapping changes the upstream model, omit the Responses Lite signal so an incompatible target model does not return HTTP 400.',
         endpointCapabilities: 'Endpoint capabilities',
         endpointCapabilitiesDesc:
           'Used by account routing. The text endpoint follows the Responses API support setting above and is shown as Responses, Chat Completions, or auto mode; Embeddings independently controls /v1/embeddings.',

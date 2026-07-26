@@ -448,6 +448,49 @@ func TestProxyOpenAIWSHTTPBridgeTurnForGrokDefaultsEmptyModelTo45(t *testing.T) 
 	require.Len(t, events, 2)
 }
 
+func TestProxyOpenAIWSHTTPBridgeTurnStripsResponsesLiteAfterModelMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.created","response":{"id":"resp_mapped","model":"gpt-5.5"}}`,
+			"",
+			`data: {"type":"response.completed","response":{"id":"resp_mapped","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`,
+			"",
+		}, "\n"))),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          73,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"chatgpt_account_id": "chatgpt-account"},
+		Extra:       map[string]any{OpenAIStripResponsesLiteOnModelMappingExtraKey: true},
+	}
+	payload := []byte(`{"type":"response.create","model":"gpt-5.5","client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true","keep":"value"},"input":"hi"}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(), c, account, "access-token", payload, len(payload),
+		"gpt-5.6-terra", "", "", "", "", 1,
+		func([]byte) error { return nil },
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Empty(t, upstream.lastReq.Header.Get(responsesLiteHeader))
+	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata."+responsesLiteWSMetadataKey).Exists())
+	require.Equal(t, "value", gjson.GetBytes(upstream.lastBody, "client_metadata.keep").String())
+}
+
 func TestProxyOpenAIWSHTTPBridgeTurnPromotesCodexAdditionalToolsForMixedCache(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

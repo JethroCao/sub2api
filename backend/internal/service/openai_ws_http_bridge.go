@@ -185,6 +185,17 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
+	upstreamRequestModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	stripResponsesLiteForMappedModel := account.Platform != PlatformGrok &&
+		shouldStripOpenAIResponsesLiteForMappedModel(account, originalModel, upstreamRequestModel) &&
+		isOpenAIResponsesLiteWebSocketPayload(payload)
+	if stripResponsesLiteForMappedModel {
+		strippedBody, _, stripErr := stripOpenAIResponsesLiteWebSocketMetadata(body)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip Responses Lite websocket metadata: %w", stripErr)
+		}
+		body = strippedBody
+	}
 
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	var upstreamReq *http.Request
@@ -215,7 +226,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if err != nil {
 		return nil, err
 	}
-	if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
+	if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) && !stripResponsesLiteForMappedModel {
 		upstreamReq.Header.Set(responsesLiteHeader, "true")
 	}
 

@@ -557,6 +557,11 @@ const (
 	OpenAIJSONSchemaModeAuto            = "auto"
 	OpenAIJSONSchemaModePassthrough     = "passthrough"
 	OpenAIJSONSchemaModeForceJSONObject = "force_json_object"
+	// OpenAIStripResponsesLiteOnModelMappingExtraKey controls whether an
+	// account drops the Codex Responses Lite signal after its model mapping
+	// changes the model sent upstream. It is opt-in to preserve the existing
+	// behavior for accounts whose mapped model still supports Responses Lite.
+	OpenAIStripResponsesLiteOnModelMappingExtraKey = "openai_strip_responses_lite_on_model_mapping"
 )
 
 func normalizeOpenAICompactMode(mode string) string {
@@ -909,6 +914,19 @@ func (a *Account) GetOpenAIJSONSchemaMode() string {
 	}
 	mode, _ := a.Extra[OpenAIJSONSchemaModeExtraKey].(string)
 	return normalizeOpenAIJSONSchemaMode(mode)
+}
+
+// ShouldStripOpenAIResponsesLiteOnModelMapping reports whether this OpenAI
+// OAuth-style account should suppress the Responses Lite signal when a model
+// mapping changes the model sent upstream. API-key accounts intentionally do
+// not use this setting because their public API compatibility is controlled by
+// the upstream provider rather than the ChatGPT subscription endpoint.
+func (a *Account) ShouldStripOpenAIResponsesLiteOnModelMapping() bool {
+	if a == nil || !a.IsOpenAI() || (a.Type != AccountTypeOAuth && a.Type != AccountTypeSetupToken) || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra[OpenAIStripResponsesLiteOnModelMappingExtraKey].(bool)
+	return ok && enabled
 }
 
 // OpenAICompactSupportKnown reports whether compact capability is known for this

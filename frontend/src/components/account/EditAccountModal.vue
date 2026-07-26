@@ -1643,6 +1643,24 @@
         </div>
       </div>
 
+      <!-- OpenAI OAuth mapped-model Responses Lite compatibility -->
+      <div
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.stripResponsesLiteOnModelMapping') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.stripResponsesLiteOnModelMappingDesc') }}
+          </p>
+        </div>
+        <Toggle
+          v-model="stripResponsesLiteOnModelMapping"
+          data-testid="openai-strip-responses-lite-on-model-mapping"
+          :aria-label="t('admin.accounts.openai.stripResponsesLiteOnModelMapping')"
+        />
+      </div>
+
       <!-- OpenAI APIKey JSON Schema compatibility -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'apikey'"
@@ -2916,6 +2934,7 @@ const editPlanType = ref<string>('')
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
+const stripResponsesLiteOnModelMapping = ref(false)
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -3357,6 +3376,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
   openAIJSONSchemaMode.value = 'auto'
+  stripResponsesLiteOnModelMapping.value = false
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openAICompactModelMappings.value = []
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -3380,6 +3400,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       ? readPlanType(newAccount.credentials as Record<string, unknown> | undefined)
       : ''
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
+    stripResponsesLiteOnModelMapping.value = extra?.openai_strip_responses_lite_on_model_mapping === true
     if (newAccount.type === 'apikey') {
       openAIResponsesMode.value = normalizeOpenAIResponsesMode(extra?.openai_responses_mode)
       openAIJSONSchemaMode.value = (extra?.openai_json_schema_mode as OpenAIJSONSchemaMode) || 'auto'
@@ -4653,6 +4674,14 @@ const handleSubmit = async () => {
 		}
 			newExtra.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
 		}
+      if (
+        (props.account.type === 'oauth' || props.account.type === 'setup-token') &&
+        stripResponsesLiteOnModelMapping.value
+      ) {
+        newExtra.openai_strip_responses_lite_on_model_mapping = true
+      } else {
+        delete newExtra.openai_strip_responses_lite_on_model_mapping
+      }
 		if (autoPause5hThreshold.value != null && autoPause5hThreshold.value > 0) {
 			newExtra.auto_pause_5h_threshold = autoPause5hThreshold.value / 100
 		} else {

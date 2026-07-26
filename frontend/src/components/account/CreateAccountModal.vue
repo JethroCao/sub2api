@@ -3022,6 +3022,24 @@
         </div>
       </div>
 
+      <!-- OpenAI OAuth mapped-model Responses Lite compatibility -->
+      <div
+        v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.stripResponsesLiteOnModelMapping') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.stripResponsesLiteOnModelMappingDesc') }}
+          </p>
+        </div>
+        <Toggle
+          v-model="stripResponsesLiteOnModelMapping"
+          data-testid="openai-strip-responses-lite-on-model-mapping"
+          :aria-label="t('admin.accounts.openai.stripResponsesLiteOnModelMapping')"
+        />
+      </div>
+
       <!-- OpenAI APIKey Responses API support mode -->
       <div
         v-if="form.platform === 'openai' && accountCategory === 'apikey'"
@@ -3850,6 +3868,7 @@ const openAILongContextBillingTouched = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
+const stripResponsesLiteOnModelMapping = ref(false)
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -4735,6 +4754,7 @@ const resetForm = () => {
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
   openAIJSONSchemaMode.value = 'auto'
+  stripResponsesLiteOnModelMapping.value = false
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -4852,6 +4872,12 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     extra.openai_json_schema_mode = openAIJSONSchemaMode.value
   } else {
     delete extra.openai_json_schema_mode
+  }
+
+  if (accountCategory.value === 'oauth-based' && stripResponsesLiteOnModelMapping.value) {
+    extra.openai_strip_responses_lite_on_model_mapping = true
+  } else {
+    delete extra.openai_strip_responses_lite_on_model_mapping
   }
 
   return Object.keys(extra).length > 0 ? extra : undefined

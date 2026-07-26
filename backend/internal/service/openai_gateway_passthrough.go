@@ -49,6 +49,18 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			attemptImageIntentInvalidated = true
 		}
 	}
+	stripResponsesLiteForMappedModel := shouldStripOpenAIResponsesLiteForMappedModel(account, reqModel, upstreamPassthroughModel) &&
+		(isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) || isOpenAIResponsesLiteWebSocketPayload(body))
+	if stripResponsesLiteForMappedModel && isOpenAIResponsesLiteWebSocketPayload(body) {
+		strippedBody, stripped, stripErr := stripOpenAIResponsesLiteWebSocketMetadata(body)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip Responses Lite websocket metadata: %w", stripErr)
+		}
+		if stripped {
+			body = strippedBody
+			attemptImageIntentInvalidated = true
+		}
+	}
 
 	if account != nil && account.Type == AccountTypeOAuth {
 		if rejectReason := detectOpenAIPassthroughInstructionsRejectReason(reqModel, body); rejectReason != "" {
@@ -191,6 +203,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		releaseUpstreamCtx()
 		if buildErr != nil {
 			return nil, buildErr
+		}
+		if stripResponsesLiteForMappedModel {
+			stripOpenAIResponsesLiteHeader(upstreamReq.Header)
 		}
 
 		upstreamStart := time.Now()

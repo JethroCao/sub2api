@@ -309,6 +309,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markPatchSet("model", upstreamModel)
 		}
 	}
+	stripResponsesLiteForMappedModel := shouldStripOpenAIResponsesLiteForMappedModel(account, originalModel, upstreamModel) &&
+		(isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) || isOpenAIResponsesLiteWebSocketPayload(body))
+	if stripResponsesLiteForMappedModel && isOpenAIResponsesLiteWebSocketPayload(body) {
+		markPatchDelete("client_metadata." + responsesLiteWSMetadataKey)
+	}
 	if strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()) == "minimal" {
 		markPatchSet("reasoning.effort", "none")
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Normalized reasoning.effort: minimal -> none (account: %s)", account.Name)
@@ -824,6 +829,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				headerGuard.close()
 			}
 			return nil, err
+		}
+		if stripResponsesLiteForMappedModel {
+			stripOpenAIResponsesLiteHeader(upstreamReq.Header)
 		}
 
 		// Get proxy URL

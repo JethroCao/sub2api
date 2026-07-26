@@ -100,6 +100,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactOnlyModelMappingOverridesU
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(nil))
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set(responsesLiteHeader, "true")
 
 	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"store":true,"instructions":"compact-pass","input":[{"type":"text","text":"compact me"}]}`)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -120,7 +121,10 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactOnlyModelMappingOverridesU
 			"chatgpt_account_id":    "chatgpt-acc",
 			"compact_model_mapping": map[string]any{"gpt-5.4": "gpt-5.4-openai-compact"},
 		},
-		Extra:       map[string]any{"openai_passthrough": true},
+		Extra: map[string]any{
+			"openai_passthrough":                           true,
+			OpenAIStripResponsesLiteOnModelMappingExtraKey: true,
+		},
 		Status:      StatusActive,
 		Schedulable: true,
 	}
@@ -132,4 +136,6 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactOnlyModelMappingOverridesU
 	require.Equal(t, "gpt-5.4-openai-compact", result.UpstreamModel)
 	require.Equal(t, "gpt-5.4-openai-compact", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, "gpt-5.4", gjson.GetBytes(rec.Body.Bytes(), "model").String())
+	require.Empty(t, upstream.lastReq.Header.Get(responsesLiteHeader))
+	require.Equal(t, "true", c.Request.Header.Get(responsesLiteHeader))
 }

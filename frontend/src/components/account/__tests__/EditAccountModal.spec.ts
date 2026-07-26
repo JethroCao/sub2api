@@ -747,6 +747,31 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_json_schema_mode')
   })
 
+  it('loads and updates the mapped-model Responses Lite compatibility switch for OpenAI OAuth', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials = {
+      access_token: 'oauth-token',
+      model_mapping: { 'gpt-5.6-terra': 'gpt-5.5' }
+    }
+    account.extra = {
+      openai_strip_responses_lite_on_model_mapping: true
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const toggle = wrapper.get('[data-testid="openai-strip-responses-lite-on-model-mapping"]')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+
+    await toggle.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra)
+      .not.toHaveProperty('openai_strip_responses_lite_on_model_mapping')
+  })
+
   it('submits the account upstream billing auto-probe setting', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()

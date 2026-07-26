@@ -308,14 +308,15 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 			"unrelated_credential":                        "must not be cached",
 		},
 		Extra: map[string]any{
-			"openai_oauth_responses_websockets_v2_enabled": true,
-			"openai_oauth_responses_websockets_v2_mode":    service.OpenAIWSIngressModePassthrough,
-			"openai_ws_force_http":                         true,
-			"openai_responses_mode":                        "force_chat_completions",
-			"openai_responses_supported":                   false,
-			service.OpenAIJSONSchemaModeExtraKey:           service.OpenAIJSONSchemaModeForceJSONObject,
-			"mixed_scheduling":                             true,
-			"unused_large_field":                           "drop-me",
+			"openai_oauth_responses_websockets_v2_enabled":         true,
+			"openai_oauth_responses_websockets_v2_mode":            service.OpenAIWSIngressModePassthrough,
+			"openai_ws_force_http":                                 true,
+			"openai_responses_mode":                                "force_chat_completions",
+			"openai_responses_supported":                           false,
+			service.OpenAIJSONSchemaModeExtraKey:                   service.OpenAIJSONSchemaModeForceJSONObject,
+			service.OpenAIStripResponsesLiteOnModelMappingExtraKey: true,
+			"mixed_scheduling":                                     true,
+			"unused_large_field":                                   "drop-me",
 		},
 	}
 
@@ -327,6 +328,7 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	require.Equal(t, "force_chat_completions", got.Extra["openai_responses_mode"])
 	require.Equal(t, false, got.Extra["openai_responses_supported"])
 	require.Equal(t, service.OpenAIJSONSchemaModeForceJSONObject, got.Extra[service.OpenAIJSONSchemaModeExtraKey])
+	require.Equal(t, true, got.Extra[service.OpenAIStripResponsesLiteOnModelMappingExtraKey])
 	require.Equal(t, true, got.Extra["mixed_scheduling"])
 	require.Nil(t, got.Extra["unused_large_field"])
 	require.Equal(t, "account suffix", got.Credentials[service.OpenAICustomInstructionsCredentialKey])

@@ -404,6 +404,25 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('OpenAI OAuth 批量编辑可开启模型映射后的 Responses Lite 兼容模式', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+
+    await wrapper.get('#bulk-edit-openai-strip-responses-lite-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-openai-strip-responses-lite-toggle"]').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: {
+        openai_strip_responses_lite_on_model_mapping: true
+      }
+    })
+  })
+
   it('筛选结果批量编辑可统一开启上游倍率自动探测', async () => {
     const wrapper = mountModal({
       accountIds: [],

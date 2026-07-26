@@ -598,6 +598,9 @@ export default {
         jsonSchemaModeAuto: '自动',
         jsonSchemaModePassthrough: '原样透传',
         jsonSchemaModeForceJSONObject: '强制 JSON Object',
+        stripResponsesLiteOnModelMapping: '模型映射后移除 Responses Lite',
+        stripResponsesLiteOnModelMappingDesc:
+          '仅适用于 OpenAI OAuth/订阅账号。请求模型被映射为其他上游模型时，不再转发 Responses Lite 标记，避免目标模型不支持 Lite 而返回 400。',
         endpointCapabilities: '端点能力',
         endpointCapabilitiesDesc:
           '用于调度筛选。文本端点会跟随上方 Responses API 支持显示为 Responses、Chat Completions 或自动模式；Embeddings 独立控制 /v1/embeddings。',
