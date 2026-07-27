@@ -8,9 +8,10 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// normalizeOpenAIResponsesMessagePartialForAccount adds the explicit
-// partial=false field required by some OpenAI-compatible Responses providers.
-// Existing values are preserved so clients can still submit partial messages.
+// normalizeOpenAIResponsesMessagePartialForAccount normalizes the explicit
+// partial field required by some OpenAI-compatible Responses providers. Ark
+// requires the final assistant message to be partial=true and every other
+// message to be partial=false.
 func normalizeOpenAIResponsesMessagePartialForAccount(
 	account *Account,
 	body []byte,
@@ -27,16 +28,29 @@ func normalizeOpenAIResponsesMessagePartialForAccount(
 		return body, false, nil
 	}
 
+	items := input.Array()
+	lastAssistantIndex := -1
+	for index, item := range items {
+		if isOpenAIResponsesMessage(item) &&
+			strings.EqualFold(strings.TrimSpace(item.Get("role").String()), "assistant") {
+			lastAssistantIndex = index
+		}
+	}
+
 	normalized := body
 	changed := false
-	for index, item := range input.Array() {
-		if !item.IsObject() ||
-			!strings.EqualFold(strings.TrimSpace(item.Get("type").String()), "message") ||
-			item.Get("partial").Exists() {
+	for index, item := range items {
+		if !isOpenAIResponsesMessage(item) {
+			continue
+		}
+		wantPartial := index == lastAssistantIndex
+		partial := item.Get("partial")
+		if (wantPartial && partial.Type == gjson.True) ||
+			(!wantPartial && partial.Type == gjson.False) {
 			continue
 		}
 		var err error
-		normalized, err = sjson.SetBytes(normalized, fmt.Sprintf("input.%d.partial", index), false)
+		normalized, err = sjson.SetBytes(normalized, fmt.Sprintf("input.%d.partial", index), wantPartial)
 		if err != nil {
 			return body, false, fmt.Errorf(
 				"normalize OpenAI Responses input.%d partial compatibility: %w",
@@ -47,4 +61,9 @@ func normalizeOpenAIResponsesMessagePartialForAccount(
 		changed = true
 	}
 	return normalized, changed, nil
+}
+
+func isOpenAIResponsesMessage(item gjson.Result) bool {
+	return item.IsObject() &&
+		strings.EqualFold(strings.TrimSpace(item.Get("type").String()), "message")
 }

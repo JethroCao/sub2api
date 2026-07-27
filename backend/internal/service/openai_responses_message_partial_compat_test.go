@@ -63,7 +63,7 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccount(t *testing.T) {
 		"input":[
 			{"type":"message","role":"user","content":"first"},
 			{"type":"reasoning","encrypted_content":"cipher"},
-			{"type":"message","role":"assistant","content":[],"partial":true},
+			{"type":"message","role":"assistant","content":[],"partial":false},
 			{"type":"message","role":"developer","content":"done","partial":false},
 			{"type":"function_call_output","call_id":"call_1","output":"ok"}
 		]
@@ -79,6 +79,30 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccount(t *testing.T) {
 			{"type":"reasoning","encrypted_content":"cipher"},
 			{"type":"message","role":"assistant","content":[],"partial":true},
 			{"type":"message","role":"developer","content":"done","partial":false},
+			{"type":"function_call_output","call_id":"call_1","output":"ok"}
+		]
+	}`, string(got))
+}
+
+func TestNormalizeOpenAIResponsesMessagePartialForAccountUsesLastAssistant(t *testing.T) {
+	account := openAIResponsesMessagePartialCompatAccount(true)
+	body := []byte(`{
+		"input":[
+			{"type":"message","role":"assistant","content":"older","partial":true},
+			{"type":"message","role":"user","content":"next","partial":true},
+			{"type":"message","role":"assistant","content":"latest"},
+			{"type":"function_call_output","call_id":"call_1","output":"ok"}
+		]
+	}`)
+
+	got, changed, err := normalizeOpenAIResponsesMessagePartialForAccount(account, body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.JSONEq(t, `{
+		"input":[
+			{"type":"message","role":"assistant","content":"older","partial":false},
+			{"type":"message","role":"user","content":"next","partial":false},
+			{"type":"message","role":"assistant","content":"latest","partial":true},
 			{"type":"function_call_output","call_id":"call_1","output":"ok"}
 		]
 	}`, string(got))

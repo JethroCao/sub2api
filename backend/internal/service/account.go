@@ -935,8 +935,8 @@ func (a *Account) ShouldStripOpenAIResponsesLiteOnModelMapping() bool {
 }
 
 // ShouldEnableOpenAIResponsesMessagePartialCompat reports whether this OpenAI
-// API-key account should add partial=false to Responses input messages that do
-// not already provide the field.
+// API-key account should normalize Responses message partial flags for an
+// upstream provider that requires Ark-compatible message history semantics.
 func (a *Account) ShouldEnableOpenAIResponsesMessagePartialCompat() bool {
 	if a == nil || !a.IsOpenAI() || a.Type != AccountTypeAPIKey || a.Extra == nil {
 		return false
