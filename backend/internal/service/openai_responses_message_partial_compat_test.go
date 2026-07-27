@@ -75,16 +75,16 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccount(t *testing.T) {
 	require.JSONEq(t, `{
 		"model":"gpt-5.6-sol",
 		"input":[
-			{"type":"message","role":"user","content":"first","partial":false},
+			{"type":"message","role":"user","content":"first"},
 			{"type":"reasoning","encrypted_content":"cipher"},
-			{"type":"message","role":"assistant","content":[],"partial":true},
-			{"type":"message","role":"developer","content":"done","partial":false},
+			{"type":"message","role":"assistant","content":[]},
+			{"type":"message","role":"developer","content":"done"},
 			{"type":"function_call_output","call_id":"call_1","output":"ok"}
 		]
 	}`, string(got))
 }
 
-func TestNormalizeOpenAIResponsesMessagePartialForAccountUsesLastAssistant(t *testing.T) {
+func TestNormalizeOpenAIResponsesMessagePartialForAccountUsesLastMessage(t *testing.T) {
 	account := openAIResponsesMessagePartialCompatAccount(true)
 	body := []byte(`{
 		"input":[
@@ -100,8 +100,8 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccountUsesLastAssistant(t *te
 	require.True(t, changed)
 	require.JSONEq(t, `{
 		"input":[
-			{"type":"message","role":"assistant","content":"older","partial":false},
-			{"type":"message","role":"user","content":"next","partial":false},
+			{"type":"message","role":"assistant","content":"older"},
+			{"type":"message","role":"user","content":"next"},
 			{"type":"message","role":"assistant","content":"latest","partial":true},
 			{"type":"function_call_output","call_id":"call_1","output":"ok"}
 		]
@@ -125,9 +125,9 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccountNoop(t *testing.T) {
 			body:    `{"input":"hello"}`,
 		},
 		{
-			name:    "all messages already explicit",
+			name:    "non-assistant message without partial",
 			account: openAIResponsesMessagePartialCompatAccount(true),
-			body:    `{"input":[{"type":"message","role":"user","content":"hello","partial":false}]}`,
+			body:    `{"input":[{"type":"message","role":"user","content":"hello"}]}`,
 		},
 	}
 

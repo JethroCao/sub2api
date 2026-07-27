@@ -10,8 +10,8 @@ import (
 
 // normalizeOpenAIResponsesMessagePartialForAccount normalizes the explicit
 // partial field required by some OpenAI-compatible Responses providers. Ark
-// requires the final assistant message to be partial=true and every other
-// message to be partial=false.
+// only permits the field on the final message, where it must be true when that
+// message is from the assistant.
 func normalizeOpenAIResponsesMessagePartialForAccount(
 	account *Account,
 	body []byte,
@@ -29,11 +29,10 @@ func normalizeOpenAIResponsesMessagePartialForAccount(
 	}
 
 	items := input.Array()
-	lastAssistantIndex := -1
+	lastMessageIndex := -1
 	for index, item := range items {
-		if isOpenAIResponsesMessage(item) &&
-			strings.EqualFold(strings.TrimSpace(item.Get("role").String()), "assistant") {
-			lastAssistantIndex = index
+		if isOpenAIResponsesMessage(item) {
+			lastMessageIndex = index
 		}
 	}
 
@@ -43,14 +42,18 @@ func normalizeOpenAIResponsesMessagePartialForAccount(
 		if !isOpenAIResponsesMessage(item) {
 			continue
 		}
-		wantPartial := index == lastAssistantIndex
+		wantPartial := index == lastMessageIndex &&
+			strings.EqualFold(strings.TrimSpace(item.Get("role").String()), "assistant")
 		partial := item.Get("partial")
-		if (wantPartial && partial.Type == gjson.True) ||
-			(!wantPartial && partial.Type == gjson.False) {
+		var err error
+		switch {
+		case wantPartial && partial.Type != gjson.True:
+			normalized, err = sjson.SetBytes(normalized, fmt.Sprintf("input.%d.partial", index), true)
+		case !wantPartial && partial.Exists():
+			normalized, err = sjson.DeleteBytes(normalized, fmt.Sprintf("input.%d.partial", index))
+		default:
 			continue
 		}
-		var err error
-		normalized, err = sjson.SetBytes(normalized, fmt.Sprintf("input.%d.partial", index), wantPartial)
 		if err != nil {
 			return body, false, fmt.Errorf(
 				"normalize OpenAI Responses input.%d partial compatibility: %w",
