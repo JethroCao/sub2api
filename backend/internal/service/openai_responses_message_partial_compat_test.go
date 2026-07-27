@@ -84,7 +84,7 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccount(t *testing.T) {
 	}`, string(got))
 }
 
-func TestNormalizeOpenAIResponsesMessagePartialForAccountUsesLastMessage(t *testing.T) {
+func TestNormalizeOpenAIResponsesMessagePartialForAccountOmitsPartialWhenTrailingItemIsNotMessage(t *testing.T) {
 	account := openAIResponsesMessagePartialCompatAccount(true)
 	body := []byte(`{
 		"input":[
@@ -102,8 +102,30 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccountUsesLastMessage(t *test
 		"input":[
 			{"type":"message","role":"assistant","content":"older"},
 			{"type":"message","role":"user","content":"next"},
-			{"type":"message","role":"assistant","content":"latest","partial":true},
+			{"type":"message","role":"assistant","content":"latest"},
 			{"type":"function_call_output","call_id":"call_1","output":"ok"}
+		]
+	}`, string(got))
+}
+
+func TestNormalizeOpenAIResponsesMessagePartialForAccountSetsFinalInputAssistant(t *testing.T) {
+	account := openAIResponsesMessagePartialCompatAccount(true)
+	body := []byte(`{
+		"input":[
+			{"type":"message","role":"assistant","content":"older","partial":true},
+			{"type":"function_call_output","call_id":"call_1","output":"ok"},
+			{"type":"message","role":"assistant","content":"latest","partial":false}
+		]
+	}`)
+
+	got, changed, err := normalizeOpenAIResponsesMessagePartialForAccount(account, body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.JSONEq(t, `{
+		"input":[
+			{"type":"message","role":"assistant","content":"older"},
+			{"type":"function_call_output","call_id":"call_1","output":"ok"},
+			{"type":"message","role":"assistant","content":"latest","partial":true}
 		]
 	}`, string(got))
 }
