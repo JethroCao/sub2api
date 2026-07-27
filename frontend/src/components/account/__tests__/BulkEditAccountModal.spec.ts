@@ -404,6 +404,25 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('OpenAI API Key 批量编辑可开启 Responses message partial 兼容', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey']
+    })
+
+    await wrapper.get('#bulk-edit-openai-responses-message-partial-compat-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-openai-responses-message-partial-compat-toggle"]').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: {
+        openai_responses_message_partial_compat_enabled: true
+      }
+    })
+  })
+
   it('OpenAI OAuth 批量编辑可开启模型映射后的 Responses Lite 兼容模式', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],

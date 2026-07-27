@@ -3110,6 +3110,24 @@
         </div>
       </div>
 
+      <!-- OpenAI APIKey Responses message partial compatibility -->
+      <div
+        v-if="form.platform === 'openai' && accountCategory === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.responsesMessagePartialCompat') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.responsesMessagePartialCompatDesc') }}
+          </p>
+        </div>
+        <Toggle
+          v-model="openAIResponsesMessagePartialCompatEnabled"
+          data-testid="openai-responses-message-partial-compat"
+          :aria-label="t('admin.accounts.openai.responsesMessagePartialCompat')"
+        />
+      </div>
+
       <div>
         <div class="flex items-center justify-between">
           <div>
@@ -3869,6 +3887,7 @@ const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
 const stripResponsesLiteOnModelMapping = ref(false)
+const openAIResponsesMessagePartialCompatEnabled = ref(false)
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -4755,6 +4774,7 @@ const resetForm = () => {
   openAIResponsesMode.value = 'auto'
   openAIJSONSchemaMode.value = 'auto'
   stripResponsesLiteOnModelMapping.value = false
+  openAIResponsesMessagePartialCompatEnabled.value = false
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -4872,6 +4892,12 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     extra.openai_json_schema_mode = openAIJSONSchemaMode.value
   } else {
     delete extra.openai_json_schema_mode
+  }
+
+  if (accountCategory.value === 'apikey' && openAIResponsesMessagePartialCompatEnabled.value) {
+    extra.openai_responses_message_partial_compat_enabled = true
+  } else {
+    delete extra.openai_responses_message_partial_compat_enabled
   }
 
   if (accountCategory.value === 'oauth-based' && stripResponsesLiteOnModelMapping.value) {

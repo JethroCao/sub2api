@@ -747,6 +747,26 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_json_schema_mode')
   })
 
+  it('loads and updates the Responses message partial compatibility switch for OpenAI APIKey', async () => {
+    const account = buildAccount()
+    account.extra = {
+      openai_responses_message_partial_compat_enabled: true
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    const toggle = wrapper.get('[data-testid="openai-responses-message-partial-compat"]')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+
+    await toggle.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra)
+      .not.toHaveProperty('openai_responses_message_partial_compat_enabled')
+  })
+
   it('loads and updates the mapped-model Responses Lite compatibility switch for OpenAI OAuth', async () => {
     const account = buildAccount()
     account.type = 'oauth'

@@ -562,6 +562,11 @@ const (
 	// changes the model sent upstream. It is opt-in to preserve the existing
 	// behavior for accounts whose mapped model still supports Responses Lite.
 	OpenAIStripResponsesLiteOnModelMappingExtraKey = "openai_strip_responses_lite_on_model_mapping"
+	// OpenAIResponsesMessagePartialCompatExtraKey enables compatibility with
+	// OpenAI-compatible Responses providers that require an explicit `partial`
+	// flag on every input message. The public OpenAI API treats the field as
+	// optional, so this remains account-scoped and opt-in.
+	OpenAIResponsesMessagePartialCompatExtraKey = "openai_responses_message_partial_compat_enabled"
 )
 
 func normalizeOpenAICompactMode(mode string) string {
@@ -926,6 +931,17 @@ func (a *Account) ShouldStripOpenAIResponsesLiteOnModelMapping() bool {
 		return false
 	}
 	enabled, ok := a.Extra[OpenAIStripResponsesLiteOnModelMappingExtraKey].(bool)
+	return ok && enabled
+}
+
+// ShouldEnableOpenAIResponsesMessagePartialCompat reports whether this OpenAI
+// API-key account should add partial=false to Responses input messages that do
+// not already provide the field.
+func (a *Account) ShouldEnableOpenAIResponsesMessagePartialCompat() bool {
+	if a == nil || !a.IsOpenAI() || a.Type != AccountTypeAPIKey || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra[OpenAIResponsesMessagePartialCompatExtraKey].(bool)
 	return ok && enabled
 }
 

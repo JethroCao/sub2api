@@ -536,6 +536,9 @@ export default {
         jsonSchemaModeAuto: 'Auto',
         jsonSchemaModePassthrough: 'Passthrough',
         jsonSchemaModeForceJSONObject: 'Force JSON Object',
+        responsesMessagePartialCompat: 'Responses message partial compatibility',
+        responsesMessagePartialCompatDesc:
+          'OpenAI API Key accounts only. Adds partial=false to Responses input messages that omit the field for providers such as Volcengine Ark; explicit client values are preserved.',
         stripResponsesLiteOnModelMapping: 'Remove Responses Lite after model mapping',
         stripResponsesLiteOnModelMappingDesc:
           'OpenAI OAuth/subscription accounts only. When model mapping changes the upstream model, omit the Responses Lite signal so an incompatible target model does not return HTTP 400.',

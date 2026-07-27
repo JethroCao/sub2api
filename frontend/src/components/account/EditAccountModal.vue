@@ -1681,6 +1681,24 @@
         </div>
       </div>
 
+      <!-- OpenAI APIKey Responses message partial compatibility -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.responsesMessagePartialCompat') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.responsesMessagePartialCompatDesc') }}
+          </p>
+        </div>
+        <Toggle
+          v-model="openAIResponsesMessagePartialCompatEnabled"
+          data-testid="openai-responses-message-partial-compat"
+          :aria-label="t('admin.accounts.openai.responsesMessagePartialCompat')"
+        />
+      </div>
+
       <div
         v-if="account?.platform === 'openai' && account?.type === 'apikey'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -2935,6 +2953,7 @@ const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
 const stripResponsesLiteOnModelMapping = ref(false)
+const openAIResponsesMessagePartialCompatEnabled = ref(false)
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -3377,6 +3396,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openAIResponsesMode.value = 'auto'
   openAIJSONSchemaMode.value = 'auto'
   stripResponsesLiteOnModelMapping.value = false
+  openAIResponsesMessagePartialCompatEnabled.value = false
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openAICompactModelMappings.value = []
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -3404,6 +3424,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     if (newAccount.type === 'apikey') {
       openAIResponsesMode.value = normalizeOpenAIResponsesMode(extra?.openai_responses_mode)
       openAIJSONSchemaMode.value = (extra?.openai_json_schema_mode as OpenAIJSONSchemaMode) || 'auto'
+      openAIResponsesMessagePartialCompatEnabled.value =
+        extra?.openai_responses_message_partial_compat_enabled === true
       openAIEndpointCapabilities.value = readOpenAIEndpointCapabilities(
         newAccount.credentials as Record<string, unknown> | undefined
       )
@@ -4672,6 +4694,11 @@ const handleSubmit = async () => {
 		} else {
 			newExtra.openai_json_schema_mode = openAIJSONSchemaMode.value
 		}
+        if (openAIResponsesMessagePartialCompatEnabled.value) {
+          newExtra.openai_responses_message_partial_compat_enabled = true
+        } else {
+          delete newExtra.openai_responses_message_partial_compat_enabled
+        }
 			newExtra.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
 		}
       if (

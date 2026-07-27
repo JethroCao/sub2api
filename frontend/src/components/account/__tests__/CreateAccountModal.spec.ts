@@ -216,6 +216,22 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_json_schema_mode).toBe('force_json_object')
   })
 
+  it('stores the Responses message partial compatibility switch for a new OpenAI API key account', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Volcano DeepSeek')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('[data-testid="openai-responses-message-partial-compat"]').trigger('click')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(
+      createAccountMock.mock.calls[0]?.[0]?.extra?.openai_responses_message_partial_compat_enabled
+    ).toBe(true)
+  })
+
   it('waits for the initial upstream billing probe before refreshing the account list', async () => {
     let resolveProbe: (() => void) | undefined
     probeUpstreamBillingMock.mockImplementationOnce(
