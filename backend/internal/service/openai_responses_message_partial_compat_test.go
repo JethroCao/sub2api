@@ -84,7 +84,7 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccount(t *testing.T) {
 	}`, string(got))
 }
 
-func TestNormalizeOpenAIResponsesMessagePartialForAccountSetsLastMessageWhenTrailingItemIsNotMessage(t *testing.T) {
+func TestNormalizeOpenAIResponsesMessagePartialForAccountOmitsPartialWhenTrailingItemIsNotMessage(t *testing.T) {
 	account := openAIResponsesMessagePartialCompatAccount(true)
 	body := []byte(`{
 		"input":[
@@ -102,7 +102,7 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccountSetsLastMessageWhenTrai
 		"input":[
 			{"type":"message","role":"assistant","content":"older"},
 			{"type":"message","role":"user","content":"next"},
-			{"type":"message","role":"assistant","content":"latest","partial":true},
+			{"type":"message","role":"assistant","content":"latest"},
 			{"type":"function_call_output","call_id":"call_1","output":"ok"}
 		]
 	}`, string(got))

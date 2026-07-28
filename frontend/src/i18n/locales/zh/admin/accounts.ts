@@ -600,7 +600,7 @@ export default {
         jsonSchemaModeForceJSONObject: '强制 JSON Object',
         responsesMessagePartialCompat: 'Responses 消息 partial 兼容',
         responsesMessagePartialCompatDesc:
-          '仅对 OpenAI API Key 生效。按火山方舟规则规范化 Responses message：仅当最后一条 message 来自 assistant 时携带 partial=true，其余 message 不携带 partial。',
+          '仅对 OpenAI API Key 生效。按火山方舟规则规范化 Responses message：仅当 input 最后一项是 assistant message 时携带 partial=true，同时兼容省略 type 的简写消息；其余 message 不携带 partial。',
         stripResponsesLiteOnModelMapping: '模型映射后移除 Responses Lite',
         stripResponsesLiteOnModelMappingDesc:
           '仅适用于 OpenAI OAuth/订阅账号。请求模型被映射为其他上游模型时，不再转发 Responses Lite 标记，避免目标模型不支持 Lite 而返回 400。',
