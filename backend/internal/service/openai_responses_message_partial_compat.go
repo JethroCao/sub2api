@@ -10,8 +10,9 @@ import (
 
 // normalizeOpenAIResponsesMessagePartialForAccount normalizes the explicit
 // partial field required by some OpenAI-compatible Responses providers. Ark
-// only permits the field on the final message item, where the field must be
-// true. Non-message items may follow that message.
+// only permits the field on the final message item when that message has the
+// assistant role, where the field must be true. Non-message items may follow
+// that message.
 func normalizeOpenAIResponsesMessagePartialForAccount(
 	account *Account,
 	body []byte,
@@ -42,7 +43,8 @@ func normalizeOpenAIResponsesMessagePartialForAccount(
 		if !isOpenAIResponsesMessage(item) {
 			continue
 		}
-		wantPartial := index == lastMessageIndex
+		wantPartial := index == lastMessageIndex &&
+			strings.EqualFold(strings.TrimSpace(item.Get("role").String()), "assistant")
 		partial := item.Get("partial")
 		var err error
 		switch {
