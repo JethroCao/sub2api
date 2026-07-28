@@ -78,13 +78,13 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccount(t *testing.T) {
 			{"type":"message","role":"user","content":"first"},
 			{"type":"reasoning","encrypted_content":"cipher"},
 			{"type":"message","role":"assistant","content":[]},
-			{"type":"message","role":"developer","content":"done"},
+			{"type":"message","role":"developer","content":"done","partial":true},
 			{"type":"function_call_output","call_id":"call_1","output":"ok"}
 		]
 	}`, string(got))
 }
 
-func TestNormalizeOpenAIResponsesMessagePartialForAccountOmitsPartialWhenTrailingItemIsNotMessage(t *testing.T) {
+func TestNormalizeOpenAIResponsesMessagePartialForAccountSetsLastMessageWhenTrailingItemIsNotMessage(t *testing.T) {
 	account := openAIResponsesMessagePartialCompatAccount(true)
 	body := []byte(`{
 		"input":[
@@ -102,7 +102,7 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccountOmitsPartialWhenTrailin
 		"input":[
 			{"type":"message","role":"assistant","content":"older"},
 			{"type":"message","role":"user","content":"next"},
-			{"type":"message","role":"assistant","content":"latest"},
+			{"type":"message","role":"assistant","content":"latest","partial":true},
 			{"type":"function_call_output","call_id":"call_1","output":"ok"}
 		]
 	}`, string(got))
@@ -147,9 +147,9 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccountNoop(t *testing.T) {
 			body:    `{"input":"hello"}`,
 		},
 		{
-			name:    "non-assistant message without partial",
+			name:    "no message items",
 			account: openAIResponsesMessagePartialCompatAccount(true),
-			body:    `{"input":[{"type":"message","role":"user","content":"hello"}]}`,
+			body:    `{"input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`,
 		},
 	}
 
