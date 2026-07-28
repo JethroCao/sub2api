@@ -108,6 +108,28 @@ func TestNormalizeOpenAIResponsesMessagePartialForAccountSetsLastMessageWhenTrai
 	}`, string(got))
 }
 
+func TestNormalizeOpenAIResponsesMessagePartialForAccountRecognizesEasyInputMessage(t *testing.T) {
+	account := openAIResponsesMessagePartialCompatAccount(true)
+	body := []byte(`{
+		"input":[
+			{"type":"message","role":"assistant","content":"older","partial":true},
+			{"type":"function_call_output","call_id":"call_1","output":"ok"},
+			{"role":"user","content":"latest"}
+		]
+	}`)
+
+	got, changed, err := normalizeOpenAIResponsesMessagePartialForAccount(account, body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.JSONEq(t, `{
+		"input":[
+			{"type":"message","role":"assistant","content":"older"},
+			{"type":"function_call_output","call_id":"call_1","output":"ok"},
+			{"role":"user","content":"latest","partial":true}
+		]
+	}`, string(got))
+}
+
 func TestNormalizeOpenAIResponsesMessagePartialForAccountSetsFinalInputAssistant(t *testing.T) {
 	account := openAIResponsesMessagePartialCompatAccount(true)
 	body := []byte(`{

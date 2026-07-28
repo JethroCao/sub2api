@@ -66,6 +66,14 @@ func normalizeOpenAIResponsesMessagePartialForAccount(
 }
 
 func isOpenAIResponsesMessage(item gjson.Result) bool {
-	return item.IsObject() &&
-		strings.EqualFold(strings.TrimSpace(item.Get("type").String()), "message")
+	if !item.IsObject() {
+		return false
+	}
+	itemType := strings.TrimSpace(item.Get("type").String())
+	if strings.EqualFold(itemType, "message") {
+		return true
+	}
+	// Responses also accepts EasyInputMessage objects where type is omitted
+	// and role/content alone identify the item as a message.
+	return itemType == "" && strings.TrimSpace(item.Get("role").String()) != ""
 }
