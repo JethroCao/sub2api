@@ -539,6 +539,9 @@ export default {
         responsesMessagePartialCompat: 'Responses message partial compatibility',
         responsesMessagePartialCompatDesc:
           'OpenAI API Key accounts only. Normalizes Responses messages for Volcengine Ark: partial=true is used only when the final input item is an assistant message; shorthand messages are supported and all other messages omit partial.',
+        responsesAssistantPrefillCompat: 'Responses assistant prefill compatibility',
+        responsesAssistantPrefillCompatDesc:
+          'OpenAI API Key accounts only. For upstreams without assistant prefill support, preserve a final assistant message and append a minimal user continuation to avoid an upstream 400.',
         stripResponsesLiteOnModelMapping: 'Remove Responses Lite after model mapping',
         stripResponsesLiteOnModelMappingDesc:
           'OpenAI OAuth/subscription accounts only. When model mapping changes the upstream model, omit the Responses Lite signal so an incompatible target model does not return HTTP 400.',

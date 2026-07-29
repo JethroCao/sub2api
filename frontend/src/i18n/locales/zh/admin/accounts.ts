@@ -601,6 +601,9 @@ export default {
         responsesMessagePartialCompat: 'Responses 消息 partial 兼容',
         responsesMessagePartialCompatDesc:
           '仅对 OpenAI API Key 生效。按火山方舟规则规范化 Responses message：仅当 input 最后一项是 assistant message 时携带 partial=true，同时兼容省略 type 的简写消息；其余 message 不携带 partial。',
+        responsesAssistantPrefillCompat: 'Responses assistant prefill 兼容',
+        responsesAssistantPrefillCompatDesc:
+          '仅对 OpenAI API Key 生效。用于不支持 assistant prefill 的上游：若 input 最后一项是 assistant 消息，则保留原消息并追加一条最小 user 继续指令，避免上游返回 400。',
         stripResponsesLiteOnModelMapping: '模型映射后移除 Responses Lite',
         stripResponsesLiteOnModelMappingDesc:
           '仅适用于 OpenAI OAuth/订阅账号。请求模型被映射为其他上游模型时，不再转发 Responses Lite 标记，避免目标模型不支持 Lite 而返回 400。',

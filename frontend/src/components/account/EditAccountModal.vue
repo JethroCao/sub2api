@@ -1699,6 +1699,24 @@
         />
       </div>
 
+      <!-- OpenAI APIKey Responses assistant prefill compatibility -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.responsesAssistantPrefillCompat') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.responsesAssistantPrefillCompatDesc') }}
+          </p>
+        </div>
+        <Toggle
+          v-model="openAIResponsesAssistantPrefillCompatEnabled"
+          data-testid="openai-responses-assistant-prefill-compat"
+          :aria-label="t('admin.accounts.openai.responsesAssistantPrefillCompat')"
+        />
+      </div>
+
       <div
         v-if="account?.platform === 'openai' && account?.type === 'apikey'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -2954,6 +2972,7 @@ const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
 const stripResponsesLiteOnModelMapping = ref(false)
 const openAIResponsesMessagePartialCompatEnabled = ref(false)
+const openAIResponsesAssistantPrefillCompatEnabled = ref(false)
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -3397,6 +3416,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openAIJSONSchemaMode.value = 'auto'
   stripResponsesLiteOnModelMapping.value = false
   openAIResponsesMessagePartialCompatEnabled.value = false
+  openAIResponsesAssistantPrefillCompatEnabled.value = false
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openAICompactModelMappings.value = []
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -3426,6 +3446,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       openAIJSONSchemaMode.value = (extra?.openai_json_schema_mode as OpenAIJSONSchemaMode) || 'auto'
       openAIResponsesMessagePartialCompatEnabled.value =
         extra?.openai_responses_message_partial_compat_enabled === true
+      openAIResponsesAssistantPrefillCompatEnabled.value =
+        extra?.openai_responses_assistant_prefill_compat_enabled === true
       openAIEndpointCapabilities.value = readOpenAIEndpointCapabilities(
         newAccount.credentials as Record<string, unknown> | undefined
       )
@@ -4698,6 +4720,11 @@ const handleSubmit = async () => {
           newExtra.openai_responses_message_partial_compat_enabled = true
         } else {
           delete newExtra.openai_responses_message_partial_compat_enabled
+        }
+        if (openAIResponsesAssistantPrefillCompatEnabled.value) {
+          newExtra.openai_responses_assistant_prefill_compat_enabled = true
+        } else {
+          delete newExtra.openai_responses_assistant_prefill_compat_enabled
         }
 			newExtra.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
 		}

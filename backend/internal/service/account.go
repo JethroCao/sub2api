@@ -579,6 +579,12 @@ const (
 	// flag on every input message. The public OpenAI API treats the field as
 	// optional, so this remains account-scoped and opt-in.
 	OpenAIResponsesMessagePartialCompatExtraKey = "openai_responses_message_partial_compat_enabled"
+	// OpenAIResponsesAssistantPrefillCompatExtraKey enables compatibility with
+	// OpenAI-compatible Responses providers that reject an assistant message as
+	// the final input item. The original assistant message is preserved and a
+	// minimal user continuation is appended, so this remains account-scoped and
+	// opt-in.
+	OpenAIResponsesAssistantPrefillCompatExtraKey = "openai_responses_assistant_prefill_compat_enabled"
 )
 
 func normalizeOpenAICompactMode(mode string) string {
@@ -961,6 +967,17 @@ func (a *Account) ShouldEnableOpenAIResponsesMessagePartialCompat() bool {
 		return false
 	}
 	enabled, ok := a.Extra[OpenAIResponsesMessagePartialCompatExtraKey].(bool)
+	return ok && enabled
+}
+
+// ShouldEnableOpenAIResponsesAssistantPrefillCompat reports whether this
+// OpenAI API-key account should append a user continuation when a Responses
+// request ends with an assistant message that the upstream cannot prefill.
+func (a *Account) ShouldEnableOpenAIResponsesAssistantPrefillCompat() bool {
+	if a == nil || !a.IsOpenAI() || a.Type != AccountTypeAPIKey || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra[OpenAIResponsesAssistantPrefillCompatExtraKey].(bool)
 	return ok && enabled
 }
 

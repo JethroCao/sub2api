@@ -161,6 +161,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
 		mappedModel := account.GetMappedModel(reqModel)
+		originalBody, _, err = normalizeOpenAIResponsesAssistantPrefillForAccount(account, originalBody)
+		if err != nil {
+			return nil, err
+		}
 		originalBody, _, err = normalizeOpenAIResponsesMessagePartialForAccount(account, originalBody)
 		if err != nil {
 			return nil, err
@@ -535,6 +539,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			requestView = newOpenAIRequestView(body)
 		}
+	}
+	body, _, err = normalizeOpenAIResponsesAssistantPrefillForAccount(account, body)
+	if err != nil {
+		return nil, err
 	}
 	body, _, err = normalizeOpenAIResponsesMessagePartialForAccount(account, body)
 	if err != nil {
