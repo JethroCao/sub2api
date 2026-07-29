@@ -1005,6 +1005,8 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"openai_responses_supported",
 		service.OpenAIJSONSchemaModeExtraKey,
 		service.OpenAIImageInputModeExtraKey,
+		service.OpenAIResponsesMessagePartialCompatExtraKey,
+		service.OpenAIResponsesAssistantPrefillCompatExtraKey,
 		service.OpenAIStripResponsesLiteOnModelMappingExtraKey,
 		"codex_5h_used_percent",
 		"codex_7d_used_percent",
