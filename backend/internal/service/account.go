@@ -569,6 +569,14 @@ const (
 	OpenAIJSONSchemaModeAuto            = "auto"
 	OpenAIJSONSchemaModePassthrough     = "passthrough"
 	OpenAIJSONSchemaModeForceJSONObject = "force_json_object"
+	// OpenAIImageInputModeExtraKey controls whether an account may receive
+	// requests containing image input. Auto preserves legacy routing,
+	// multimodal explicitly allows text and image input, and text_only excludes
+	// the account only when the request contains an image.
+	OpenAIImageInputModeExtraKey   = "openai_image_input_mode"
+	OpenAIImageInputModeAuto       = "auto"
+	OpenAIImageInputModeMultimodal = "multimodal"
+	OpenAIImageInputModeTextOnly   = "text_only"
 	// OpenAIStripResponsesLiteOnModelMappingExtraKey controls whether an
 	// account drops the Codex Responses Lite signal after its model mapping
 	// changes the model sent upstream. It is opt-in to preserve the existing
@@ -606,6 +614,17 @@ func normalizeOpenAIJSONSchemaMode(mode string) string {
 		return OpenAIJSONSchemaModeForceJSONObject
 	default:
 		return OpenAIJSONSchemaModeAuto
+	}
+}
+
+func normalizeOpenAIImageInputMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case OpenAIImageInputModeMultimodal:
+		return OpenAIImageInputModeMultimodal
+	case OpenAIImageInputModeTextOnly:
+		return OpenAIImageInputModeTextOnly
+	default:
+		return OpenAIImageInputModeAuto
 	}
 }
 
@@ -944,6 +963,17 @@ func (a *Account) GetOpenAIJSONSchemaMode() string {
 	}
 	mode, _ := a.Extra[OpenAIJSONSchemaModeExtraKey].(string)
 	return normalizeOpenAIJSONSchemaMode(mode)
+}
+
+// GetOpenAIImageInputMode returns the account-level image-input routing mode.
+// It applies to OpenAI-compatible accounts only; missing or invalid values keep
+// the legacy auto behavior.
+func (a *Account) GetOpenAIImageInputMode() string {
+	if a == nil || !a.IsOpenAICompatible() || a.Extra == nil {
+		return OpenAIImageInputModeAuto
+	}
+	mode, _ := a.Extra[OpenAIImageInputModeExtraKey].(string)
+	return normalizeOpenAIImageInputMode(mode)
 }
 
 // ShouldStripOpenAIResponsesLiteOnModelMapping reports whether this OpenAI
@@ -1733,6 +1763,8 @@ func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapabilit
 	switch capability {
 	case OpenAIImagesCapabilityBasic, OpenAIImagesCapabilityNative:
 		return a.Type == AccountTypeOAuth || a.Type == AccountTypeAPIKey
+	case OpenAIImagesCapabilityVisionInput:
+		return a.GetOpenAIImageInputMode() != OpenAIImageInputModeTextOnly
 	default:
 		return true
 	}

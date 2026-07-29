@@ -3110,6 +3110,26 @@
         </div>
       </div>
 
+      <!-- OpenAI APIKey image input capability -->
+      <div
+        v-if="form.platform === 'openai' && accountCategory === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.imageInputMode') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.imageInputModeDesc') }}
+          </p>
+        </div>
+        <div class="w-56">
+          <Select
+            v-model="openAIImageInputMode"
+            :options="openAIImageInputModeOptions"
+            data-testid="openai-image-input-mode-select"
+          />
+        </div>
+      </div>
+
       <!-- OpenAI APIKey Responses message partial compatibility -->
       <div
         v-if="form.platform === 'openai' && accountCategory === 'apikey'"
@@ -3630,6 +3650,7 @@ import type {
   OpenAICompactMode,
   OpenAIResponsesMode,
   OpenAIJSONSchemaMode,
+  OpenAIImageInputMode,
   OpenAIEndpointCapability
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -3904,6 +3925,7 @@ const openAILongContextBillingTouched = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIJSONSchemaMode = ref<OpenAIJSONSchemaMode>('auto')
+const openAIImageInputMode = ref<OpenAIImageInputMode>('auto')
 const stripResponsesLiteOnModelMapping = ref(false)
 const openAIResponsesMessagePartialCompatEnabled = ref(false)
 const openAIResponsesAssistantPrefillCompatEnabled = ref(false)
@@ -3983,6 +4005,11 @@ const openAIJSONSchemaModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.jsonSchemaModeAuto') },
   { value: 'passthrough', label: t('admin.accounts.openai.jsonSchemaModePassthrough') },
   { value: 'force_json_object', label: t('admin.accounts.openai.jsonSchemaModeForceJSONObject') }
+])
+const openAIImageInputModeOptions = computed(() => [
+  { value: 'auto', label: t('admin.accounts.openai.imageInputModeAuto') },
+  { value: 'multimodal', label: t('admin.accounts.openai.imageInputModeMultimodal') },
+  { value: 'text_only', label: t('admin.accounts.openai.imageInputModeTextOnly') }
 ])
 const openAITextEndpointCapabilityLabel = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -4792,6 +4819,7 @@ const resetForm = () => {
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
   openAIJSONSchemaMode.value = 'auto'
+  openAIImageInputMode.value = 'auto'
   stripResponsesLiteOnModelMapping.value = false
   openAIResponsesMessagePartialCompatEnabled.value = false
   openAIResponsesAssistantPrefillCompatEnabled.value = false
@@ -4912,6 +4940,12 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     extra.openai_json_schema_mode = openAIJSONSchemaMode.value
   } else {
     delete extra.openai_json_schema_mode
+  }
+
+  if (accountCategory.value === 'apikey' && openAIImageInputMode.value !== 'auto') {
+    extra.openai_image_input_mode = openAIImageInputMode.value
+  } else {
+    delete extra.openai_image_input_mode
   }
 
   if (accountCategory.value === 'apikey' && openAIResponsesMessagePartialCompatEnabled.value) {

@@ -1204,8 +1204,15 @@ func openAIRequestBodyMayContainImageInput(body []byte) bool {
 		return false
 	}
 	input := gjson.GetBytes(body, "input")
-	messages := gjson.GetBytes(body, "messages.#-1")
+	messages := gjson.GetBytes(body, "messages")
 	return openAIJSONValueMayContainImageInput(input) || openAIJSONValueMayContainImageInput(messages)
+}
+
+// OpenAIRequestBodyMayContainImageInput reports whether an OpenAI-compatible
+// request carries visual input. It intentionally checks the full input/history
+// because providers receive the complete payload, not only the latest message.
+func OpenAIRequestBodyMayContainImageInput(body []byte) bool {
+	return openAIRequestBodyMayContainImageInput(body)
 }
 
 func openAIJSONValueMayContainImageInput(value gjson.Result) bool {
@@ -1224,7 +1231,8 @@ func openAIJSONValueMayContainImageInput(value gjson.Result) bool {
 		return found
 	}
 	if value.IsObject() {
-		if strings.TrimSpace(value.Get("type").String()) == "input_image" || value.Get("image_url").Exists() {
+		contentType := strings.TrimSpace(value.Get("type").String())
+		if contentType == "input_image" || contentType == "image" || value.Get("image_url").Exists() {
 			return true
 		}
 		return openAIJSONValueMayContainImageInput(value.Get("content"))

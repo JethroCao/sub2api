@@ -536,6 +536,12 @@ export default {
         jsonSchemaModeAuto: 'Auto',
         jsonSchemaModePassthrough: 'Passthrough',
         jsonSchemaModeForceJSONObject: 'Force JSON Object',
+        imageInputMode: 'Image input capability',
+        imageInputModeDesc:
+          'Controls visual-input routing for this account. Multimodal accepts both text-only and image requests; Text only excludes this account only when a request contains images.',
+        imageInputModeAuto: 'Auto',
+        imageInputModeMultimodal: 'Multimodal (text + images)',
+        imageInputModeTextOnly: 'Text only',
         responsesMessagePartialCompat: 'Responses message partial compatibility',
         responsesMessagePartialCompatDesc:
           'OpenAI API Key accounts only. Normalizes Responses messages for Volcengine Ark: partial=true is used only when the final input item is an assistant message; shorthand messages are supported and all other messages omit partial.',

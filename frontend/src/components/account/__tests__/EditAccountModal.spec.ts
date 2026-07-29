@@ -747,6 +747,25 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_json_schema_mode')
   })
 
+  it('loads and updates the OpenAI APIKey image input capability', async () => {
+    const account = buildAccount()
+    account.extra = {
+      openai_image_input_mode: 'text_only'
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    expect((wrapper.get('[data-testid="openai-image-input-mode-select"]').element as HTMLSelectElement).value)
+      .toBe('text_only')
+
+    await wrapper.get('[data-testid="openai-image-input-mode-select"]').setValue('multimodal')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_image_input_mode).toBe('multimodal')
+  })
+
   it('loads and updates the Responses message partial compatibility switch for OpenAI APIKey', async () => {
     const account = buildAccount()
     account.extra = {

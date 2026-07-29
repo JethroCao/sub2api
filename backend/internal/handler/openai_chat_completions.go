@@ -104,6 +104,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		h.openAISecurityAuditError(c, decision)
 		return
 	}
+	hasImageInput := service.OpenAIRequestBodyMayContainImageInput(body)
 	if h.rejectIfCyberSessionBlocked(c, apiKey, body, reqModel, cyberBlockFormatChat) {
 		return
 	}
@@ -154,7 +155,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			return
 		}
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapabilityAndImageInput(
 			c.Request.Context(),
 			apiKey.GroupID,
 			"",
@@ -163,6 +164,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
 			service.OpenAIEndpointCapabilityChatCompletions,
+			hasImageInput,
 			false,
 			false,
 			true,

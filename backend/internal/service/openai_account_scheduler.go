@@ -2009,11 +2009,49 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	useUpstreamTokenCost bool,
 	platformOverride ...string,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	return s.SelectAccountWithSchedulerForCapabilityAndImageInput(
+		ctx,
+		groupID,
+		previousResponseID,
+		sessionHash,
+		requestedModel,
+		excludedIDs,
+		requiredTransport,
+		requiredCapability,
+		false,
+		requireCompact,
+		previousResponseCanMove,
+		useUpstreamTokenCost,
+		platformOverride...,
+	)
+}
+
+// SelectAccountWithSchedulerForCapabilityAndImageInput applies endpoint and
+// image-input capability requirements in one scheduler pass.
+func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapabilityAndImageInput(
+	ctx context.Context,
+	groupID *int64,
+	previousResponseID string,
+	sessionHash string,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+	requiredTransport OpenAIUpstreamTransport,
+	requiredCapability OpenAIEndpointCapability,
+	requireImageInput bool,
+	requireCompact bool,
+	previousResponseCanMove bool,
+	useUpstreamTokenCost bool,
+	platformOverride ...string,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	platform := PlatformOpenAI
 	if len(platformOverride) > 0 {
 		platform = platformOverride[0]
 	}
-	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	requiredImageCapability := OpenAIImagesCapability("")
+	if requireImageInput {
+		requiredImageCapability = OpenAIImagesCapabilityVisionInput
+	}
+	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(

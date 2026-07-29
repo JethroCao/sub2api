@@ -358,6 +358,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Codex 在所有请求中被动声明 image_gen namespace，宽泛检测会导致禁了生图的
 	// 分组中所有 Codex 请求被 403（#4447），并误占生图并发槽位。
 	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, body)
+	hasImageInput := service.OpenAIRequestBodyMayContainImageInput(body)
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
 		return
@@ -448,7 +449,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapabilityAndImageInput(
 			c.Request.Context(),
 			apiKey.GroupID,
 			previousResponseID,
@@ -457,6 +458,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
 			requiredCapability,
+			hasImageInput,
 			requireCompact,
 			false,
 			!imageIntent,
@@ -945,6 +947,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		h.anthropicSecurityAuditError(c, decision)
 		return
 	}
+	hasImageInput := service.OpenAIRequestBodyMayContainImageInput(body)
 
 	// 解析渠道级模型映射
 	channelMappingMsg, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
@@ -1003,7 +1006,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			currentRoutingModel = effectiveMappedModel
 		}
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapabilityAndImageInput(
 			c.Request.Context(),
 			apiKey.GroupID,
 			"", // no previous_response_id
@@ -1012,6 +1015,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
 			service.OpenAIEndpointCapabilityChatCompletions,
+			hasImageInput,
 			false,
 			false,
 			true,
@@ -1716,13 +1720,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	if service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage) && requestPlatform == service.PlatformOpenAI {
 		requiredCapability = service.OpenAIEndpointCapabilityResponses
 	}
+	hasImageInput := service.OpenAIRequestBodyMayContainImageInput(firstMessage)
 
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		reqLog.Debug("openai.websocket_account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapabilityAndImageInput(
 			ctx,
 			apiKey.GroupID,
 			previousResponseID,
@@ -1731,6 +1736,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			failedAccountIDs,
 			requiredTransport,
 			requiredCapability,
+			hasImageInput,
 			false,
 			previousResponseCanMove,
 			!imageIntent,

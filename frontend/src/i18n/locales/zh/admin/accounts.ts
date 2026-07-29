@@ -598,6 +598,12 @@ export default {
         jsonSchemaModeAuto: '自动',
         jsonSchemaModePassthrough: '原样透传',
         jsonSchemaModeForceJSONObject: '强制 JSON Object',
+        imageInputMode: '图片输入能力',
+        imageInputModeDesc:
+          '控制该账号的视觉输入调度。支持图文可同时接收纯文本和图片请求；仅文本只会在请求包含图片时排除该账号。',
+        imageInputModeAuto: '自动',
+        imageInputModeMultimodal: '支持图文（文本 + 图片）',
+        imageInputModeTextOnly: '仅文本',
         responsesMessagePartialCompat: 'Responses 消息 partial 兼容',
         responsesMessagePartialCompatDesc:
           '仅对 OpenAI API Key 生效。按火山方舟规则规范化 Responses message：仅当 input 最后一项是 assistant message 时携带 partial=true，同时兼容省略 type 的简写消息；其余 message 不携带 partial。',

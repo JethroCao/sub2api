@@ -314,6 +314,7 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 			"openai_responses_mode":                                "force_chat_completions",
 			"openai_responses_supported":                           false,
 			service.OpenAIJSONSchemaModeExtraKey:                   service.OpenAIJSONSchemaModeForceJSONObject,
+			service.OpenAIImageInputModeExtraKey:                   service.OpenAIImageInputModeMultimodal,
 			service.OpenAIStripResponsesLiteOnModelMappingExtraKey: true,
 			"mixed_scheduling":                                     true,
 			"unused_large_field":                                   "drop-me",
@@ -328,6 +329,7 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	require.Equal(t, "force_chat_completions", got.Extra["openai_responses_mode"])
 	require.Equal(t, false, got.Extra["openai_responses_supported"])
 	require.Equal(t, service.OpenAIJSONSchemaModeForceJSONObject, got.Extra[service.OpenAIJSONSchemaModeExtraKey])
+	require.Equal(t, service.OpenAIImageInputModeMultimodal, got.Extra[service.OpenAIImageInputModeExtraKey])
 	require.Equal(t, true, got.Extra[service.OpenAIStripResponsesLiteOnModelMappingExtraKey])
 	require.Equal(t, true, got.Extra["mixed_scheduling"])
 	require.Nil(t, got.Extra["unused_large_field"])

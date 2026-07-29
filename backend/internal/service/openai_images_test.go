@@ -474,6 +474,24 @@ func TestAccountSupportsOpenAIImageCapability_EmptyRequirementDoesNotRejectGrok(
 	require.False(t, account.SupportsOpenAIImageCapability(OpenAIImagesCapabilityBasic))
 }
 
+func TestAccountSupportsOpenAIImageCapability_VisionInputMode(t *testing.T) {
+	auto := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	multimodal := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{OpenAIImageInputModeExtraKey: OpenAIImageInputModeMultimodal},
+	}
+	textOnly := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{OpenAIImageInputModeExtraKey: OpenAIImageInputModeTextOnly},
+	}
+
+	require.True(t, auto.SupportsOpenAIImageCapability(OpenAIImagesCapabilityVisionInput))
+	require.True(t, multimodal.SupportsOpenAIImageCapability(OpenAIImagesCapabilityVisionInput))
+	require.False(t, textOnly.SupportsOpenAIImageCapability(OpenAIImagesCapabilityVisionInput))
+}
+
 func TestAccountSupportsOpenAIEndpointCapability(t *testing.T) {
 	t.Run("OpenAI APIKey 默认兼容 chat、embeddings 和 alpha search", func(t *testing.T) {
 		account := &Account{
