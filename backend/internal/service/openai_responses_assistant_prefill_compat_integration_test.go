@@ -31,6 +31,7 @@ func TestForwardResponsesAssistantPrefillCompatibility(t *testing.T) {
 				"model":"alias",
 				"input":[
 					{"type":"message","role":"user","content":"hello"},
+					{"type":"message","role":"assistant","content":[{"type":"output_text"}]},
 					{"type":"message","role":"assistant","content":"draft","partial":true}
 				],
 				"stream":false
@@ -61,6 +62,7 @@ func TestForwardResponsesAssistantPrefillCompatibility(t *testing.T) {
 			require.NotNil(t, result)
 			require.Equal(t, tt.wantModel, gjson.GetBytes(upstream.lastBody, "model").String())
 			require.Len(t, gjson.GetBytes(upstream.lastBody, "input").Array(), 3)
+			require.Equal(t, "draft", gjson.GetBytes(upstream.lastBody, "input.1.content").String())
 			require.False(t, gjson.GetBytes(upstream.lastBody, "input.1.partial").Exists())
 			require.Equal(t, "user", gjson.GetBytes(upstream.lastBody, "input.2.role").String())
 			require.Equal(t, "Continue.", gjson.GetBytes(upstream.lastBody, "input.2.content.0.text").String())

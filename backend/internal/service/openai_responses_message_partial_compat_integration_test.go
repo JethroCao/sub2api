@@ -32,7 +32,7 @@ func TestForwardResponsesMessagePartialCompatibility(t *testing.T) {
 				"input":[
 					{"type":"message","role":"user","content":"hello"},
 					{"type":"reasoning","encrypted_content":"cipher"},
-					{"type":"message","role":"assistant","content":[],"partial":true}
+					{"type":"message","role":"assistant","content":[{"type":"output_text","text":"draft"}],"partial":true}
 				],
 				"stream":false
 			}`)
