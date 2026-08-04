@@ -38,12 +38,15 @@ const (
 
 // Platform constants
 const (
-	PlatformAnthropic   = domain.PlatformAnthropic
-	PlatformOpenAI      = domain.PlatformOpenAI
-	PlatformGemini      = domain.PlatformGemini
-	PlatformAntigravity = domain.PlatformAntigravity
-	PlatformGrok        = domain.PlatformGrok
-	PlatformComposite   = domain.PlatformComposite
+	PlatformAnthropic     = domain.PlatformAnthropic
+	PlatformOpenAI        = domain.PlatformOpenAI
+	PlatformGemini        = domain.PlatformGemini
+	PlatformAntigravity   = domain.PlatformAntigravity
+	PlatformGrok          = domain.PlatformGrok
+	PlatformComposite     = domain.PlatformComposite
+	PlatformVideo         = domain.PlatformVideo
+	VideoProviderSeedance = "seedance"
+	VideoProviderKling    = "kling"
 )
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -55,6 +58,7 @@ var AllowedQuotaPlatforms = []string{
 	PlatformGemini,
 	PlatformAntigravity,
 	PlatformGrok,
+	PlatformVideo,
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。

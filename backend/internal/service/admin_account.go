@@ -558,6 +558,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := ValidateOpenAICustomInstructionsCredentials(account.Platform, account.Type, account.Credentials); err != nil {
 		return nil, err
 	}
+	if err := ValidateVideoAccountConfig(account.Platform, account.Type, account.Extra, account.Credentials); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
@@ -732,6 +735,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		ComputeQuotaResetAt(account.Extra)
 		NormalizeFixedQuotaWindows(account.Extra)
+	}
+	if err := ValidateVideoAccountConfig(account.Platform, account.Type, account.Extra, account.Credentials); err != nil {
+		return nil, err
 	}
 	if requestedRateSyncEnabledUpdate != nil && *requestedRateSyncEnabledUpdate {
 		if requestedProbeEnabledUpdate != nil && !*requestedProbeEnabledUpdate {
