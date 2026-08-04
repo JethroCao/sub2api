@@ -120,8 +120,8 @@ func redactOpenAIAccountInstructionsJSONStrings(body []byte, suffix string) ([]b
 		if err != nil {
 			return nil, false, err
 		}
-		redacted.Write(body[lastWritten:start])
-		redacted.Write(encoded)
+		_, _ = redacted.Write(body[lastWritten:start])
+		_, _ = redacted.Write(encoded)
 		lastWritten = offset
 		changed = true
 	}
@@ -129,7 +129,7 @@ func redactOpenAIAccountInstructionsJSONStrings(body []byte, suffix string) ([]b
 	if !changed {
 		return body, false, nil
 	}
-	redacted.Write(body[lastWritten:])
+	_, _ = redacted.Write(body[lastWritten:])
 	return redacted.Bytes(), true, nil
 }
 
@@ -185,8 +185,8 @@ func redactOpenAIAccountInstructionsJSONStyleText(text, suffix, replacement stri
 			continue
 		}
 		start := units[i-len(target)+1].start
-		redacted.WriteString(text[lastWritten:start])
-		redacted.WriteString(replacement)
+		_, _ = redacted.WriteString(text[lastWritten:start])
+		_, _ = redacted.WriteString(replacement)
 		lastWritten = unit.end
 		changed = true
 		// Match strings.ReplaceAll semantics: matches never overlap.
@@ -195,7 +195,7 @@ func redactOpenAIAccountInstructionsJSONStyleText(text, suffix, replacement stri
 	if !changed {
 		return text
 	}
-	redacted.WriteString(text[lastWritten:])
+	_, _ = redacted.WriteString(text[lastWritten:])
 	return redacted.String()
 }
 

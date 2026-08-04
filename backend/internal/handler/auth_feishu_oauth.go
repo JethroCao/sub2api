@@ -444,7 +444,7 @@ func feishuExchangeCode(ctx context.Context, cfg feishuOAuthConfig, code string)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("feishu token endpoint status %d: %s", resp.StatusCode, truncateLogValue(string(raw), 1024))
@@ -472,7 +472,7 @@ func feishuFetchUserInfo(ctx context.Context, cfg feishuOAuthConfig, accessToken
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("feishu userinfo endpoint status %d: %s", resp.StatusCode, truncateLogValue(string(raw), 1024))

@@ -293,7 +293,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		respBody, _ := s.readOpenAIUpstreamError(resp)
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
@@ -304,7 +304,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
 		respBody = redactOpenAIAccountInstructionsFromUpstreamBody(account, respBody)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
-		upstreamMsg = strings.TrimSpace(extractUpstreamErrorMessage(respBody))
+		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 		if account.Type == AccountTypeAPIKey &&
 			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
@@ -593,7 +593,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		payloadBytes := []byte(payload)
 		if isFailureEvent {
 			payloadBytes = redactOpenAIAccountInstructionsFromUpstreamBody(account, payloadBytes)
-			payload = string(payloadBytes)
 		}
 		refusalDetector.ObservePayload(payloadBytes)
 
