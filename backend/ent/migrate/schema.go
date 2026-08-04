@@ -915,6 +915,7 @@ var (
 		{Name: "monthly_limit_usd", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "default_validity_days", Type: field.TypeInt, Default: 30},
 		{Name: "allow_image_generation", Type: field.TypeBool, Default: false},
+		{Name: "allow_video_generation", Type: field.TypeBool, Default: false},
 		{Name: "allow_batch_image_generation", Type: field.TypeBool, Default: false},
 		{Name: "image_rate_independent", Type: field.TypeBool, Default: false},
 		{Name: "image_rate_multiplier", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(10,4)"}},
@@ -985,7 +986,7 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[42]},
+				Columns: []*schema.Column{GroupsColumns[43]},
 			},
 			{
 				Name:    "idx_groups_duplicate_operation_id_active",
@@ -2064,6 +2065,47 @@ var (
 			},
 		},
 	}
+	// VideoPricingRulesColumns holds the columns for the "video_pricing_rules" table.
+	VideoPricingRulesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "external_model", Type: field.TypeString, Size: 128},
+		{Name: "operation", Type: field.TypeEnum, Enums: []string{"generation", "edit", "extension"}},
+		{Name: "resolution", Type: field.TypeString, Size: 32, Default: "*"},
+		{Name: "audio_mode", Type: field.TypeEnum, Enums: []string{"any", "with_audio", "without_audio"}, Default: "any"},
+		{Name: "unit", Type: field.TypeEnum, Enums: []string{"per_request", "per_output_second"}},
+		{Name: "unit_price", Type: field.TypeFloat64, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "upstream_unit_cost", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "group_id", Type: field.TypeInt64},
+	}
+	// VideoPricingRulesTable holds the schema information for the "video_pricing_rules" table.
+	VideoPricingRulesTable = &schema.Table{
+		Name:       "video_pricing_rules",
+		Columns:    VideoPricingRulesColumns,
+		PrimaryKey: []*schema.Column{VideoPricingRulesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "video_pricing_rules_groups_video_pricing_rules",
+				Columns:    []*schema.Column{VideoPricingRulesColumns[11]},
+				RefColumns: []*schema.Column{GroupsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "videopricingrule_group_id_external_model_operation_resolution_audio_mode",
+				Unique:  true,
+				Columns: []*schema.Column{VideoPricingRulesColumns[11], VideoPricingRulesColumns[1], VideoPricingRulesColumns[2], VideoPricingRulesColumns[3], VideoPricingRulesColumns[4]},
+			},
+			{
+				Name:    "videopricingrule_group_id_external_model_operation_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{VideoPricingRulesColumns[11], VideoPricingRulesColumns[1], VideoPricingRulesColumns[2], VideoPricingRulesColumns[8]},
+			},
+		},
+	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		APIKeysTable,
@@ -2105,6 +2147,7 @@ var (
 		UserAttributeValuesTable,
 		UserPlatformQuotasTable,
 		UserSubscriptionsTable,
+		VideoPricingRulesTable,
 	}
 )
 
@@ -2261,5 +2304,9 @@ func init() {
 	UserSubscriptionsTable.ForeignKeys[2].RefTable = UsersTable
 	UserSubscriptionsTable.Annotation = &entsql.Annotation{
 		Table: "user_subscriptions",
+	}
+	VideoPricingRulesTable.ForeignKeys[0].RefTable = GroupsTable
+	VideoPricingRulesTable.Annotation = &entsql.Annotation{
+		Table: "video_pricing_rules",
 	}
 }

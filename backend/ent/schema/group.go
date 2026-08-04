@@ -99,6 +99,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("allow_image_generation").
 			Default(false).
 			Comment("是否允许该分组使用图片生成能力"),
+		field.Bool("allow_video_generation").
+			Default(false).
+			Comment("是否允许该分组使用视频生成能力"),
 		field.Bool("allow_batch_image_generation").
 			Default(false).
 			Comment("是否允许该分组使用批量图片生成能力"),
@@ -257,6 +260,8 @@ func (Group) Edges() []ent.Edge {
 		edge.To("redeem_codes", RedeemCode.Type),
 		edge.To("subscriptions", UserSubscription.Type),
 		edge.To("usage_logs", UsageLog.Type),
+		edge.To("video_pricing_rules", VideoPricingRule.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.From("accounts", Account.Type).
 			Ref("groups").
 			Through("account_groups", AccountGroup.Type),

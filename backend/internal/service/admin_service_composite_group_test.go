@@ -14,6 +14,18 @@ type accountRepoStubForCompositeModelsList struct {
 	accounts []Account
 }
 
+func TestCompositeRouteAcceptsVideoTargetPlatform(t *testing.T) {
+	route, err := compositeRouteFromInput(99, CompositeRouteInput{
+		PublicModel:    "video-model",
+		TargetPlatform: PlatformVideo,
+		UpstreamModel:  "provider-model",
+		Enabled:        true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, PlatformVideo, route.TargetPlatform)
+}
+
 func (s *accountRepoStubForCompositeModelsList) ListSchedulableByGroupID(_ context.Context, _ int64) ([]Account, error) {
 	return s.accounts, nil
 }

@@ -155,6 +155,11 @@ func AllowImageGeneration(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldAllowImageGeneration, v))
 }
 
+// AllowVideoGeneration applies equality check predicate on the "allow_video_generation" field. It's identical to AllowVideoGenerationEQ.
+func AllowVideoGeneration(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldAllowVideoGeneration, v))
+}
+
 // AllowBatchImageGeneration applies equality check predicate on the "allow_batch_image_generation" field. It's identical to AllowBatchImageGenerationEQ.
 func AllowBatchImageGeneration(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldAllowBatchImageGeneration, v))
@@ -1275,6 +1280,16 @@ func AllowImageGenerationNEQ(v bool) predicate.Group {
 	return predicate.Group(sql.FieldNEQ(FieldAllowImageGeneration, v))
 }
 
+// AllowVideoGenerationEQ applies the EQ predicate on the "allow_video_generation" field.
+func AllowVideoGenerationEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldAllowVideoGeneration, v))
+}
+
+// AllowVideoGenerationNEQ applies the NEQ predicate on the "allow_video_generation" field.
+func AllowVideoGenerationNEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldAllowVideoGeneration, v))
+}
+
 // AllowBatchImageGenerationEQ applies the EQ predicate on the "allow_batch_image_generation" field.
 func AllowBatchImageGenerationEQ(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldAllowBatchImageGeneration, v))
@@ -2379,6 +2394,29 @@ func HasUsageLogs() predicate.Group {
 func HasUsageLogsWith(preds ...predicate.UsageLog) predicate.Group {
 	return predicate.Group(func(s *sql.Selector) {
 		step := newUsageLogsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasVideoPricingRules applies the HasEdge predicate on the "video_pricing_rules" edge.
+func HasVideoPricingRules() predicate.Group {
+	return predicate.Group(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, VideoPricingRulesTable, VideoPricingRulesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasVideoPricingRulesWith applies the HasEdge predicate on the "video_pricing_rules" edge with a given conditions (other predicates).
+func HasVideoPricingRulesWith(preds ...predicate.VideoPricingRule) predicate.Group {
+	return predicate.Group(func(s *sql.Selector) {
+		step := newVideoPricingRulesStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

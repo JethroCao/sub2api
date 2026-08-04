@@ -52,6 +52,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/userattributevalue"
 	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/ent/videopricingrule"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
@@ -103,6 +104,7 @@ const (
 	TypeUserAttributeValue            = "UserAttributeValue"
 	TypeUserPlatformQuota             = "UserPlatformQuota"
 	TypeUserSubscription              = "UserSubscription"
+	TypeVideoPricingRule              = "VideoPricingRule"
 )
 
 // APIKeyMutation represents an operation that mutates the APIKey nodes in the graph.
@@ -21873,6 +21875,7 @@ type GroupMutation struct {
 	default_validity_days                   *int
 	adddefault_validity_days                *int
 	allow_image_generation                  *bool
+	allow_video_generation                  *bool
 	allow_batch_image_generation            *bool
 	image_rate_independent                  *bool
 	image_rate_multiplier                   *float64
@@ -21940,6 +21943,9 @@ type GroupMutation struct {
 	usage_logs                              map[int64]struct{}
 	removedusage_logs                       map[int64]struct{}
 	clearedusage_logs                       bool
+	video_pricing_rules                     map[int64]struct{}
+	removedvideo_pricing_rules              map[int64]struct{}
+	clearedvideo_pricing_rules              bool
 	accounts                                map[int64]struct{}
 	removedaccounts                         map[int64]struct{}
 	clearedaccounts                         bool
@@ -22968,6 +22974,42 @@ func (m *GroupMutation) OldAllowImageGeneration(ctx context.Context) (v bool, er
 // ResetAllowImageGeneration resets all changes to the "allow_image_generation" field.
 func (m *GroupMutation) ResetAllowImageGeneration() {
 	m.allow_image_generation = nil
+}
+
+// SetAllowVideoGeneration sets the "allow_video_generation" field.
+func (m *GroupMutation) SetAllowVideoGeneration(b bool) {
+	m.allow_video_generation = &b
+}
+
+// AllowVideoGeneration returns the value of the "allow_video_generation" field in the mutation.
+func (m *GroupMutation) AllowVideoGeneration() (r bool, exists bool) {
+	v := m.allow_video_generation
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAllowVideoGeneration returns the old "allow_video_generation" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldAllowVideoGeneration(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAllowVideoGeneration is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAllowVideoGeneration requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAllowVideoGeneration: %w", err)
+	}
+	return oldValue.AllowVideoGeneration, nil
+}
+
+// ResetAllowVideoGeneration resets all changes to the "allow_video_generation" field.
+func (m *GroupMutation) ResetAllowVideoGeneration() {
+	m.allow_video_generation = nil
 }
 
 // SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
@@ -24955,6 +24997,60 @@ func (m *GroupMutation) ResetUsageLogs() {
 	m.removedusage_logs = nil
 }
 
+// AddVideoPricingRuleIDs adds the "video_pricing_rules" edge to the VideoPricingRule entity by ids.
+func (m *GroupMutation) AddVideoPricingRuleIDs(ids ...int64) {
+	if m.video_pricing_rules == nil {
+		m.video_pricing_rules = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.video_pricing_rules[ids[i]] = struct{}{}
+	}
+}
+
+// ClearVideoPricingRules clears the "video_pricing_rules" edge to the VideoPricingRule entity.
+func (m *GroupMutation) ClearVideoPricingRules() {
+	m.clearedvideo_pricing_rules = true
+}
+
+// VideoPricingRulesCleared reports if the "video_pricing_rules" edge to the VideoPricingRule entity was cleared.
+func (m *GroupMutation) VideoPricingRulesCleared() bool {
+	return m.clearedvideo_pricing_rules
+}
+
+// RemoveVideoPricingRuleIDs removes the "video_pricing_rules" edge to the VideoPricingRule entity by IDs.
+func (m *GroupMutation) RemoveVideoPricingRuleIDs(ids ...int64) {
+	if m.removedvideo_pricing_rules == nil {
+		m.removedvideo_pricing_rules = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.video_pricing_rules, ids[i])
+		m.removedvideo_pricing_rules[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedVideoPricingRules returns the removed IDs of the "video_pricing_rules" edge to the VideoPricingRule entity.
+func (m *GroupMutation) RemovedVideoPricingRulesIDs() (ids []int64) {
+	for id := range m.removedvideo_pricing_rules {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// VideoPricingRulesIDs returns the "video_pricing_rules" edge IDs in the mutation.
+func (m *GroupMutation) VideoPricingRulesIDs() (ids []int64) {
+	for id := range m.video_pricing_rules {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetVideoPricingRules resets all changes to the "video_pricing_rules" edge.
+func (m *GroupMutation) ResetVideoPricingRules() {
+	m.video_pricing_rules = nil
+	m.clearedvideo_pricing_rules = false
+	m.removedvideo_pricing_rules = nil
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by ids.
 func (m *GroupMutation) AddAccountIDs(ids ...int64) {
 	if m.accounts == nil {
@@ -25097,7 +25193,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 55)
+	fields := make([]string, 0, 56)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -25157,6 +25253,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.allow_image_generation != nil {
 		fields = append(fields, group.FieldAllowImageGeneration)
+	}
+	if m.allow_video_generation != nil {
+		fields = append(fields, group.FieldAllowVideoGeneration)
 	}
 	if m.allow_batch_image_generation != nil {
 		fields = append(fields, group.FieldAllowBatchImageGeneration)
@@ -25311,6 +25410,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.DefaultValidityDays()
 	case group.FieldAllowImageGeneration:
 		return m.AllowImageGeneration()
+	case group.FieldAllowVideoGeneration:
+		return m.AllowVideoGeneration()
 	case group.FieldAllowBatchImageGeneration:
 		return m.AllowBatchImageGeneration()
 	case group.FieldImageRateIndependent:
@@ -25430,6 +25531,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldDefaultValidityDays(ctx)
 	case group.FieldAllowImageGeneration:
 		return m.OldAllowImageGeneration(ctx)
+	case group.FieldAllowVideoGeneration:
+		return m.OldAllowVideoGeneration(ctx)
 	case group.FieldAllowBatchImageGeneration:
 		return m.OldAllowBatchImageGeneration(ctx)
 	case group.FieldImageRateIndependent:
@@ -25648,6 +25751,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAllowImageGeneration(v)
+		return nil
+	case group.FieldAllowVideoGeneration:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAllowVideoGeneration(v)
 		return nil
 	case group.FieldAllowBatchImageGeneration:
 		v, ok := value.(bool)
@@ -26381,6 +26491,9 @@ func (m *GroupMutation) ResetField(name string) error {
 	case group.FieldAllowImageGeneration:
 		m.ResetAllowImageGeneration()
 		return nil
+	case group.FieldAllowVideoGeneration:
+		m.ResetAllowVideoGeneration()
+		return nil
 	case group.FieldAllowBatchImageGeneration:
 		m.ResetAllowBatchImageGeneration()
 		return nil
@@ -26492,7 +26605,7 @@ func (m *GroupMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *GroupMutation) AddedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.api_keys != nil {
 		edges = append(edges, group.EdgeAPIKeys)
 	}
@@ -26504,6 +26617,9 @@ func (m *GroupMutation) AddedEdges() []string {
 	}
 	if m.usage_logs != nil {
 		edges = append(edges, group.EdgeUsageLogs)
+	}
+	if m.video_pricing_rules != nil {
+		edges = append(edges, group.EdgeVideoPricingRules)
 	}
 	if m.accounts != nil {
 		edges = append(edges, group.EdgeAccounts)
@@ -26542,6 +26658,12 @@ func (m *GroupMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case group.EdgeVideoPricingRules:
+		ids := make([]ent.Value, 0, len(m.video_pricing_rules))
+		for id := range m.video_pricing_rules {
+			ids = append(ids, id)
+		}
+		return ids
 	case group.EdgeAccounts:
 		ids := make([]ent.Value, 0, len(m.accounts))
 		for id := range m.accounts {
@@ -26560,7 +26682,7 @@ func (m *GroupMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *GroupMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.removedapi_keys != nil {
 		edges = append(edges, group.EdgeAPIKeys)
 	}
@@ -26572,6 +26694,9 @@ func (m *GroupMutation) RemovedEdges() []string {
 	}
 	if m.removedusage_logs != nil {
 		edges = append(edges, group.EdgeUsageLogs)
+	}
+	if m.removedvideo_pricing_rules != nil {
+		edges = append(edges, group.EdgeVideoPricingRules)
 	}
 	if m.removedaccounts != nil {
 		edges = append(edges, group.EdgeAccounts)
@@ -26610,6 +26735,12 @@ func (m *GroupMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case group.EdgeVideoPricingRules:
+		ids := make([]ent.Value, 0, len(m.removedvideo_pricing_rules))
+		for id := range m.removedvideo_pricing_rules {
+			ids = append(ids, id)
+		}
+		return ids
 	case group.EdgeAccounts:
 		ids := make([]ent.Value, 0, len(m.removedaccounts))
 		for id := range m.removedaccounts {
@@ -26628,7 +26759,7 @@ func (m *GroupMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *GroupMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.clearedapi_keys {
 		edges = append(edges, group.EdgeAPIKeys)
 	}
@@ -26640,6 +26771,9 @@ func (m *GroupMutation) ClearedEdges() []string {
 	}
 	if m.clearedusage_logs {
 		edges = append(edges, group.EdgeUsageLogs)
+	}
+	if m.clearedvideo_pricing_rules {
+		edges = append(edges, group.EdgeVideoPricingRules)
 	}
 	if m.clearedaccounts {
 		edges = append(edges, group.EdgeAccounts)
@@ -26662,6 +26796,8 @@ func (m *GroupMutation) EdgeCleared(name string) bool {
 		return m.clearedsubscriptions
 	case group.EdgeUsageLogs:
 		return m.clearedusage_logs
+	case group.EdgeVideoPricingRules:
+		return m.clearedvideo_pricing_rules
 	case group.EdgeAccounts:
 		return m.clearedaccounts
 	case group.EdgeAllowedUsers:
@@ -26693,6 +26829,9 @@ func (m *GroupMutation) ResetEdge(name string) error {
 		return nil
 	case group.EdgeUsageLogs:
 		m.ResetUsageLogs()
+		return nil
+	case group.EdgeVideoPricingRules:
+		m.ResetVideoPricingRules()
 		return nil
 	case group.EdgeAccounts:
 		m.ResetAccounts()
@@ -55635,4 +55774,1016 @@ func (m *UserSubscriptionMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown UserSubscription edge %s", name)
+}
+
+// VideoPricingRuleMutation represents an operation that mutates the VideoPricingRule nodes in the graph.
+type VideoPricingRuleMutation struct {
+	config
+	op                    Op
+	typ                   string
+	id                    *int64
+	external_model        *string
+	operation             *videopricingrule.Operation
+	resolution            *string
+	audio_mode            *videopricingrule.AudioMode
+	unit                  *videopricingrule.Unit
+	unit_price            *float64
+	addunit_price         *float64
+	upstream_unit_cost    *float64
+	addupstream_unit_cost *float64
+	enabled               *bool
+	created_at            *time.Time
+	updated_at            *time.Time
+	clearedFields         map[string]struct{}
+	group                 *int64
+	clearedgroup          bool
+	done                  bool
+	oldValue              func(context.Context) (*VideoPricingRule, error)
+	predicates            []predicate.VideoPricingRule
+}
+
+var _ ent.Mutation = (*VideoPricingRuleMutation)(nil)
+
+// videopricingruleOption allows management of the mutation configuration using functional options.
+type videopricingruleOption func(*VideoPricingRuleMutation)
+
+// newVideoPricingRuleMutation creates new mutation for the VideoPricingRule entity.
+func newVideoPricingRuleMutation(c config, op Op, opts ...videopricingruleOption) *VideoPricingRuleMutation {
+	m := &VideoPricingRuleMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeVideoPricingRule,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withVideoPricingRuleID sets the ID field of the mutation.
+func withVideoPricingRuleID(id int64) videopricingruleOption {
+	return func(m *VideoPricingRuleMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *VideoPricingRule
+		)
+		m.oldValue = func(ctx context.Context) (*VideoPricingRule, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().VideoPricingRule.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withVideoPricingRule sets the old VideoPricingRule of the mutation.
+func withVideoPricingRule(node *VideoPricingRule) videopricingruleOption {
+	return func(m *VideoPricingRuleMutation) {
+		m.oldValue = func(context.Context) (*VideoPricingRule, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m VideoPricingRuleMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m VideoPricingRuleMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *VideoPricingRuleMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *VideoPricingRuleMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().VideoPricingRule.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetGroupID sets the "group_id" field.
+func (m *VideoPricingRuleMutation) SetGroupID(i int64) {
+	m.group = &i
+}
+
+// GroupID returns the value of the "group_id" field in the mutation.
+func (m *VideoPricingRuleMutation) GroupID() (r int64, exists bool) {
+	v := m.group
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupID returns the old "group_id" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldGroupID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupID: %w", err)
+	}
+	return oldValue.GroupID, nil
+}
+
+// ResetGroupID resets all changes to the "group_id" field.
+func (m *VideoPricingRuleMutation) ResetGroupID() {
+	m.group = nil
+}
+
+// SetExternalModel sets the "external_model" field.
+func (m *VideoPricingRuleMutation) SetExternalModel(s string) {
+	m.external_model = &s
+}
+
+// ExternalModel returns the value of the "external_model" field in the mutation.
+func (m *VideoPricingRuleMutation) ExternalModel() (r string, exists bool) {
+	v := m.external_model
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExternalModel returns the old "external_model" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldExternalModel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExternalModel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExternalModel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExternalModel: %w", err)
+	}
+	return oldValue.ExternalModel, nil
+}
+
+// ResetExternalModel resets all changes to the "external_model" field.
+func (m *VideoPricingRuleMutation) ResetExternalModel() {
+	m.external_model = nil
+}
+
+// SetOperation sets the "operation" field.
+func (m *VideoPricingRuleMutation) SetOperation(v videopricingrule.Operation) {
+	m.operation = &v
+}
+
+// Operation returns the value of the "operation" field in the mutation.
+func (m *VideoPricingRuleMutation) Operation() (r videopricingrule.Operation, exists bool) {
+	v := m.operation
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOperation returns the old "operation" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldOperation(ctx context.Context) (v videopricingrule.Operation, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOperation is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOperation requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOperation: %w", err)
+	}
+	return oldValue.Operation, nil
+}
+
+// ResetOperation resets all changes to the "operation" field.
+func (m *VideoPricingRuleMutation) ResetOperation() {
+	m.operation = nil
+}
+
+// SetResolution sets the "resolution" field.
+func (m *VideoPricingRuleMutation) SetResolution(s string) {
+	m.resolution = &s
+}
+
+// Resolution returns the value of the "resolution" field in the mutation.
+func (m *VideoPricingRuleMutation) Resolution() (r string, exists bool) {
+	v := m.resolution
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResolution returns the old "resolution" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldResolution(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResolution is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResolution requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResolution: %w", err)
+	}
+	return oldValue.Resolution, nil
+}
+
+// ResetResolution resets all changes to the "resolution" field.
+func (m *VideoPricingRuleMutation) ResetResolution() {
+	m.resolution = nil
+}
+
+// SetAudioMode sets the "audio_mode" field.
+func (m *VideoPricingRuleMutation) SetAudioMode(vm videopricingrule.AudioMode) {
+	m.audio_mode = &vm
+}
+
+// AudioMode returns the value of the "audio_mode" field in the mutation.
+func (m *VideoPricingRuleMutation) AudioMode() (r videopricingrule.AudioMode, exists bool) {
+	v := m.audio_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAudioMode returns the old "audio_mode" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldAudioMode(ctx context.Context) (v videopricingrule.AudioMode, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAudioMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAudioMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAudioMode: %w", err)
+	}
+	return oldValue.AudioMode, nil
+}
+
+// ResetAudioMode resets all changes to the "audio_mode" field.
+func (m *VideoPricingRuleMutation) ResetAudioMode() {
+	m.audio_mode = nil
+}
+
+// SetUnit sets the "unit" field.
+func (m *VideoPricingRuleMutation) SetUnit(v videopricingrule.Unit) {
+	m.unit = &v
+}
+
+// Unit returns the value of the "unit" field in the mutation.
+func (m *VideoPricingRuleMutation) Unit() (r videopricingrule.Unit, exists bool) {
+	v := m.unit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUnit returns the old "unit" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldUnit(ctx context.Context) (v videopricingrule.Unit, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUnit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUnit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUnit: %w", err)
+	}
+	return oldValue.Unit, nil
+}
+
+// ResetUnit resets all changes to the "unit" field.
+func (m *VideoPricingRuleMutation) ResetUnit() {
+	m.unit = nil
+}
+
+// SetUnitPrice sets the "unit_price" field.
+func (m *VideoPricingRuleMutation) SetUnitPrice(f float64) {
+	m.unit_price = &f
+	m.addunit_price = nil
+}
+
+// UnitPrice returns the value of the "unit_price" field in the mutation.
+func (m *VideoPricingRuleMutation) UnitPrice() (r float64, exists bool) {
+	v := m.unit_price
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUnitPrice returns the old "unit_price" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldUnitPrice(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUnitPrice is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUnitPrice requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUnitPrice: %w", err)
+	}
+	return oldValue.UnitPrice, nil
+}
+
+// AddUnitPrice adds f to the "unit_price" field.
+func (m *VideoPricingRuleMutation) AddUnitPrice(f float64) {
+	if m.addunit_price != nil {
+		*m.addunit_price += f
+	} else {
+		m.addunit_price = &f
+	}
+}
+
+// AddedUnitPrice returns the value that was added to the "unit_price" field in this mutation.
+func (m *VideoPricingRuleMutation) AddedUnitPrice() (r float64, exists bool) {
+	v := m.addunit_price
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUnitPrice resets all changes to the "unit_price" field.
+func (m *VideoPricingRuleMutation) ResetUnitPrice() {
+	m.unit_price = nil
+	m.addunit_price = nil
+}
+
+// SetUpstreamUnitCost sets the "upstream_unit_cost" field.
+func (m *VideoPricingRuleMutation) SetUpstreamUnitCost(f float64) {
+	m.upstream_unit_cost = &f
+	m.addupstream_unit_cost = nil
+}
+
+// UpstreamUnitCost returns the value of the "upstream_unit_cost" field in the mutation.
+func (m *VideoPricingRuleMutation) UpstreamUnitCost() (r float64, exists bool) {
+	v := m.upstream_unit_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpstreamUnitCost returns the old "upstream_unit_cost" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldUpstreamUnitCost(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpstreamUnitCost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpstreamUnitCost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpstreamUnitCost: %w", err)
+	}
+	return oldValue.UpstreamUnitCost, nil
+}
+
+// AddUpstreamUnitCost adds f to the "upstream_unit_cost" field.
+func (m *VideoPricingRuleMutation) AddUpstreamUnitCost(f float64) {
+	if m.addupstream_unit_cost != nil {
+		*m.addupstream_unit_cost += f
+	} else {
+		m.addupstream_unit_cost = &f
+	}
+}
+
+// AddedUpstreamUnitCost returns the value that was added to the "upstream_unit_cost" field in this mutation.
+func (m *VideoPricingRuleMutation) AddedUpstreamUnitCost() (r float64, exists bool) {
+	v := m.addupstream_unit_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearUpstreamUnitCost clears the value of the "upstream_unit_cost" field.
+func (m *VideoPricingRuleMutation) ClearUpstreamUnitCost() {
+	m.upstream_unit_cost = nil
+	m.addupstream_unit_cost = nil
+	m.clearedFields[videopricingrule.FieldUpstreamUnitCost] = struct{}{}
+}
+
+// UpstreamUnitCostCleared returns if the "upstream_unit_cost" field was cleared in this mutation.
+func (m *VideoPricingRuleMutation) UpstreamUnitCostCleared() bool {
+	_, ok := m.clearedFields[videopricingrule.FieldUpstreamUnitCost]
+	return ok
+}
+
+// ResetUpstreamUnitCost resets all changes to the "upstream_unit_cost" field.
+func (m *VideoPricingRuleMutation) ResetUpstreamUnitCost() {
+	m.upstream_unit_cost = nil
+	m.addupstream_unit_cost = nil
+	delete(m.clearedFields, videopricingrule.FieldUpstreamUnitCost)
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *VideoPricingRuleMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *VideoPricingRuleMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *VideoPricingRuleMutation) ResetEnabled() {
+	m.enabled = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *VideoPricingRuleMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *VideoPricingRuleMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *VideoPricingRuleMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *VideoPricingRuleMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *VideoPricingRuleMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the VideoPricingRule entity.
+// If the VideoPricingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoPricingRuleMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *VideoPricingRuleMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// ClearGroup clears the "group" edge to the Group entity.
+func (m *VideoPricingRuleMutation) ClearGroup() {
+	m.clearedgroup = true
+	m.clearedFields[videopricingrule.FieldGroupID] = struct{}{}
+}
+
+// GroupCleared reports if the "group" edge to the Group entity was cleared.
+func (m *VideoPricingRuleMutation) GroupCleared() bool {
+	return m.clearedgroup
+}
+
+// GroupIDs returns the "group" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// GroupID instead. It exists only for internal usage by the builders.
+func (m *VideoPricingRuleMutation) GroupIDs() (ids []int64) {
+	if id := m.group; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetGroup resets all changes to the "group" edge.
+func (m *VideoPricingRuleMutation) ResetGroup() {
+	m.group = nil
+	m.clearedgroup = false
+}
+
+// Where appends a list predicates to the VideoPricingRuleMutation builder.
+func (m *VideoPricingRuleMutation) Where(ps ...predicate.VideoPricingRule) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the VideoPricingRuleMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *VideoPricingRuleMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.VideoPricingRule, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *VideoPricingRuleMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *VideoPricingRuleMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (VideoPricingRule).
+func (m *VideoPricingRuleMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *VideoPricingRuleMutation) Fields() []string {
+	fields := make([]string, 0, 11)
+	if m.group != nil {
+		fields = append(fields, videopricingrule.FieldGroupID)
+	}
+	if m.external_model != nil {
+		fields = append(fields, videopricingrule.FieldExternalModel)
+	}
+	if m.operation != nil {
+		fields = append(fields, videopricingrule.FieldOperation)
+	}
+	if m.resolution != nil {
+		fields = append(fields, videopricingrule.FieldResolution)
+	}
+	if m.audio_mode != nil {
+		fields = append(fields, videopricingrule.FieldAudioMode)
+	}
+	if m.unit != nil {
+		fields = append(fields, videopricingrule.FieldUnit)
+	}
+	if m.unit_price != nil {
+		fields = append(fields, videopricingrule.FieldUnitPrice)
+	}
+	if m.upstream_unit_cost != nil {
+		fields = append(fields, videopricingrule.FieldUpstreamUnitCost)
+	}
+	if m.enabled != nil {
+		fields = append(fields, videopricingrule.FieldEnabled)
+	}
+	if m.created_at != nil {
+		fields = append(fields, videopricingrule.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, videopricingrule.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *VideoPricingRuleMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case videopricingrule.FieldGroupID:
+		return m.GroupID()
+	case videopricingrule.FieldExternalModel:
+		return m.ExternalModel()
+	case videopricingrule.FieldOperation:
+		return m.Operation()
+	case videopricingrule.FieldResolution:
+		return m.Resolution()
+	case videopricingrule.FieldAudioMode:
+		return m.AudioMode()
+	case videopricingrule.FieldUnit:
+		return m.Unit()
+	case videopricingrule.FieldUnitPrice:
+		return m.UnitPrice()
+	case videopricingrule.FieldUpstreamUnitCost:
+		return m.UpstreamUnitCost()
+	case videopricingrule.FieldEnabled:
+		return m.Enabled()
+	case videopricingrule.FieldCreatedAt:
+		return m.CreatedAt()
+	case videopricingrule.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *VideoPricingRuleMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case videopricingrule.FieldGroupID:
+		return m.OldGroupID(ctx)
+	case videopricingrule.FieldExternalModel:
+		return m.OldExternalModel(ctx)
+	case videopricingrule.FieldOperation:
+		return m.OldOperation(ctx)
+	case videopricingrule.FieldResolution:
+		return m.OldResolution(ctx)
+	case videopricingrule.FieldAudioMode:
+		return m.OldAudioMode(ctx)
+	case videopricingrule.FieldUnit:
+		return m.OldUnit(ctx)
+	case videopricingrule.FieldUnitPrice:
+		return m.OldUnitPrice(ctx)
+	case videopricingrule.FieldUpstreamUnitCost:
+		return m.OldUpstreamUnitCost(ctx)
+	case videopricingrule.FieldEnabled:
+		return m.OldEnabled(ctx)
+	case videopricingrule.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case videopricingrule.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown VideoPricingRule field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *VideoPricingRuleMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case videopricingrule.FieldGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupID(v)
+		return nil
+	case videopricingrule.FieldExternalModel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExternalModel(v)
+		return nil
+	case videopricingrule.FieldOperation:
+		v, ok := value.(videopricingrule.Operation)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOperation(v)
+		return nil
+	case videopricingrule.FieldResolution:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResolution(v)
+		return nil
+	case videopricingrule.FieldAudioMode:
+		v, ok := value.(videopricingrule.AudioMode)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAudioMode(v)
+		return nil
+	case videopricingrule.FieldUnit:
+		v, ok := value.(videopricingrule.Unit)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUnit(v)
+		return nil
+	case videopricingrule.FieldUnitPrice:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUnitPrice(v)
+		return nil
+	case videopricingrule.FieldUpstreamUnitCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpstreamUnitCost(v)
+		return nil
+	case videopricingrule.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
+		return nil
+	case videopricingrule.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case videopricingrule.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown VideoPricingRule field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *VideoPricingRuleMutation) AddedFields() []string {
+	var fields []string
+	if m.addunit_price != nil {
+		fields = append(fields, videopricingrule.FieldUnitPrice)
+	}
+	if m.addupstream_unit_cost != nil {
+		fields = append(fields, videopricingrule.FieldUpstreamUnitCost)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *VideoPricingRuleMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case videopricingrule.FieldUnitPrice:
+		return m.AddedUnitPrice()
+	case videopricingrule.FieldUpstreamUnitCost:
+		return m.AddedUpstreamUnitCost()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *VideoPricingRuleMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case videopricingrule.FieldUnitPrice:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUnitPrice(v)
+		return nil
+	case videopricingrule.FieldUpstreamUnitCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUpstreamUnitCost(v)
+		return nil
+	}
+	return fmt.Errorf("unknown VideoPricingRule numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *VideoPricingRuleMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(videopricingrule.FieldUpstreamUnitCost) {
+		fields = append(fields, videopricingrule.FieldUpstreamUnitCost)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *VideoPricingRuleMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *VideoPricingRuleMutation) ClearField(name string) error {
+	switch name {
+	case videopricingrule.FieldUpstreamUnitCost:
+		m.ClearUpstreamUnitCost()
+		return nil
+	}
+	return fmt.Errorf("unknown VideoPricingRule nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *VideoPricingRuleMutation) ResetField(name string) error {
+	switch name {
+	case videopricingrule.FieldGroupID:
+		m.ResetGroupID()
+		return nil
+	case videopricingrule.FieldExternalModel:
+		m.ResetExternalModel()
+		return nil
+	case videopricingrule.FieldOperation:
+		m.ResetOperation()
+		return nil
+	case videopricingrule.FieldResolution:
+		m.ResetResolution()
+		return nil
+	case videopricingrule.FieldAudioMode:
+		m.ResetAudioMode()
+		return nil
+	case videopricingrule.FieldUnit:
+		m.ResetUnit()
+		return nil
+	case videopricingrule.FieldUnitPrice:
+		m.ResetUnitPrice()
+		return nil
+	case videopricingrule.FieldUpstreamUnitCost:
+		m.ResetUpstreamUnitCost()
+		return nil
+	case videopricingrule.FieldEnabled:
+		m.ResetEnabled()
+		return nil
+	case videopricingrule.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case videopricingrule.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown VideoPricingRule field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *VideoPricingRuleMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.group != nil {
+		edges = append(edges, videopricingrule.EdgeGroup)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *VideoPricingRuleMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case videopricingrule.EdgeGroup:
+		if id := m.group; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *VideoPricingRuleMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *VideoPricingRuleMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *VideoPricingRuleMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedgroup {
+		edges = append(edges, videopricingrule.EdgeGroup)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *VideoPricingRuleMutation) EdgeCleared(name string) bool {
+	switch name {
+	case videopricingrule.EdgeGroup:
+		return m.clearedgroup
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *VideoPricingRuleMutation) ClearEdge(name string) error {
+	switch name {
+	case videopricingrule.EdgeGroup:
+		m.ClearGroup()
+		return nil
+	}
+	return fmt.Errorf("unknown VideoPricingRule unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *VideoPricingRuleMutation) ResetEdge(name string) error {
+	switch name {
+	case videopricingrule.EdgeGroup:
+		m.ResetGroup()
+		return nil
+	}
+	return fmt.Errorf("unknown VideoPricingRule edge %s", name)
 }

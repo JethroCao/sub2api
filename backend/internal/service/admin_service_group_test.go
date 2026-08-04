@@ -376,6 +376,23 @@ func TestAdminService_CreateGroup_PreservesNonGrokImageGenerationDisabled(t *tes
 	require.False(t, group.AllowImageGeneration)
 }
 
+func TestAdminService_CreateGroup_PersistsVideoGenerationPermission(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                 "video-enabled",
+		Platform:             PlatformVideo,
+		RateMultiplier:       1,
+		AllowVideoGeneration: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.created)
+	require.True(t, repo.created.AllowVideoGeneration)
+	require.True(t, group.AllowVideoGeneration)
+}
+
 func TestAdminService_CreateGroup_DisablesBatchImageWhenImageGenerationDisabled(t *testing.T) {
 	repo := &groupRepoStubForAdmin{}
 	svc := &adminServiceImpl{groupRepo: repo}
@@ -544,6 +561,28 @@ func TestAdminService_UpdateGroup_PreservesImageGenerationControlsWhenOmitted(t 
 	require.True(t, repo.updated.AllowImageGeneration)
 	require.True(t, repo.updated.ImageRateIndependent)
 	require.InDelta(t, 0.5, repo.updated.ImageRateMultiplier, 1e-12)
+}
+
+func TestAdminService_UpdateGroup_UpdatesVideoGenerationPermission(t *testing.T) {
+	existingGroup := &Group{
+		ID:                   1,
+		Name:                 "video-enabled",
+		Platform:             PlatformVideo,
+		Status:               StatusActive,
+		AllowVideoGeneration: true,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existingGroup}
+	svc := &adminServiceImpl{groupRepo: repo}
+	disabled := false
+
+	group, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
+		AllowVideoGeneration: &disabled,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.updated)
+	require.False(t, repo.updated.AllowVideoGeneration)
+	require.False(t, group.AllowVideoGeneration)
 }
 
 func TestAdminService_UpdateGroup_DisablesBatchImageWhenImageGenerationDisabled(t *testing.T) {

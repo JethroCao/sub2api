@@ -59,6 +59,8 @@ type Group struct {
 	DefaultValidityDays int `json:"default_validity_days,omitempty"`
 	// 是否允许该分组使用图片生成能力
 	AllowImageGeneration bool `json:"allow_image_generation,omitempty"`
+	// 是否允许该分组使用视频生成能力
+	AllowVideoGeneration bool `json:"allow_video_generation,omitempty"`
 	// 是否允许该分组使用批量图片生成能力
 	AllowBatchImageGeneration bool `json:"allow_batch_image_generation,omitempty"`
 	// 图片生成是否使用独立倍率；false 表示共享分组有效倍率
@@ -145,6 +147,8 @@ type GroupEdges struct {
 	Subscriptions []*UserSubscription `json:"subscriptions,omitempty"`
 	// UsageLogs holds the value of the usage_logs edge.
 	UsageLogs []*UsageLog `json:"usage_logs,omitempty"`
+	// VideoPricingRules holds the value of the video_pricing_rules edge.
+	VideoPricingRules []*VideoPricingRule `json:"video_pricing_rules,omitempty"`
 	// Accounts holds the value of the accounts edge.
 	Accounts []*Account `json:"accounts,omitempty"`
 	// AllowedUsers holds the value of the allowed_users edge.
@@ -155,7 +159,7 @@ type GroupEdges struct {
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [8]bool
+	loadedTypes [9]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -194,10 +198,19 @@ func (e GroupEdges) UsageLogsOrErr() ([]*UsageLog, error) {
 	return nil, &NotLoadedError{edge: "usage_logs"}
 }
 
+// VideoPricingRulesOrErr returns the VideoPricingRules value or an error if the edge
+// was not loaded in eager-loading.
+func (e GroupEdges) VideoPricingRulesOrErr() ([]*VideoPricingRule, error) {
+	if e.loadedTypes[4] {
+		return e.VideoPricingRules, nil
+	}
+	return nil, &NotLoadedError{edge: "video_pricing_rules"}
+}
+
 // AccountsOrErr returns the Accounts value or an error if the edge
 // was not loaded in eager-loading.
 func (e GroupEdges) AccountsOrErr() ([]*Account, error) {
-	if e.loadedTypes[4] {
+	if e.loadedTypes[5] {
 		return e.Accounts, nil
 	}
 	return nil, &NotLoadedError{edge: "accounts"}
@@ -206,7 +219,7 @@ func (e GroupEdges) AccountsOrErr() ([]*Account, error) {
 // AllowedUsersOrErr returns the AllowedUsers value or an error if the edge
 // was not loaded in eager-loading.
 func (e GroupEdges) AllowedUsersOrErr() ([]*User, error) {
-	if e.loadedTypes[5] {
+	if e.loadedTypes[6] {
 		return e.AllowedUsers, nil
 	}
 	return nil, &NotLoadedError{edge: "allowed_users"}
@@ -215,7 +228,7 @@ func (e GroupEdges) AllowedUsersOrErr() ([]*User, error) {
 // AccountGroupsOrErr returns the AccountGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e GroupEdges) AccountGroupsOrErr() ([]*AccountGroup, error) {
-	if e.loadedTypes[6] {
+	if e.loadedTypes[7] {
 		return e.AccountGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "account_groups"}
@@ -224,7 +237,7 @@ func (e GroupEdges) AccountGroupsOrErr() ([]*AccountGroup, error) {
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e GroupEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[7] {
+	if e.loadedTypes[8] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -237,7 +250,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig, group.FieldReasoningEffortMappings:
 			values[i] = new([]byte)
-		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldProfitControlEnabled:
+		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldAllowVideoGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldProfitControlEnabled:
 			values[i] = new(sql.NullBool)
 		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldWebSearchPricePerCall, group.FieldProfitMinMargin, group.FieldProfitSafetyBuffer:
 			values[i] = new(sql.NullFloat64)
@@ -393,6 +406,12 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field allow_image_generation", values[i])
 			} else if value.Valid {
 				_m.AllowImageGeneration = value.Bool
+			}
+		case group.FieldAllowVideoGeneration:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field allow_video_generation", values[i])
+			} else if value.Valid {
+				_m.AllowVideoGeneration = value.Bool
 			}
 		case group.FieldAllowBatchImageGeneration:
 			if value, ok := values[i].(*sql.NullBool); !ok {
@@ -656,6 +675,11 @@ func (_m *Group) QueryUsageLogs() *UsageLogQuery {
 	return NewGroupClient(_m.config).QueryUsageLogs(_m)
 }
 
+// QueryVideoPricingRules queries the "video_pricing_rules" edge of the Group entity.
+func (_m *Group) QueryVideoPricingRules() *VideoPricingRuleQuery {
+	return NewGroupClient(_m.config).QueryVideoPricingRules(_m)
+}
+
 // QueryAccounts queries the "accounts" edge of the Group entity.
 func (_m *Group) QueryAccounts() *AccountQuery {
 	return NewGroupClient(_m.config).QueryAccounts(_m)
@@ -770,6 +794,9 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("allow_image_generation=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AllowImageGeneration))
+	builder.WriteString(", ")
+	builder.WriteString("allow_video_generation=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AllowVideoGeneration))
 	builder.WriteString(", ")
 	builder.WriteString("allow_batch_image_generation=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AllowBatchImageGeneration))

@@ -56,6 +56,8 @@ const (
 	FieldDefaultValidityDays = "default_validity_days"
 	// FieldAllowImageGeneration holds the string denoting the allow_image_generation field in the database.
 	FieldAllowImageGeneration = "allow_image_generation"
+	// FieldAllowVideoGeneration holds the string denoting the allow_video_generation field in the database.
+	FieldAllowVideoGeneration = "allow_video_generation"
 	// FieldAllowBatchImageGeneration holds the string denoting the allow_batch_image_generation field in the database.
 	FieldAllowBatchImageGeneration = "allow_batch_image_generation"
 	// FieldImageRateIndependent holds the string denoting the image_rate_independent field in the database.
@@ -134,6 +136,8 @@ const (
 	EdgeSubscriptions = "subscriptions"
 	// EdgeUsageLogs holds the string denoting the usage_logs edge name in mutations.
 	EdgeUsageLogs = "usage_logs"
+	// EdgeVideoPricingRules holds the string denoting the video_pricing_rules edge name in mutations.
+	EdgeVideoPricingRules = "video_pricing_rules"
 	// EdgeAccounts holds the string denoting the accounts edge name in mutations.
 	EdgeAccounts = "accounts"
 	// EdgeAllowedUsers holds the string denoting the allowed_users edge name in mutations.
@@ -172,6 +176,13 @@ const (
 	UsageLogsInverseTable = "usage_logs"
 	// UsageLogsColumn is the table column denoting the usage_logs relation/edge.
 	UsageLogsColumn = "group_id"
+	// VideoPricingRulesTable is the table that holds the video_pricing_rules relation/edge.
+	VideoPricingRulesTable = "video_pricing_rules"
+	// VideoPricingRulesInverseTable is the table name for the VideoPricingRule entity.
+	// It exists in this package in order to avoid circular dependency with the "videopricingrule" package.
+	VideoPricingRulesInverseTable = "video_pricing_rules"
+	// VideoPricingRulesColumn is the table column denoting the video_pricing_rules relation/edge.
+	VideoPricingRulesColumn = "group_id"
 	// AccountsTable is the table that holds the accounts relation/edge. The primary key declared below.
 	AccountsTable = "account_groups"
 	// AccountsInverseTable is the table name for the Account entity.
@@ -221,6 +232,7 @@ var Columns = []string{
 	FieldMonthlyLimitUsd,
 	FieldDefaultValidityDays,
 	FieldAllowImageGeneration,
+	FieldAllowVideoGeneration,
 	FieldAllowBatchImageGeneration,
 	FieldImageRateIndependent,
 	FieldImageRateMultiplier,
@@ -327,6 +339,8 @@ var (
 	DefaultDefaultValidityDays int
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.
 	DefaultAllowImageGeneration bool
+	// DefaultAllowVideoGeneration holds the default value on creation for the "allow_video_generation" field.
+	DefaultAllowVideoGeneration bool
 	// DefaultAllowBatchImageGeneration holds the default value on creation for the "allow_batch_image_generation" field.
 	DefaultAllowBatchImageGeneration bool
 	// DefaultImageRateIndependent holds the default value on creation for the "image_rate_independent" field.
@@ -489,6 +503,11 @@ func ByDefaultValidityDays(opts ...sql.OrderTermOption) OrderOption {
 // ByAllowImageGeneration orders the results by the allow_image_generation field.
 func ByAllowImageGeneration(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAllowImageGeneration, opts...).ToFunc()
+}
+
+// ByAllowVideoGeneration orders the results by the allow_video_generation field.
+func ByAllowVideoGeneration(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowVideoGeneration, opts...).ToFunc()
 }
 
 // ByAllowBatchImageGeneration orders the results by the allow_batch_image_generation field.
@@ -697,6 +716,20 @@ func ByUsageLogs(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByVideoPricingRulesCount orders the results by video_pricing_rules count.
+func ByVideoPricingRulesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newVideoPricingRulesStep(), opts...)
+	}
+}
+
+// ByVideoPricingRules orders the results by video_pricing_rules terms.
+func ByVideoPricingRules(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newVideoPricingRulesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByAccountsCount orders the results by accounts count.
 func ByAccountsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -778,6 +811,13 @@ func newUsageLogsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(UsageLogsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, UsageLogsTable, UsageLogsColumn),
+	)
+}
+func newVideoPricingRulesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(VideoPricingRulesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, VideoPricingRulesTable, VideoPricingRulesColumn),
 	)
 }
 func newAccountsStep() *sqlgraph.Step {

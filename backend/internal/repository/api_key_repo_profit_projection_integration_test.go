@@ -18,13 +18,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetByKeyForAuthCarriesProfitControlProjection(t *testing.T) {
+func TestAPIKeyAuthProjectionCarriesGroupAuthorizationAndProfitFields(t *testing.T) {
 	ctx := context.Background()
 	suffix := time.Now().UnixNano()
 	group := mustCreateGroup(t, integrationEntClient, &service.Group{
 		Name:                 fmt.Sprintf("profit-proj-group-%d", suffix),
 		Platform:             service.PlatformOpenAI,
 		RateMultiplier:       0.06,
+		AllowVideoGeneration: true,
 		ProfitControlEnabled: true,
 		ProfitMinMargin:      0.2,
 		ProfitSafetyBuffer:   0.05,
@@ -54,6 +55,7 @@ func TestGetByKeyForAuthCarriesProfitControlProjection(t *testing.T) {
 
 	require.Equal(t, service.PlatformOpenAI, got.Group.Platform)
 	require.InDelta(t, 0.06, got.Group.RateMultiplier, 1e-9)
+	require.True(t, got.Group.AllowVideoGeneration, "allow_video_generation 必须进入认证投影")
 	require.True(t, got.Group.ProfitControlEnabled, "profit_control_enabled 必须进入认证投影（投影漏列会让门静默失效）")
 	require.InDelta(t, 0.2, got.Group.ProfitMinMargin, 1e-9)
 	require.InDelta(t, 0.05, got.Group.ProfitSafetyBuffer, 1e-9)

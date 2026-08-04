@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/ent/videopricingrule"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
@@ -348,6 +349,20 @@ func (_u *GroupUpdate) SetAllowImageGeneration(v bool) *GroupUpdate {
 func (_u *GroupUpdate) SetNillableAllowImageGeneration(v *bool) *GroupUpdate {
 	if v != nil {
 		_u.SetAllowImageGeneration(*v)
+	}
+	return _u
+}
+
+// SetAllowVideoGeneration sets the "allow_video_generation" field.
+func (_u *GroupUpdate) SetAllowVideoGeneration(v bool) *GroupUpdate {
+	_u.mutation.SetAllowVideoGeneration(v)
+	return _u
+}
+
+// SetNillableAllowVideoGeneration sets the "allow_video_generation" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableAllowVideoGeneration(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetAllowVideoGeneration(*v)
 	}
 	return _u
 }
@@ -1069,6 +1084,21 @@ func (_u *GroupUpdate) AddUsageLogs(v ...*UsageLog) *GroupUpdate {
 	return _u.AddUsageLogIDs(ids...)
 }
 
+// AddVideoPricingRuleIDs adds the "video_pricing_rules" edge to the VideoPricingRule entity by IDs.
+func (_u *GroupUpdate) AddVideoPricingRuleIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.AddVideoPricingRuleIDs(ids...)
+	return _u
+}
+
+// AddVideoPricingRules adds the "video_pricing_rules" edges to the VideoPricingRule entity.
+func (_u *GroupUpdate) AddVideoPricingRules(v ...*VideoPricingRule) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddVideoPricingRuleIDs(ids...)
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *GroupUpdate) AddAccountIDs(ids ...int64) *GroupUpdate {
 	_u.mutation.AddAccountIDs(ids...)
@@ -1186,6 +1216,27 @@ func (_u *GroupUpdate) RemoveUsageLogs(v ...*UsageLog) *GroupUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveUsageLogIDs(ids...)
+}
+
+// ClearVideoPricingRules clears all "video_pricing_rules" edges to the VideoPricingRule entity.
+func (_u *GroupUpdate) ClearVideoPricingRules() *GroupUpdate {
+	_u.mutation.ClearVideoPricingRules()
+	return _u
+}
+
+// RemoveVideoPricingRuleIDs removes the "video_pricing_rules" edge to VideoPricingRule entities by IDs.
+func (_u *GroupUpdate) RemoveVideoPricingRuleIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.RemoveVideoPricingRuleIDs(ids...)
+	return _u
+}
+
+// RemoveVideoPricingRules removes "video_pricing_rules" edges to VideoPricingRule entities.
+func (_u *GroupUpdate) RemoveVideoPricingRules(v ...*VideoPricingRule) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveVideoPricingRuleIDs(ids...)
 }
 
 // ClearAccounts clears all "accounts" edges to the Account entity.
@@ -1418,6 +1469,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowVideoGeneration(); ok {
+		_spec.SetField(group.FieldAllowVideoGeneration, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.AllowBatchImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowBatchImageGeneration, field.TypeBool, value)
@@ -1788,6 +1842,51 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.VideoPricingRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.VideoPricingRulesTable,
+			Columns: []string{group.VideoPricingRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(videopricingrule.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedVideoPricingRulesIDs(); len(nodes) > 0 && !_u.mutation.VideoPricingRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.VideoPricingRulesTable,
+			Columns: []string{group.VideoPricingRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(videopricingrule.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.VideoPricingRulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.VideoPricingRulesTable,
+			Columns: []string{group.VideoPricingRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(videopricingrule.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -2241,6 +2340,20 @@ func (_u *GroupUpdateOne) SetAllowImageGeneration(v bool) *GroupUpdateOne {
 func (_u *GroupUpdateOne) SetNillableAllowImageGeneration(v *bool) *GroupUpdateOne {
 	if v != nil {
 		_u.SetAllowImageGeneration(*v)
+	}
+	return _u
+}
+
+// SetAllowVideoGeneration sets the "allow_video_generation" field.
+func (_u *GroupUpdateOne) SetAllowVideoGeneration(v bool) *GroupUpdateOne {
+	_u.mutation.SetAllowVideoGeneration(v)
+	return _u
+}
+
+// SetNillableAllowVideoGeneration sets the "allow_video_generation" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableAllowVideoGeneration(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetAllowVideoGeneration(*v)
 	}
 	return _u
 }
@@ -2962,6 +3075,21 @@ func (_u *GroupUpdateOne) AddUsageLogs(v ...*UsageLog) *GroupUpdateOne {
 	return _u.AddUsageLogIDs(ids...)
 }
 
+// AddVideoPricingRuleIDs adds the "video_pricing_rules" edge to the VideoPricingRule entity by IDs.
+func (_u *GroupUpdateOne) AddVideoPricingRuleIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.AddVideoPricingRuleIDs(ids...)
+	return _u
+}
+
+// AddVideoPricingRules adds the "video_pricing_rules" edges to the VideoPricingRule entity.
+func (_u *GroupUpdateOne) AddVideoPricingRules(v ...*VideoPricingRule) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddVideoPricingRuleIDs(ids...)
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *GroupUpdateOne) AddAccountIDs(ids ...int64) *GroupUpdateOne {
 	_u.mutation.AddAccountIDs(ids...)
@@ -3079,6 +3207,27 @@ func (_u *GroupUpdateOne) RemoveUsageLogs(v ...*UsageLog) *GroupUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveUsageLogIDs(ids...)
+}
+
+// ClearVideoPricingRules clears all "video_pricing_rules" edges to the VideoPricingRule entity.
+func (_u *GroupUpdateOne) ClearVideoPricingRules() *GroupUpdateOne {
+	_u.mutation.ClearVideoPricingRules()
+	return _u
+}
+
+// RemoveVideoPricingRuleIDs removes the "video_pricing_rules" edge to VideoPricingRule entities by IDs.
+func (_u *GroupUpdateOne) RemoveVideoPricingRuleIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.RemoveVideoPricingRuleIDs(ids...)
+	return _u
+}
+
+// RemoveVideoPricingRules removes "video_pricing_rules" edges to VideoPricingRule entities.
+func (_u *GroupUpdateOne) RemoveVideoPricingRules(v ...*VideoPricingRule) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveVideoPricingRuleIDs(ids...)
 }
 
 // ClearAccounts clears all "accounts" edges to the Account entity.
@@ -3341,6 +3490,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowVideoGeneration(); ok {
+		_spec.SetField(group.FieldAllowVideoGeneration, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.AllowBatchImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowBatchImageGeneration, field.TypeBool, value)
@@ -3711,6 +3863,51 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.VideoPricingRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.VideoPricingRulesTable,
+			Columns: []string{group.VideoPricingRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(videopricingrule.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedVideoPricingRulesIDs(); len(nodes) > 0 && !_u.mutation.VideoPricingRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.VideoPricingRulesTable,
+			Columns: []string{group.VideoPricingRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(videopricingrule.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.VideoPricingRulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.VideoPricingRulesTable,
+			Columns: []string{group.VideoPricingRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(videopricingrule.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

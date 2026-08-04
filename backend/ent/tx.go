@@ -92,6 +92,8 @@ type Tx struct {
 	UserPlatformQuota *UserPlatformQuotaClient
 	// UserSubscription is the client for interacting with the UserSubscription builders.
 	UserSubscription *UserSubscriptionClient
+	// VideoPricingRule is the client for interacting with the VideoPricingRule builders.
+	VideoPricingRule *VideoPricingRuleClient
 
 	// lazily loaded.
 	client     *Client
@@ -262,6 +264,7 @@ func (tx *Tx) init() {
 	tx.UserAttributeValue = NewUserAttributeValueClient(tx.config)
 	tx.UserPlatformQuota = NewUserPlatformQuotaClient(tx.config)
 	tx.UserSubscription = NewUserSubscriptionClient(tx.config)
+	tx.VideoPricingRule = NewVideoPricingRuleClient(tx.config)
 }
 
 // txDriver wraps the given dialect.Tx with a nop dialect.Driver implementation.
