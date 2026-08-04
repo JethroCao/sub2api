@@ -125,3 +125,9 @@ type UserSubscription func(*sql.Selector)
 
 // VideoPricingRule is the predicate function for videopricingrule builders.
 type VideoPricingRule func(*sql.Selector)
+
+// VideoTask is the predicate function for videotask builders.
+type VideoTask func(*sql.Selector)
+
+// VideoTaskEvent is the predicate function for videotaskevent builders.
+type VideoTaskEvent func(*sql.Selector)

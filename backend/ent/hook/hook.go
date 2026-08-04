@@ -489,6 +489,30 @@ func (f VideoPricingRuleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.V
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.VideoPricingRuleMutation", m)
 }
 
+// The VideoTaskFunc type is an adapter to allow the use of ordinary
+// function as VideoTask mutator.
+type VideoTaskFunc func(context.Context, *ent.VideoTaskMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f VideoTaskFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.VideoTaskMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.VideoTaskMutation", m)
+}
+
+// The VideoTaskEventFunc type is an adapter to allow the use of ordinary
+// function as VideoTaskEvent mutator.
+type VideoTaskEventFunc func(context.Context, *ent.VideoTaskEventMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f VideoTaskEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.VideoTaskEventMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.VideoTaskEventMutation", m)
+}
+
 // Condition is a hook condition function.
 type Condition func(context.Context, ent.Mutation) bool
 
