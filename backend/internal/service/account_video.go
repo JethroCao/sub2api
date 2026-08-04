@@ -1,8 +1,9 @@
 package service
 
 import (
-	"fmt"
 	"strings"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 const videoProviderExtraKey = "video_provider"
@@ -22,20 +23,20 @@ func ValidateVideoAccountConfig(platform, accountType string, extra, credentials
 		return nil
 	}
 	if accountType != AccountTypeAPIKey {
-		return fmt.Errorf("video accounts require account type %q", AccountTypeAPIKey)
+		return infraerrors.BadRequest("VIDEO_ACCOUNT_TYPE_INVALID", "video accounts require API key account type")
 	}
 	provider, _ := extra[videoProviderExtraKey].(string)
 	switch provider {
 	case VideoProviderSeedance:
 		if !hasVideoCredential(credentials, "api_key") {
-			return fmt.Errorf("video provider %q requires credentials.api_key", VideoProviderSeedance)
+			return infraerrors.BadRequest("VIDEO_SEEDANCE_API_KEY_REQUIRED", "seedance video accounts require credentials.api_key")
 		}
 	case VideoProviderKling:
 		if !hasVideoCredential(credentials, "access_key") || !hasVideoCredential(credentials, "secret_key") {
-			return fmt.Errorf("video provider %q requires credentials.access_key and credentials.secret_key", VideoProviderKling)
+			return infraerrors.BadRequest("VIDEO_KLING_CREDENTIALS_REQUIRED", "kling video accounts require credentials.access_key and credentials.secret_key")
 		}
 	default:
-		return fmt.Errorf("video provider must be %q or %q", VideoProviderSeedance, VideoProviderKling)
+		return infraerrors.BadRequest("VIDEO_PROVIDER_INVALID", "video provider must be seedance or kling")
 	}
 	return nil
 }
