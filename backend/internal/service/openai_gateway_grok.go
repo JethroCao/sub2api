@@ -1089,6 +1089,17 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	return req, nil
 }
 
+// GrokVideoProvider exposes the durable-video adapter with the gateway's
+// established upstream transport, OAuth token lifecycle, and URL policy. The
+// legacy media forwarding path remains in place until durable routing takes
+// over in a later migration.
+func (s *OpenAIGatewayService) GrokVideoProvider() *GrokVideoProvider {
+	if s == nil {
+		return NewGrokVideoProvider(nil, nil)
+	}
+	return NewGrokVideoProvider(s.httpUpstream, s.grokTokenProvider, s.cfg)
+}
+
 // applyGrokCLIHeaders identifies subscription traffic as a supported Grok CLI
 // version. The CLI gateway rejects otherwise valid OAuth requests without it.
 func applyGrokCLIHeaders(headers http.Header) {
