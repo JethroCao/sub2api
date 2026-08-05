@@ -14,9 +14,12 @@ type VideoTaskRepository interface {
 	CreateOrGet(context.Context, CreateVideoTaskParams) (*VideoTask, bool, error)
 	GetOwned(context.Context, string, int64, int64) (*VideoTask, error)
 	GetByRequestID(context.Context, string) (*VideoTask, error)
+	AssignAndMarkSubmitting(context.Context, AssignVideoSubmissionParams) error
 	MarkSubmitting(context.Context, string, int64, string) error
 	MarkSubmitted(context.Context, MarkVideoSubmittedParams) error
 	MarkSubmissionUnknown(context.Context, string, int64, VideoTaskError) error
+	MarkSubmissionUnknownAt(context.Context, MarkVideoSubmissionUnknownParams) error
+	MarkSubmissionFailed(context.Context, MarkVideoSubmissionFailedParams) error
 	LeaseDue(context.Context, string, int, time.Duration, time.Time) ([]VideoTask, error)
 	ApplyPollResult(context.Context, ApplyVideoPollResultParams) error
 	MarkSettled(context.Context, MarkVideoSettledParams) error

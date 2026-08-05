@@ -221,6 +221,40 @@ type CreateVideoTaskParams struct {
 	BillingStatus      string
 }
 
+// AssignVideoSubmissionParams atomically binds a newly reserved task to the
+// selected account before any upstream bytes are sent. Tasks are created with
+// an unassigned route so idempotent replays can be detected before scheduling.
+type AssignVideoSubmissionParams struct {
+	RequestID               string
+	ExpectedVersion         int64
+	AccountID               int64
+	Platform                string
+	Provider                string
+	UpstreamModel           string
+	ProviderSubmissionToken string
+	UpdatedAt               time.Time
+}
+
+// MarkVideoSubmissionUnknownParams retains the minimized recovery payload and
+// provider submission token while scheduling a later, non-resubmitting recovery
+// attempt.
+type MarkVideoSubmissionUnknownParams struct {
+	RequestID       string
+	ExpectedVersion int64
+	Error           VideoTaskError
+	NextPollAt      time.Time
+	UpdatedAt       time.Time
+}
+
+// MarkVideoSubmissionFailedParams records a proven pre-acceptance failure only
+// after the billing hold has been released.
+type MarkVideoSubmissionFailedParams struct {
+	RequestID       string
+	ExpectedVersion int64
+	Error           VideoTaskError
+	FailedAt        time.Time
+}
+
 type MarkVideoSubmittedParams struct {
 	RequestID       string
 	ExpectedVersion int64

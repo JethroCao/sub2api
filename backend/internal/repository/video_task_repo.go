@@ -163,6 +163,36 @@ func (r *videoTaskRepository) GetByRequestID(ctx context.Context, requestID stri
 	return task, nil
 }
 
+func (r *videoTaskRepository) AssignAndMarkSubmitting(ctx context.Context, params service.AssignVideoSubmissionParams) error {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
+		return err
+	}
+	if params.ExpectedVersion < 0 || params.AccountID <= 0 || params.Platform != service.PlatformVideo ||
+		(params.Provider != service.VideoProviderSeedance && params.Provider != service.VideoProviderKling) ||
+		strings.TrimSpace(params.UpstreamModel) == "" || strings.TrimSpace(params.ProviderSubmissionToken) == "" ||
+		len(params.ProviderSubmissionToken) > 128 {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	if params.UpdatedAt.IsZero() {
+		params.UpdatedAt = time.Now().UTC()
+	}
+	result, err := r.db.ExecContext(ctx, `
+UPDATE video_tasks
+SET account_id = $3, platform = $4, provider = $5, upstream_model = $6,
+    status = 'submitting', provider_submission_token = $7,
+    submission_attempts = submission_attempts + 1, last_error_code = NULL,
+    last_error_message = NULL, last_error_retryable = FALSE,
+    version = version + 1, updated_at = $8
+WHERE request_id = $1 AND version = $2 AND status = 'created'
+  AND account_id = 0 AND upstream_model = '' AND platform = $4 AND provider = $5`,
+		params.RequestID, params.ExpectedVersion, params.AccountID, params.Platform,
+		params.Provider, params.UpstreamModel, params.ProviderSubmissionToken, params.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	return r.checkMutationResult(ctx, result, params.RequestID, params.ExpectedVersion, nil)
+}
+
 func (r *videoTaskRepository) MarkSubmitting(ctx context.Context, requestID string, expectedVersion int64, providerSubmissionToken string) error {
 	if err := validateVideoRequestID(requestID); err != nil {
 		return err
@@ -213,20 +243,63 @@ WHERE request_id = $1 AND version = $2 AND status = 'submitting'`, params.Reques
 }
 
 func (r *videoTaskRepository) MarkSubmissionUnknown(ctx context.Context, requestID string, expectedVersion int64, taskError service.VideoTaskError) error {
-	if err := validateVideoRequestID(requestID); err != nil {
+	now := time.Now().UTC()
+	return r.MarkSubmissionUnknownAt(ctx, service.MarkVideoSubmissionUnknownParams{
+		RequestID:       requestID,
+		ExpectedVersion: expectedVersion,
+		Error:           taskError,
+		NextPollAt:      now,
+		UpdatedAt:       now,
+	})
+}
+
+func (r *videoTaskRepository) MarkSubmissionUnknownAt(ctx context.Context, params service.MarkVideoSubmissionUnknownParams) error {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
 		return err
+	}
+	if params.ExpectedVersion < 0 || params.NextPollAt.IsZero() {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	if params.UpdatedAt.IsZero() {
+		params.UpdatedAt = time.Now().UTC()
 	}
 	result, err := r.db.ExecContext(ctx, `
 UPDATE video_tasks
 SET status = 'unknown', last_error_code = NULLIF($3, ''),
     last_error_message = NULLIF($4, ''), last_error_retryable = $5,
-    version = version + 1, updated_at = NOW()
-WHERE request_id = $1 AND version = $2 AND status = 'submitting'`, requestID, expectedVersion,
-		taskError.Code(), taskError.Message(), taskError.Retryable())
+	    next_poll_at = $6, version = version + 1, updated_at = $7
+WHERE request_id = $1 AND version = $2 AND status = 'submitting'`, params.RequestID, params.ExpectedVersion,
+		params.Error.Code(), params.Error.Message(), params.Error.Retryable(), params.NextPollAt, params.UpdatedAt)
 	if err != nil {
 		return err
 	}
-	return r.checkMutationResult(ctx, result, requestID, expectedVersion, nil)
+	return r.checkMutationResult(ctx, result, params.RequestID, params.ExpectedVersion, nil)
+}
+
+func (r *videoTaskRepository) MarkSubmissionFailed(ctx context.Context, params service.MarkVideoSubmissionFailedParams) error {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
+		return err
+	}
+	if params.ExpectedVersion < 0 {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	if params.FailedAt.IsZero() {
+		params.FailedAt = time.Now().UTC()
+	}
+	result, err := r.db.ExecContext(ctx, `
+UPDATE video_tasks
+SET status = 'failed', provider_submission_token = NULL, request_payload = NULL,
+    next_poll_at = NULL, last_error_code = NULLIF($3, ''),
+    last_error_message = NULLIF($4, ''), last_error_retryable = $5,
+    billing_status = 'released', settled_amount = 0, settled_at = $6,
+    finished_at = COALESCE(finished_at, $6), version = version + 1, updated_at = $6
+WHERE request_id = $1 AND version = $2 AND status IN ('created', 'submitting')`,
+		params.RequestID, params.ExpectedVersion, params.Error.Code(), params.Error.Message(),
+		params.Error.Retryable(), params.FailedAt)
+	if err != nil {
+		return err
+	}
+	return r.checkMutationResult(ctx, result, params.RequestID, params.ExpectedVersion, nil)
 }
 
 func (r *videoTaskRepository) LeaseDue(ctx context.Context, owner string, limit int, lease time.Duration, now time.Time) ([]service.VideoTask, error) {
@@ -255,7 +328,10 @@ WITH due AS (
     SELECT id
     FROM video_tasks
     WHERE status IN ('submitted', 'queued', 'running', 'unknown')
-      AND upstream_task_id IS NOT NULL AND upstream_task_id <> ''
+      AND (
+          (upstream_task_id IS NOT NULL AND upstream_task_id <> '')
+          OR (status = 'unknown' AND provider_submission_token IS NOT NULL)
+      )
       AND next_poll_at IS NOT NULL AND next_poll_at <= $3
       AND (lease_expires_at IS NULL OR lease_expires_at <= $3)
     ORDER BY next_poll_at ASC, id ASC
@@ -559,11 +635,13 @@ func normalizeCreateVideoTaskParams(params service.CreateVideoTaskParams) (servi
 }
 
 func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
-	if params.UserID <= 0 || params.APIKeyID <= 0 || params.GroupID <= 0 || params.AccountID <= 0 ||
+	routeAssigned := params.AccountID > 0 && strings.TrimSpace(params.UpstreamModel) != ""
+	routePending := params.AccountID == 0 && strings.TrimSpace(params.UpstreamModel) == ""
+	if params.UserID <= 0 || params.APIKeyID <= 0 || params.GroupID <= 0 || (!routeAssigned && !routePending) ||
 		params.Platform != service.PlatformVideo ||
 		(params.Provider != service.VideoProviderSeedance && params.Provider != service.VideoProviderKling) ||
 		(params.Operation != "generation" && params.Operation != "edit" && params.Operation != "extension") ||
-		strings.TrimSpace(params.ExternalModel) == "" || strings.TrimSpace(params.UpstreamModel) == "" ||
+		strings.TrimSpace(params.ExternalModel) == "" ||
 		!videoTaskSHA256Pattern.MatchString(params.RequestHash) ||
 		(params.IdempotencyKeyHash != "" && !videoTaskSHA256Pattern.MatchString(params.IdempotencyKeyHash)) ||
 		!isFiniteNonNegativeVideoAmount(params.UnitPrice) || !isFiniteNonNegativeVideoAmount(params.EstimatedUnits) ||

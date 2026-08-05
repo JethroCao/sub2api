@@ -31,6 +31,108 @@ func TestVideoTaskRepositoryRequestIDFormat(t *testing.T) {
 	cleanupVideoTask(t, task.RequestID)
 }
 
+func TestVideoTaskRepositoryAssignsRouteAndPersistsSubmissionRecoveryState(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	params := videoTaskCreateParams(t, "submission-route", "")
+	params.AccountID = 0
+	params.UpstreamModel = ""
+	task, created, err := repo.CreateOrGet(ctx, params)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, task.RequestID)
+
+	err = repo.AssignAndMarkSubmitting(ctx, service.AssignVideoSubmissionParams{
+		RequestID: task.RequestID, ExpectedVersion: task.Version,
+		AccountID: 93, Platform: service.PlatformVideo, Provider: service.VideoProviderSeedance,
+		UpstreamModel: "seedance-upstream-v2", ProviderSubmissionToken: "safe-submit-token",
+	})
+	require.NoError(t, err)
+
+	nextPollAt := time.Now().UTC().Add(time.Minute).Truncate(time.Microsecond)
+	err = repo.MarkSubmissionUnknownAt(ctx, service.MarkVideoSubmissionUnknownParams{
+		RequestID: task.RequestID, ExpectedVersion: task.Version + 1,
+		Error: service.NewVideoTaskError("UPSTREAM_TIMEOUT", "", true), NextPollAt: nextPollAt,
+		UpdatedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
+	stored, err := repo.GetByRequestID(ctx, task.RequestID)
+	require.NoError(t, err)
+	require.Equal(t, int64(93), stored.AccountID)
+	require.Equal(t, "seedance-upstream-v2", stored.UpstreamModel)
+	require.Equal(t, service.VideoTaskUnknown, stored.Status)
+	require.Equal(t, task.Version+2, stored.Version)
+	require.Equal(t, 1, stored.SubmissionAttempts)
+	require.Equal(t, "safe-submit-token", videoTaskStringValue(stored.ProviderSubmissionToken))
+	require.WithinDuration(t, nextPollAt, *stored.NextPollAt, time.Microsecond)
+	require.NotEmpty(t, stored.RequestPayload)
+
+	leased, err := repo.LeaseDue(ctx, "worker-submission-recovery", 1, time.Minute, nextPollAt.Add(time.Second))
+	require.NoError(t, err)
+	require.Len(t, leased, 1, "unknown submissions without an upstream ID must remain recoverable")
+	require.Equal(t, task.RequestID, leased[0].RequestID)
+	require.Nil(t, leased[0].UpstreamTaskID)
+}
+
+func TestVideoTaskRepositoryAssignRouteRequiresPendingMatchingRoute(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+
+	t.Run("already assigned", func(t *testing.T) {
+		task, created, err := repo.CreateOrGet(ctx, videoTaskCreateParams(t, "route-already-assigned", ""))
+		require.NoError(t, err)
+		require.True(t, created)
+		cleanupVideoTask(t, task.RequestID)
+
+		err = repo.AssignAndMarkSubmitting(ctx, service.AssignVideoSubmissionParams{
+			RequestID: task.RequestID, ExpectedVersion: task.Version,
+			AccountID: 94, Platform: service.PlatformVideo, Provider: service.VideoProviderSeedance,
+			UpstreamModel: "replacement", ProviderSubmissionToken: "safe-submit-token",
+		})
+		require.ErrorIs(t, err, service.ErrVideoTaskInvalidTransition)
+	})
+
+	t.Run("provider mismatch", func(t *testing.T) {
+		params := videoTaskCreateParams(t, "route-provider-mismatch", "")
+		params.AccountID = 0
+		params.UpstreamModel = ""
+		task, created, err := repo.CreateOrGet(ctx, params)
+		require.NoError(t, err)
+		require.True(t, created)
+		cleanupVideoTask(t, task.RequestID)
+
+		err = repo.AssignAndMarkSubmitting(ctx, service.AssignVideoSubmissionParams{
+			RequestID: task.RequestID, ExpectedVersion: task.Version,
+			AccountID: 95, Platform: service.PlatformVideo, Provider: service.VideoProviderKling,
+			UpstreamModel: "wrong-provider", ProviderSubmissionToken: "safe-submit-token",
+		})
+		require.ErrorIs(t, err, service.ErrVideoTaskInvalidTransition)
+	})
+}
+
+func TestVideoTaskRepositorySubmissionFailureClearsRecoveryData(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	task, created, err := repo.CreateOrGet(ctx, videoTaskCreateParams(t, "submission-failed", ""))
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, task.RequestID)
+	require.NoError(t, repo.MarkSubmitting(ctx, task.RequestID, task.Version, "safe-submit-token"))
+
+	err = repo.MarkSubmissionFailed(ctx, service.MarkVideoSubmissionFailedParams{
+		RequestID: task.RequestID, ExpectedVersion: task.Version + 1,
+		Error: service.NewVideoTaskError("INVALID_REQUEST", "", false), FailedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
+	stored, err := repo.GetByRequestID(ctx, task.RequestID)
+	require.NoError(t, err)
+	require.Equal(t, service.VideoTaskFailed, stored.Status)
+	require.Nil(t, stored.ProviderSubmissionToken)
+	require.Empty(t, stored.RequestPayload)
+}
+
 func TestCreateVideoTaskAndReserveIsAtomic(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)

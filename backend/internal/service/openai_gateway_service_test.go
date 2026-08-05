@@ -814,6 +814,76 @@ func TestOpenAISelectAccountForModelWithExclusions_StickyUnschedulableClearsSess
 	}
 }
 
+func TestOpenAISelectAccountWithSchedulerForCapabilityVideoPlatform(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	groupID := int64(711)
+	repo := groupAwareStubOpenAIAccountRepo{stubOpenAIAccountRepo{accounts: []Account{
+		{
+			ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			Status: StatusActive, Schedulable: true, Concurrency: 1,
+			Credentials:   map[string]any{"model_mapping": map[string]any{"seedance-2.0": "wrong-platform"}},
+			AccountGroups: []AccountGroup{{GroupID: groupID}},
+		},
+		{
+			ID: 2, Platform: PlatformVideo, Type: AccountTypeAPIKey,
+			Status: StatusActive, Schedulable: true, Concurrency: 1,
+			Extra:         map[string]any{"video_provider": VideoProviderSeedance},
+			Credentials:   map[string]any{"api_key": "secret", "model_mapping": map[string]any{"other-model": "other-upstream"}},
+			AccountGroups: []AccountGroup{{GroupID: groupID}},
+		},
+		{
+			ID: 3, Platform: PlatformVideo, Type: AccountTypeAPIKey,
+			Status: StatusActive, Schedulable: true, Concurrency: 1,
+			Extra:         map[string]any{"video_provider": VideoProviderSeedance},
+			Credentials:   map[string]any{"api_key": "secret", "model_mapping": map[string]any{"seedance-2.0": "seedance-upstream-v2"}},
+			AccountGroups: []AccountGroup{{GroupID: groupID}},
+		},
+	}}}
+	for _, mode := range []struct {
+		name     string
+		advanced bool
+	}{
+		{name: "legacy"},
+		{name: "advanced", advanced: true},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			resetOpenAIAdvancedSchedulerSettingCacheForTest()
+			svc := &OpenAIGatewayService{
+				accountRepo:        repo,
+				concurrencyService: NewConcurrencyService(stubConcurrencyCache{}),
+			}
+			if mode.advanced {
+				svc.rateLimitService = newOpenAIAdvancedSchedulerRateLimitService("true")
+			}
+
+			selection, _, err := svc.SelectAccountWithSchedulerForCapability(
+				context.Background(),
+				&groupID,
+				"",
+				"",
+				"seedance-2.0",
+				nil,
+				OpenAIUpstreamTransportAny,
+				"",
+				false,
+				false,
+				false,
+				PlatformVideo,
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			require.NotNil(t, selection.Account)
+			require.Equal(t, int64(3), selection.Account.ID)
+			require.Equal(t, PlatformVideo, selection.Account.Platform)
+			require.True(t, selection.Acquired)
+			require.NotNil(t, selection.ReleaseFunc)
+			selection.ReleaseFunc()
+		})
+	}
+}
+
 func TestOpenAISelectAccountForModelWithExclusions_StickyOutsideGroupClearsSession(t *testing.T) {
 	sessionHash := "session-outside-group"
 	groupID := int64(1001)
