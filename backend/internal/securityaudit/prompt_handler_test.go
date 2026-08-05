@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -233,6 +234,15 @@ func validHandlerUpdateRequest(token string) UpdateConfigRequest {
 			TimeoutMS: 1000, InputLimit: 1024, Enabled: true,
 		}},
 	}
+}
+
+func TestPromptAdminConfigAuditFieldsIncludeCaptureModeWithoutSecrets(t *testing.T) {
+	request := validHandlerUpdateRequest("prompt-admin-token-canary")
+	request.CaptureOnly = true
+	fields := configAuditFields(request, &PublicConfig{ConfigVersion: 8})
+	require.Equal(t, true, fields["capture_only"])
+	require.Equal(t, int64(8), fields["config_version"])
+	require.NotContains(t, fmt.Sprint(fields), "prompt-admin-token-canary")
 }
 
 func TestPromptAdminDeleteConfirmationErrorsStayGeneric(t *testing.T) {

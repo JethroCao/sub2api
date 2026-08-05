@@ -227,7 +227,7 @@ func configAuditFields(request UpdateConfigRequest, saved *PublicConfig) map[str
 		version = saved.ConfigVersion
 	}
 	return map[string]any{
-		"enabled": request.Enabled, "blocking_enabled": request.BlockingEnabled,
+		"enabled": request.Enabled, "capture_only": request.CaptureOnly, "blocking_enabled": request.BlockingEnabled,
 		"blocking_latest_turn_only": request.BlockingLatestTurnOnly,
 		"config_version":            version, "endpoint_count": len(request.Endpoints),
 		"scanner_count": len(request.Scanners), "all_groups": request.AllGroups,

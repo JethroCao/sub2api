@@ -26,9 +26,10 @@ const (
 type Mode string
 
 const (
-	ModeOff      Mode = "off"
-	ModeAsync    Mode = "async_audit"
-	ModeBlocking Mode = "blocking"
+	ModeOff         Mode = "off"
+	ModeCaptureOnly Mode = "capture_only"
+	ModeAsync       Mode = "async_audit"
+	ModeBlocking    Mode = "blocking"
 )
 
 type DecisionKind string
