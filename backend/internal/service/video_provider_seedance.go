@@ -29,7 +29,6 @@ const (
 type SeedanceVideoProvider struct {
 	upstream           HTTPUpstream
 	validateResolvedIP SeedanceResolvedIPValidator
-	dialContext        HTTPUpstreamDialContext
 }
 
 // SeedanceResolvedIPValidator validates a hostname at the adapter boundary.
@@ -41,7 +40,7 @@ func NewSeedanceVideoProvider(upstream HTTPUpstream, validators ...SeedanceResol
 	if len(validators) > 0 && validators[0] != nil {
 		validator = validators[0]
 	}
-	return &SeedanceVideoProvider{upstream: upstream, validateResolvedIP: validator, dialContext: urlvalidator.ValidatedDialContext}
+	return &SeedanceVideoProvider{upstream: upstream, validateResolvedIP: validator}
 }
 
 func (p *SeedanceVideoProvider) Name() string { return VideoProviderSeedance }
@@ -127,7 +126,6 @@ func (p *SeedanceVideoProvider) OpenContent(ctx context.Context, _ *Account, tas
 		return nil, nil, 0, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, err)
 	}
 	requestContext := WithHTTPUpstreamResolvedIPValidation(WithHTTPUpstreamRedirectsDisabled(nonNilVideoContext(ctx)))
-	requestContext = WithHTTPUpstreamValidatedDialContext(requestContext, p.requestDialContext())
 	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return nil, nil, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_error", true, false, err)
@@ -309,7 +307,6 @@ func (p *SeedanceVideoProvider) doJSON(ctx context.Context, account *Account, me
 		reader = bytes.NewReader(body)
 	}
 	requestContext := WithHTTPUpstreamResolvedIPValidation(WithHTTPUpstreamRedirectsDisabled(nonNilVideoContext(ctx)))
-	requestContext = WithHTTPUpstreamValidatedDialContext(requestContext, p.requestDialContext())
 	request, err := http.NewRequestWithContext(requestContext, method, targetURL, reader)
 	if err != nil {
 		return nil, 0, err
@@ -508,11 +505,4 @@ func (p *SeedanceVideoProvider) validateRequestDestination(request *http.Request
 		validator = p.validateResolvedIP
 	}
 	return validator(request.Context(), request.URL.Hostname())
-}
-
-func (p *SeedanceVideoProvider) requestDialContext() HTTPUpstreamDialContext {
-	if p != nil && p.dialContext != nil {
-		return p.dialContext
-	}
-	return urlvalidator.ValidatedDialContext
 }

@@ -19,7 +19,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
-	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -67,25 +66,54 @@ func TestHTTPUpstreamValidatesResolvedIPWhenRequestRequiresIt(t *testing.T) {
 }
 
 // Catches validation that occurs before RoundTrip but leaves the transport to
-// resolve the hostname again. A marked request must instead use its supplied
+// resolve the hostname again. A marked request must use the repository-owned
 // dial boundary, where a changed private resolution stops the connection.
-func TestHTTPUpstreamUsesBoundValidatedDialContext(t *testing.T) {
-	var dialCalls atomic.Int64
-	dial := func(_ context.Context, network, address string) (net.Conn, error) {
-		dialCalls.Add(1)
+func TestHTTPUpstreamUsesRepositoryOwnedValidatedDialer(t *testing.T) {
+	var lookupCalls atomic.Int64
+	var rawDialCalls atomic.Int64
+	dialer := newValidatedResolvedIPDialer(func(_ context.Context, network, host string) ([]net.IP, error) {
+		require.Equal(t, "ip", network)
+		require.Equal(t, "public-origin.example", host)
+		if lookupCalls.Add(1) == 1 {
+			return []net.IP{net.ParseIP("8.8.8.8")}, nil
+		}
+		return []net.IP{net.ParseIP("10.0.0.8")}, nil
+	}, func(_ context.Context, network, address string) (net.Conn, error) {
+		rawDialCalls.Add(1)
 		require.Equal(t, "tcp", network)
-		require.Equal(t, "public-origin.example:443", address)
-		return nil, fmt.Errorf("dial-time resolution blocked: %w", urlvalidator.ValidateResolvedIPs([]net.IP{net.ParseIP("10.0.0.8")}))
-	}
+		require.Equal(t, "8.8.8.8:443", address)
+		return nil, errors.New("raw dial must not run after private rebinding")
+	})
 	ctx := service.WithHTTPUpstreamResolvedIPValidation(t.Context())
-	ctx = service.WithHTTPUpstreamValidatedDialContext(ctx, dial)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://public-origin.example/resource", nil)
 	require.NoError(t, err)
 
-	_, err = NewHTTPUpstream(nil).Do(req, "", 98, 1)
+	_, err = newHTTPUpstreamWithResolvedIPDialer(nil, dialer).Do(req, "", 98, 1)
 	require.Error(t, err)
-	require.Equal(t, int64(1), dialCalls.Load())
-	require.Contains(t, err.Error(), "dial-time resolution blocked")
+	require.Equal(t, int64(2), lookupCalls.Load())
+	require.Zero(t, rawDialCalls.Load())
+	require.Contains(t, err.Error(), "resolved ip 10.0.0.8 is not allowed")
+}
+
+// Catches a caller's request-level validation marker bypassing the global
+// guard; the trusted repository dialer remains the only dial construction path.
+func TestHTTPUpstreamRetainsGlobalValidationForRequestedResolvedIPChecks(t *testing.T) {
+	var rawDialCalls atomic.Int64
+	dialer := newValidatedResolvedIPDialer(func(_ context.Context, _ string, host string) ([]net.IP, error) {
+		require.Equal(t, "private-origin.example", host)
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	}, func(context.Context, string, string) (net.Conn, error) {
+		rawDialCalls.Add(1)
+		return nil, errors.New("raw dial attempted")
+	})
+	cfg := &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: true}}}
+	ctx := service.WithHTTPUpstreamResolvedIPValidation(t.Context())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://private-origin.example/private", nil)
+	require.NoError(t, err)
+
+	_, err = newHTTPUpstreamWithResolvedIPDialer(cfg, dialer).Do(req, "", 97, 1)
+	require.Error(t, err)
+	require.Zero(t, rawDialCalls.Load(), "callers cannot override the trusted resolved-IP dial path")
 }
 
 func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredHTTPProxy(t *testing.T) {

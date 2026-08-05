@@ -1,9 +1,6 @@
 package service
 
-import (
-	"context"
-	"net"
-)
+import "context"
 
 // HTTPUpstreamProfile marks HTTP upstream requests that need provider-specific
 // transport policy.
@@ -17,11 +14,6 @@ const (
 type httpUpstreamProfileContextKey struct{}
 type httpUpstreamDisableRedirectsContextKey struct{}
 type httpUpstreamRequireResolvedIPValidationContextKey struct{}
-type httpUpstreamValidatedDialContextKey struct{}
-
-// HTTPUpstreamDialContext dials a validated destination. The shared upstream
-// installs it on a request-specific direct transport when present.
-type HTTPUpstreamDialContext func(context.Context, string, string) (net.Conn, error)
 
 // WithHTTPUpstreamProfile injects an upstream transport profile into ctx.
 func WithHTTPUpstreamProfile(ctx context.Context, profile HTTPUpstreamProfile) context.Context {
@@ -77,22 +69,4 @@ func WithHTTPUpstreamResolvedIPValidation(ctx context.Context) context.Context {
 
 func HTTPUpstreamResolvedIPValidationRequired(ctx context.Context) bool {
 	return ctx != nil && ctx.Value(httpUpstreamRequireResolvedIPValidationContextKey{}) == true
-}
-
-func WithHTTPUpstreamValidatedDialContext(ctx context.Context, dial HTTPUpstreamDialContext) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if dial == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, httpUpstreamValidatedDialContextKey{}, dial)
-}
-
-func HTTPUpstreamValidatedDialContextFromContext(ctx context.Context) (HTTPUpstreamDialContext, bool) {
-	if ctx == nil {
-		return nil, false
-	}
-	dial, ok := ctx.Value(httpUpstreamValidatedDialContextKey{}).(HTTPUpstreamDialContext)
-	return dial, ok && dial != nil
 }

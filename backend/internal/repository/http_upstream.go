@@ -144,11 +144,68 @@ type openAIHTTP2FallbackState struct {
 // 7. 代理变更时清空旧连接池，避免复用错误代理
 // 8. 账号并发数与连接池上限对应（账号隔离策略下）
 type httpUpstreamService struct {
-	cfg     *config.Config                  // 全局配置
-	mu      sync.RWMutex                    // 保护 clients map 的读写锁
-	clients map[string]*upstreamClientEntry // 客户端缓存池，key 由隔离策略决定
+	cfg              *config.Config                  // 全局配置
+	mu               sync.RWMutex                    // 保护 clients map 的读写锁
+	clients          map[string]*upstreamClientEntry // 客户端缓存池，key 由隔离策略决定
+	resolvedIPDialer resolvedIPDialer
 	// OpenAI 走 HTTP/HTTPS 代理时的 H2->H1 回退状态（key=标准化 proxyKey）
 	openAIHTTP2Fallbacks sync.Map
+}
+
+// resolvedIPDialer is repository-owned: callers may request destination
+// validation but cannot supply a dialer that bypasses it.
+type resolvedIPDialer interface {
+	ValidateHost(context.Context, string) error
+	DialContext(context.Context, string, string) (net.Conn, error)
+}
+
+type validatedResolvedIPDialer struct {
+	lookup func(context.Context, string, string) ([]net.IP, error)
+	dial   func(context.Context, string, string) (net.Conn, error)
+}
+
+func newValidatedResolvedIPDialer(lookup func(context.Context, string, string) ([]net.IP, error), dial func(context.Context, string, string) (net.Conn, error)) *validatedResolvedIPDialer {
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupIP
+	}
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	return &validatedResolvedIPDialer{lookup: lookup, dial: dial}
+}
+
+func (d *validatedResolvedIPDialer) ValidateHost(ctx context.Context, host string) error {
+	ips, err := d.lookup(ctx, "ip", host)
+	if err != nil {
+		return fmt.Errorf("dns resolution failed: %w", err)
+	}
+	return urlvalidator.ValidateResolvedIPs(ips)
+}
+
+func (d *validatedResolvedIPDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid dial address: %w", err)
+	}
+	ips, err := d.lookup(ctx, "ip", host)
+	if err != nil {
+		return nil, fmt.Errorf("dns resolution failed: %w", err)
+	}
+	if err := urlvalidator.ValidateResolvedIPs(ips); err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for _, ip := range ips {
+		connection, dialErr := d.dial(ctx, network, net.JoinHostPort(ip.String(), port))
+		if dialErr == nil {
+			return connection, nil
+		}
+		lastErr = dialErr
+	}
+	if lastErr == nil {
+		lastErr = errors.New("dns resolution returned no addresses")
+	}
+	return nil, lastErr
 }
 
 // NewHTTPUpstream 创建通用 HTTP 上游服务
@@ -160,9 +217,17 @@ type httpUpstreamService struct {
 // 返回:
 //   - service.HTTPUpstream 接口实现
 func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
+	return newHTTPUpstreamWithResolvedIPDialer(cfg, nil)
+}
+
+func newHTTPUpstreamWithResolvedIPDialer(cfg *config.Config, dialer resolvedIPDialer) service.HTTPUpstream {
+	if dialer == nil {
+		dialer = newValidatedResolvedIPDialer(nil, nil)
+	}
 	return &httpUpstreamService{
-		cfg:     cfg,
-		clients: make(map[string]*upstreamClientEntry),
+		cfg:              cfg,
+		clients:          make(map[string]*upstreamClientEntry),
+		resolvedIPDialer: dialer,
 	}
 }
 
@@ -199,7 +264,7 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	}
 
 	// 执行请求
-	client, err := httpClientForUpstreamRequest(entry.client, req)
+	client, err := s.httpClientForUpstreamRequest(entry.client, req)
 	if err != nil {
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
@@ -268,7 +333,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 		return nil, err
 	}
 
-	client, err := httpClientForUpstreamRequest(entry.client, req)
+	client, err := s.httpClientForUpstreamRequest(entry.client, req)
 	if err != nil {
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
@@ -293,11 +358,11 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	return resp, nil
 }
 
-func httpClientForUpstreamRequest(client *http.Client, req *http.Request) (*http.Client, error) {
+func (s *httpUpstreamService) httpClientForUpstreamRequest(client *http.Client, req *http.Request) (*http.Client, error) {
 	if client == nil || req == nil {
 		return client, nil
 	}
-	dial, requireBoundDial := service.HTTPUpstreamValidatedDialContextFromContext(req.Context())
+	requireBoundDial := service.HTTPUpstreamResolvedIPValidationRequired(req.Context())
 	if !service.HTTPUpstreamRedirectsDisabled(req.Context()) && !requireBoundDial {
 		return client, nil
 	}
@@ -318,7 +383,7 @@ func httpClientForUpstreamRequest(client *http.Client, req *http.Request) (*http
 		return nil, errors.New("validated destination dial cannot use a proxy or custom dialer")
 	}
 	transport = transport.Clone()
-	transport.DialContext = dial
+	transport.DialContext = s.resolvedIPDialerForRequest().DialContext
 	clone.Transport = transport
 	return &clone, nil
 }
@@ -610,16 +675,20 @@ func (s *httpUpstreamService) validateRequestHost(req *http.Request) error {
 	if host == "" {
 		return errors.New("request host is empty")
 	}
-	// A marked request with a bound dial context resolves, validates, and dials
-	// one IP in the same operation. A separate preflight lookup here would be
-	// stale by construction and can also fail before that secure dial executes.
-	if _, bound := service.HTTPUpstreamValidatedDialContextFromContext(req.Context()); bound {
-		return nil
-	}
-	if err := urlvalidator.ValidateResolvedIP(host); err != nil {
+	// A marked request is resolved, validated, and dialed by the repository-owned
+	// dialer. A separate preflight lookup here can be stale by construction and
+	// may fail before that secure dial executes.
+	if err := s.resolvedIPDialerForRequest().ValidateHost(req.Context(), host); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *httpUpstreamService) resolvedIPDialerForRequest() resolvedIPDialer {
+	if s != nil && s.resolvedIPDialer != nil {
+		return s.resolvedIPDialer
+	}
+	return newValidatedResolvedIPDialer(nil, nil)
 }
 
 func (s *httpUpstreamService) redirectChecker(req *http.Request, via []*http.Request) error {

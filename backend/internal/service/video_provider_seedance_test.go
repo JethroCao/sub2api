@@ -31,26 +31,6 @@ type seedanceCloseTrackingBody struct {
 	closed bool
 }
 
-type seedanceDialBoundaryUpstream struct {
-	request   *http.Request
-	dialCalls int
-}
-
-func (u *seedanceDialBoundaryUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	u.request = req
-	dial, ok := HTTPUpstreamValidatedDialContextFromContext(req.Context())
-	if !ok {
-		return nil, errors.New("validated dial context missing")
-	}
-	u.dialCalls++
-	_, err := dial(req.Context(), "tcp", net.JoinHostPort(req.URL.Hostname(), "443"))
-	return nil, err
-}
-
-func (u *seedanceDialBoundaryUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-	return u.Do(req, proxyURL, accountID, accountConcurrency)
-}
-
 func (b *seedanceCloseTrackingBody) Close() error {
 	b.closed = true
 	return nil
@@ -449,28 +429,4 @@ func TestSeedanceProviderRejectsUnsafeResolvedSignedContentURL(t *testing.T) {
 	require.ErrorAs(t, err, &providerErr)
 	require.Equal(t, "invalid_request", providerErr.Code)
 	require.Nil(t, upstream.request)
-}
-
-// Catches DNS rebinding between adapter preflight and the real transport dial:
-// the dial boundary must validate and refuse its newly private resolution.
-func TestSeedanceProviderBindsValidatedIPAtDialTime(t *testing.T) {
-	upstream := &seedanceDialBoundaryUpstream{}
-	p := newSeedanceProviderWithResolver(upstream, func(_ context.Context, host string) error {
-		require.Equal(t, "ark-relay.example", host)
-		return nil // preflight saw a public address
-	})
-	p.dialContext = func(_ context.Context, network, address string) (net.Conn, error) {
-		require.Equal(t, "tcp", network)
-		require.Equal(t, "ark-relay.example:443", address)
-		return nil, urlvalidator.ValidateResolvedIPs([]net.IP{net.ParseIP("192.168.1.8")})
-	}
-	account := seedanceAccount()
-	account.Credentials["base_url"] = "https://ark-relay.example"
-	_, err := p.Submit(context.Background(), account, CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "seedance-2.0", Prompt: "safe"}, "submission-token")
-	var providerErr VideoProviderError
-	require.ErrorAs(t, err, &providerErr)
-	require.Equal(t, "upstream_timeout", providerErr.Code)
-	require.True(t, providerErr.Ambiguous)
-	require.True(t, providerErr.Retryable)
-	require.Equal(t, 1, upstream.dialCalls)
 }

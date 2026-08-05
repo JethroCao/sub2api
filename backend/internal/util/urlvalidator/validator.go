@@ -173,36 +173,6 @@ func ValidateResolvedIPs(ips []net.IP) error {
 	return nil
 }
 
-// ValidatedDialContext resolves and validates the destination immediately
-// before dialing one of those same IPs. It prevents a second DNS lookup inside
-// net.Dialer from turning a previously safe hostname into a rebinding target.
-func ValidatedDialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("invalid dial address: %w", err)
-	}
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil, fmt.Errorf("dns resolution failed: %w", err)
-	}
-	if err := ValidateResolvedIPs(ips); err != nil {
-		return nil, err
-	}
-	dialer := net.Dialer{}
-	var lastErr error
-	for _, ip := range ips {
-		connection, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if dialErr == nil {
-			return connection, nil
-		}
-		lastErr = dialErr
-	}
-	if lastErr == nil {
-		lastErr = errors.New("dns resolution returned no addresses")
-	}
-	return nil, lastErr
-}
-
 func normalizeAllowlist(values []string) []string {
 	if len(values) == 0 {
 		return nil
