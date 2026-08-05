@@ -66,3 +66,17 @@ func TestUnifiedVideoBillingAmountsUseExistingLedgerScale(t *testing.T) {
 	require.Contains(t, sql, "ALTER COLUMN frozen_amount TYPE DECIMAL(20,8)")
 	require.Contains(t, sql, "ALTER COLUMN settled_amount TYPE DECIMAL(20,8)")
 }
+
+func TestUnifiedVideoIdempotencyScopeMigration(t *testing.T) {
+	migration, err := FS.ReadFile("200_video_idempotency_scope.sql")
+	require.NoError(t, err)
+	sql := string(migration)
+	require.Contains(t, sql, "LOCK TABLE video_tasks IN SHARE MODE")
+	require.Contains(t, sql, "GROUP BY user_id, api_key_id, idempotency_key_hash")
+	require.Contains(t, sql, "migration 200 cannot enforce video idempotency scope")
+	require.Contains(t, sql, "DROP INDEX idx_video_tasks_idempotency")
+	require.Contains(t, sql, "ON video_tasks (user_id, api_key_id, idempotency_key_hash)")
+	require.Contains(t, sql, "WHERE idempotency_key_hash <> ''")
+	require.NotContains(t, sql, "DELETE FROM video_tasks")
+	require.NotContains(t, sql, "UPDATE video_tasks")
+}

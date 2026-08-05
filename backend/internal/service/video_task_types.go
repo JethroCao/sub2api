@@ -219,6 +219,7 @@ type CreateVideoTaskParams struct {
 	Currency           string
 	BillingMode        string
 	BillingStatus      string
+	NextPollAt         *time.Time
 }
 
 // AssignVideoSubmissionParams atomically binds a newly reserved task to the
@@ -232,6 +233,7 @@ type AssignVideoSubmissionParams struct {
 	Provider                string
 	UpstreamModel           string
 	ProviderSubmissionToken string
+	NextPollAt              time.Time
 	UpdatedAt               time.Time
 }
 
@@ -246,13 +248,16 @@ type MarkVideoSubmissionUnknownParams struct {
 	UpdatedAt       time.Time
 }
 
-// MarkVideoSubmissionFailedParams records a proven pre-acceptance failure only
-// after the billing hold has been released.
-type MarkVideoSubmissionFailedParams struct {
-	RequestID       string
-	ExpectedVersion int64
-	Error           VideoTaskError
-	FailedAt        time.Time
+// ReleaseAndFailVideoSubmissionParams atomically releases the stored billing
+// hold and terminalizes an exact pre-acceptance lifecycle state. A created task
+// must have no submission token; a submitting task must match the durable token.
+type ReleaseAndFailVideoSubmissionParams struct {
+	RequestID               string
+	ExpectedVersion         int64
+	ExpectedStatus          VideoTaskStatus
+	ProviderSubmissionToken string
+	Error                   VideoTaskError
+	FailedAt                time.Time
 }
 
 type MarkVideoSubmittedParams struct {

@@ -19,7 +19,7 @@ type VideoTaskRepository interface {
 	MarkSubmitted(context.Context, MarkVideoSubmittedParams) error
 	MarkSubmissionUnknown(context.Context, string, int64, VideoTaskError) error
 	MarkSubmissionUnknownAt(context.Context, MarkVideoSubmissionUnknownParams) error
-	MarkSubmissionFailed(context.Context, MarkVideoSubmissionFailedParams) error
+	ReleaseAndMarkSubmissionFailed(context.Context, ReleaseAndFailVideoSubmissionParams) (*VideoTask, error)
 	LeaseDue(context.Context, string, int, time.Duration, time.Time) ([]VideoTask, error)
 	ApplyPollResult(context.Context, ApplyVideoPollResultParams) error
 	MarkSettled(context.Context, MarkVideoSettledParams) error

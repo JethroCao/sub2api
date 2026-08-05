@@ -40,7 +40,7 @@ type VideoTask struct {
 	ExternalModel string `json:"external_model,omitempty"`
 	// UpstreamModel holds the value of the "upstream_model" field.
 	UpstreamModel string `json:"upstream_model,omitempty"`
-	// IdempotencyKeyHash holds the value of the "idempotency_key_hash" field.
+	// IdempotencyKeyHash stores the caller key digest. Migration 200 enforces a partial unique index with user_id and api_key_id when this value is non-empty.
 	IdempotencyKeyHash string `json:"idempotency_key_hash,omitempty"`
 	// RequestHash holds the value of the "request_hash" field.
 	RequestHash string `json:"request_hash,omitempty"`

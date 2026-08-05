@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -37,6 +38,8 @@ func TestVideoTaskRepositoryAssignsRouteAndPersistsSubmissionRecoveryState(t *te
 	params := videoTaskCreateParams(t, "submission-route", "")
 	params.AccountID = 0
 	params.UpstreamModel = ""
+	routeRecoveryAt := time.Now().UTC().Add(time.Minute)
+	params.NextPollAt = &routeRecoveryAt
 	task, created, err := repo.CreateOrGet(ctx, params)
 	require.NoError(t, err)
 	require.True(t, created)
@@ -46,6 +49,7 @@ func TestVideoTaskRepositoryAssignsRouteAndPersistsSubmissionRecoveryState(t *te
 		RequestID: task.RequestID, ExpectedVersion: task.Version,
 		AccountID: 93, Platform: service.PlatformVideo, Provider: service.VideoProviderSeedance,
 		UpstreamModel: "seedance-upstream-v2", ProviderSubmissionToken: "safe-submit-token",
+		NextPollAt: routeRecoveryAt.Add(time.Minute),
 	})
 	require.NoError(t, err)
 
@@ -89,6 +93,7 @@ func TestVideoTaskRepositoryAssignRouteRequiresPendingMatchingRoute(t *testing.T
 			RequestID: task.RequestID, ExpectedVersion: task.Version,
 			AccountID: 94, Platform: service.PlatformVideo, Provider: service.VideoProviderSeedance,
 			UpstreamModel: "replacement", ProviderSubmissionToken: "safe-submit-token",
+			NextPollAt: time.Now().UTC().Add(time.Minute),
 		})
 		require.ErrorIs(t, err, service.ErrVideoTaskInvalidTransition)
 	})
@@ -97,6 +102,8 @@ func TestVideoTaskRepositoryAssignRouteRequiresPendingMatchingRoute(t *testing.T
 		params := videoTaskCreateParams(t, "route-provider-mismatch", "")
 		params.AccountID = 0
 		params.UpstreamModel = ""
+		nextPollAt := time.Now().UTC().Add(time.Minute)
+		params.NextPollAt = &nextPollAt
 		task, created, err := repo.CreateOrGet(ctx, params)
 		require.NoError(t, err)
 		require.True(t, created)
@@ -106,31 +113,176 @@ func TestVideoTaskRepositoryAssignRouteRequiresPendingMatchingRoute(t *testing.T
 			RequestID: task.RequestID, ExpectedVersion: task.Version,
 			AccountID: 95, Platform: service.PlatformVideo, Provider: service.VideoProviderKling,
 			UpstreamModel: "wrong-provider", ProviderSubmissionToken: "safe-submit-token",
+			NextPollAt: nextPollAt.Add(time.Minute),
 		})
 		require.ErrorIs(t, err, service.ErrVideoTaskInvalidTransition)
 	})
 }
 
-func TestVideoTaskRepositorySubmissionFailureClearsRecoveryData(t *testing.T) {
+func TestVideoTaskRepositoryLeasesCrashRecoveryStatesWithoutResubmissionIdentity(t *testing.T) {
 	ctx := context.Background()
 	repo := NewVideoTaskRepository(integrationDB)
-	task, created, err := repo.CreateOrGet(ctx, videoTaskCreateParams(t, "submission-failed", ""))
+	dueAt := time.Now().UTC().Add(-time.Minute)
+
+	pendingParams := videoTaskCreateParams(t, "crash-route-pending", "")
+	pendingParams.AccountID = 0
+	pendingParams.UpstreamModel = ""
+	pendingParams.NextPollAt = &dueAt
+	pending, created, err := repo.CreateOrGet(ctx, pendingParams)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, pending.RequestID)
+
+	assignedParams := videoTaskCreateParams(t, "crash-route-assigned", "")
+	assignedParams.AccountID = 0
+	assignedParams.UpstreamModel = ""
+	assignedParams.NextPollAt = &dueAt
+	assigned, created, err := repo.CreateOrGet(ctx, assignedParams)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, assigned.RequestID)
+	require.NoError(t, repo.AssignAndMarkSubmitting(ctx, service.AssignVideoSubmissionParams{
+		RequestID: assigned.RequestID, ExpectedVersion: assigned.Version,
+		AccountID: 96, Platform: service.PlatformVideo, Provider: service.VideoProviderSeedance,
+		UpstreamModel: "seedance-recovery", ProviderSubmissionToken: "recover-only-token",
+		NextPollAt: dueAt,
+	}))
+
+	leased, err := repo.LeaseDue(ctx, "worker-crash-recovery", 50, time.Minute, time.Now().UTC())
+	require.NoError(t, err)
+	leasedPending := findLeasedVideoTask(t, leased, pending.RequestID)
+	require.Equal(t, service.VideoTaskCreated, leasedPending.Status)
+	require.Zero(t, leasedPending.AccountID)
+	require.Nil(t, leasedPending.ProviderSubmissionToken)
+	require.Nil(t, leasedPending.UpstreamTaskID)
+	leasedAssigned := findLeasedVideoTask(t, leased, assigned.RequestID)
+	require.Equal(t, service.VideoTaskSubmitting, leasedAssigned.Status)
+	require.Equal(t, "recover-only-token", videoTaskStringValue(leasedAssigned.ProviderSubmissionToken))
+	require.Nil(t, leasedAssigned.UpstreamTaskID)
+}
+
+func TestVideoTaskRepositoryLeasedRoutePendingRecoveryOnlyReleasesAndTerminalizes(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewVideoTaskRepository(integrationDB)
+	user := mustCreateUser(t, client, &service.User{
+		Email: fmt.Sprintf("video-route-recovery-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Balance: 10,
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name: "video-route-recovery-" + videoTaskHash(t.Name())[:12], Platform: service.PlatformVideo,
+		SubscriptionType: service.SubscriptionTypeStandard, AllowVideoGeneration: true,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID: user.ID, GroupID: &group.ID, Key: "sk-video-route-recovery-" + videoTaskHash(t.Name())[:20], Name: "video-route-recovery",
+	})
+	dueAt := time.Now().UTC().Add(-time.Minute)
+	params := videoTaskCreateParams(t, "leased-route-pending-release", "")
+	params.UserID, params.APIKeyID, params.GroupID = user.ID, apiKey.ID, group.ID
+	params.AccountID, params.UpstreamModel = 0, ""
+	params.NextPollAt = &dueAt
+	params.FrozenAmount, params.EstimatedAmount = 2, 2
+	params.BillingStatus = "held"
+	task, created, err := repo.CreateTaskAndReserve(ctx, params)
 	require.NoError(t, err)
 	require.True(t, created)
 	cleanupVideoTask(t, task.RequestID)
-	require.NoError(t, repo.MarkSubmitting(ctx, task.RequestID, task.Version, "safe-submit-token"))
+	assertVideoBalanceExact(t, user.ID, "8", "2")
 
-	err = repo.MarkSubmissionFailed(ctx, service.MarkVideoSubmissionFailedParams{
-		RequestID: task.RequestID, ExpectedVersion: task.Version + 1,
-		Error: service.NewVideoTaskError("INVALID_REQUEST", "", false), FailedAt: time.Now().UTC(),
+	leased, err := repo.LeaseDue(ctx, "worker-route-recovery-release", 50, time.Minute, time.Now().UTC())
+	require.NoError(t, err)
+	leasedTask := findLeasedVideoTask(t, leased, task.RequestID)
+	require.Equal(t, service.VideoTaskCreated, leasedTask.Status)
+	require.Nil(t, leasedTask.ProviderSubmissionToken)
+
+	failed, err := repo.ReleaseAndMarkSubmissionFailed(ctx, service.ReleaseAndFailVideoSubmissionParams{
+		RequestID: leasedTask.RequestID, ExpectedVersion: leasedTask.Version, ExpectedStatus: service.VideoTaskCreated,
+		Error: service.NewVideoTaskError("ROUTE_ASSIGNMENT_ABANDONED", "", false), FailedAt: time.Now().UTC(),
 	})
 	require.NoError(t, err)
+	require.Equal(t, service.VideoTaskFailed, failed.Status)
+	require.Nil(t, failed.LeaseOwner)
+	require.Nil(t, failed.NextPollAt)
+	require.Nil(t, failed.ProviderSubmissionToken)
+	assertVideoBalanceExact(t, user.ID, "10", "0")
+}
+
+func TestVideoTaskRepositorySubmissionFailureAtomicallyReleasesHoldAndClearsRecoveryData(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewVideoTaskRepository(integrationDB)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	task, _, user := createVideoBillingTask(t, client, repo, "submission-failed", "balance", nil, 2, 10, nil, 0)
+	require.NoError(t, reserveVideoTask(t, billing, task))
+	require.NoError(t, repo.MarkSubmitting(ctx, task.RequestID, task.Version, "safe-submit-token"))
+
+	failed, err := repo.ReleaseAndMarkSubmissionFailed(ctx, service.ReleaseAndFailVideoSubmissionParams{
+		RequestID: task.RequestID, ExpectedVersion: task.Version + 1, ExpectedStatus: service.VideoTaskSubmitting,
+		ProviderSubmissionToken: "safe-submit-token",
+		Error:                   service.NewVideoTaskError("INVALID_REQUEST", "", false), FailedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, service.VideoTaskFailed, failed.Status)
 
 	stored, err := repo.GetByRequestID(ctx, task.RequestID)
 	require.NoError(t, err)
 	require.Equal(t, service.VideoTaskFailed, stored.Status)
+	require.Equal(t, "released", stored.BillingStatus)
 	require.Nil(t, stored.ProviderSubmissionToken)
 	require.Empty(t, stored.RequestPayload)
+	assertVideoBalanceExact(t, user.ID, "10", "0")
+
+	replayed, err := repo.ReleaseAndMarkSubmissionFailed(ctx, service.ReleaseAndFailVideoSubmissionParams{
+		RequestID: task.RequestID, ExpectedVersion: task.Version + 1, ExpectedStatus: service.VideoTaskSubmitting,
+		ProviderSubmissionToken: "safe-submit-token",
+		Error:                   service.NewVideoTaskError("INVALID_REQUEST", "", false), FailedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, stored.Version, replayed.Version)
+	assertVideoBalanceExact(t, user.ID, "10", "0")
+}
+
+func TestVideoTaskRepositorySubmissionFailureRollsBackReleaseWhenTerminalMutationFails(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewVideoTaskRepository(integrationDB)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	task, apiKey, user := createVideoBillingTask(t, client, repo, "submission-failed-rollback", "balance", nil, 2, 10, nil, 0)
+	require.NoError(t, reserveVideoTask(t, billing, task))
+	require.NoError(t, repo.MarkSubmitting(ctx, task.RequestID, task.Version, "safe-submit-token"))
+
+	_, err := integrationDB.ExecContext(ctx, `
+		CREATE OR REPLACE FUNCTION video_task_test_reject_terminalization()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.request_id = '`+task.RequestID+`' AND NEW.status = 'failed' THEN
+				RAISE EXCEPTION 'injected terminal mutation failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER trg_video_task_test_reject_terminalization
+		BEFORE UPDATE ON video_tasks
+		FOR EACH ROW EXECUTE FUNCTION video_task_test_reject_terminalization();
+	`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS trg_video_task_test_reject_terminalization ON video_tasks`)
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP FUNCTION IF EXISTS video_task_test_reject_terminalization()`)
+	})
+
+	_, err = repo.ReleaseAndMarkSubmissionFailed(ctx, service.ReleaseAndFailVideoSubmissionParams{
+		RequestID: task.RequestID, ExpectedVersion: task.Version + 1, ExpectedStatus: service.VideoTaskSubmitting,
+		ProviderSubmissionToken: "safe-submit-token",
+		Error:                   service.NewVideoTaskError("INVALID_REQUEST", "", false), FailedAt: time.Now().UTC(),
+	})
+	require.ErrorContains(t, err, "injected terminal mutation failure")
+	assertVideoBalanceExact(t, user.ID, "8", "2")
+	var releaseClaims int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_billing_dedup WHERE request_id = $1 AND api_key_id = $2`, service.VideoReleaseRequestID(task.RequestID), apiKey.ID).Scan(&releaseClaims))
+	require.Zero(t, releaseClaims)
+	stored, err := repo.GetByRequestID(ctx, task.RequestID)
+	require.NoError(t, err)
+	require.Equal(t, service.VideoTaskSubmitting, stored.Status)
 }
 
 func TestCreateVideoTaskAndReserveIsAtomic(t *testing.T) {
@@ -201,6 +353,51 @@ func TestCreateVideoTaskAndReserveIsAtomic(t *testing.T) {
 	require.NoError(t, integrationDB.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM usage_billing_dedup WHERE api_key_id = $1 AND request_id = $2`, apiKey.ID, service.VideoHoldRequestID(task.RequestID)).Scan(&holdCount))
 	require.Equal(t, 1, holdCount)
+}
+
+func TestCreateVideoTaskAndReserveCrossOperationKeyCreatesOneHold(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewVideoTaskRepository(integrationDB)
+	user := mustCreateUser(t, client, &service.User{
+		Email: fmt.Sprintf("video-cross-operation-hold-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Balance: 10,
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name: "video-cross-operation-hold-" + videoTaskHash(t.Name())[:12], Platform: service.PlatformVideo,
+		SubscriptionType: service.SubscriptionTypeStandard, AllowVideoGeneration: true,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID: user.ID, GroupID: &group.ID, Key: "sk-video-cross-operation-hold-" + videoTaskHash(t.Name())[:20], Name: "video-cross-operation-hold",
+	})
+	account := mustCreateAccount(t, client, &service.Account{
+		Name: "video-cross-operation-hold-" + videoTaskHash("account-" + t.Name())[:12], Platform: service.PlatformVideo,
+	})
+	params := videoTaskCreateParams(t, "cross-operation-hold", videoTaskHash("cross-operation-hold-"+t.Name()))
+	params.UserID, params.APIKeyID, params.GroupID, params.AccountID = user.ID, apiKey.ID, group.ID, account.ID
+	params.FrozenAmount, params.EstimatedAmount = 2, 2
+	params.BillingStatus = "held"
+
+	task, created, err := repo.CreateTaskAndReserve(ctx, params)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, task.RequestID)
+
+	crossOperation := params
+	crossOperation.Operation = "extension"
+	crossOperation.RequestHash = videoTaskHash("cross-operation-extension-" + t.Name())
+	_, _, err = repo.CreateTaskAndReserve(ctx, crossOperation)
+	require.ErrorIs(t, err, service.ErrVideoIdempotencyConflict)
+
+	replayed, created, err := repo.CreateTaskAndReserve(ctx, params)
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Equal(t, task.RequestID, replayed.RequestID)
+	assertVideoBalanceExact(t, user.ID, "8", "2")
+	var tasks, holds int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM video_tasks WHERE user_id = $1 AND api_key_id = $2 AND idempotency_key_hash = $3`, user.ID, apiKey.ID, params.IdempotencyKeyHash).Scan(&tasks))
+	require.Equal(t, 1, tasks)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_billing_dedup WHERE api_key_id = $1 AND request_id = $2`, apiKey.ID, service.VideoHoldRequestID(task.RequestID)).Scan(&holds))
+	require.Equal(t, 1, holds)
 }
 
 func TestCreateVideoTaskAndReserveSubscriptionIsIdempotent(t *testing.T) {
@@ -312,6 +509,78 @@ func TestVideoTaskRepositoryCreateIdempotencyConflict(t *testing.T) {
 	params.RequestHash = videoTaskHash("different-request")
 	_, _, err := repoB.CreateOrGet(context.Background(), params)
 	require.ErrorIs(t, err, service.ErrVideoIdempotencyConflict)
+}
+
+func TestVideoTaskRepositoryIdempotencyKeyIsScopedAcrossOperations(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	params := videoTaskCreateParams(t, "cross-operation-idempotency", videoTaskHash("cross-operation-"+t.Name()))
+	original, created, err := repo.CreateOrGet(ctx, params)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, original.RequestID)
+
+	conflict := params
+	conflict.Operation = "edit"
+	conflict.RequestHash = videoTaskHash("edit-request-" + t.Name())
+	_, _, err = repo.CreateOrGet(ctx, conflict)
+	require.ErrorIs(t, err, service.ErrVideoIdempotencyConflict)
+
+	replayed, created, err := repo.CreateOrGet(ctx, params)
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Equal(t, original.RequestID, replayed.RequestID)
+
+	var count int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM video_tasks
+		WHERE user_id = $1 AND api_key_id = $2 AND idempotency_key_hash = $3
+	`, params.UserID, params.APIKeyID, params.IdempotencyKeyHash).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
+func TestVideoTaskRepositoryConcurrentCrossOperationIdempotencyCreatesOneTask(t *testing.T) {
+	ctx := context.Background()
+	repos := []service.VideoTaskRepository{NewVideoTaskRepository(integrationDB), NewVideoTaskRepository(integrationDB)}
+	params := videoTaskCreateParams(t, "concurrent-cross-operation", videoTaskHash("concurrent-cross-operation-"+t.Name()))
+	params.ExternalModel = "idempotency-overlap-test"
+	requests := []service.CreateVideoTaskParams{params, params}
+	requests[1].Operation = "extension"
+	requests[1].RequestHash = videoTaskHash("concurrent-extension-" + t.Name())
+	installVideoTaskCreateOverlapTrigger(t)
+
+	type result struct {
+		task    *service.VideoTask
+		created bool
+		err     error
+	}
+	results := make([]result, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i].task, results[i].created, results[i].err = repos[i].CreateOrGet(ctx, requests[i])
+		}(i)
+	}
+	close(start)
+	requireVideoTaskConcurrentInserts(t, 2)
+	wg.Wait()
+
+	createdCount, conflictCount := 0, 0
+	for _, result := range results {
+		if result.created {
+			createdCount++
+			cleanupVideoTask(t, result.task.RequestID)
+		}
+		if errors.Is(result.err, service.ErrVideoIdempotencyConflict) {
+			conflictCount++
+		}
+	}
+	require.Equal(t, 1, createdCount)
+	require.Equal(t, 1, conflictCount)
 }
 
 func installVideoTaskCreateOverlapTrigger(t *testing.T) {

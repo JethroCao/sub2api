@@ -11,6 +11,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	migrationfiles "github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,73 @@ ALTER TABLE users
     ALTER COLUMN balance TYPE DECIMAL(22,10) USING balance::DECIMAL(22,10),
     ALTER COLUMN frozen_balance TYPE DECIMAL(22,10) USING frozen_balance::DECIMAL(22,10);
 `
+
+func TestMigrationsUpgradeFromOriginal196AppliesForward200AfterExplicitDuplicateRepair(t *testing.T) {
+	const preflightMessage = "migration 200 cannot enforce video idempotency scope: duplicate non-empty idempotency keys exist for the same user_id and api_key_id across video operations; reconcile each task and its billing hold explicitly, ensure only one task retains each key, then retry migration 200"
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	firstParams := videoTaskCreateParams(t, "migration-200-generation", videoTaskHash("migration-200-generation-"+t.Name()))
+	first, created, err := repo.CreateOrGet(ctx, firstParams)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, first.RequestID)
+
+	secondParams := firstParams
+	secondParams.Operation = "edit"
+	secondParams.IdempotencyKeyHash = videoTaskHash("migration-200-edit-" + t.Name())
+	secondParams.RequestHash = videoTaskHash("migration-200-edit-request-" + t.Name())
+	second, created, err := repo.CreateOrGet(ctx, secondParams)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, second.RequestID)
+
+	migration, err := migrationfiles.FS.ReadFile("200_video_idempotency_scope.sql")
+	require.NoError(t, err)
+	migrationFS := fstest.MapFS{"200_video_idempotency_scope.sql": {Data: migration}}
+
+	restore := func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `UPDATE video_tasks SET idempotency_key_hash = $2 WHERE request_id = $1`, second.RequestID, secondParams.IdempotencyKeyHash)
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP INDEX IF EXISTS idx_video_tasks_idempotency`)
+		_, _ = integrationDB.ExecContext(context.Background(), `CREATE UNIQUE INDEX idx_video_tasks_idempotency ON video_tasks (user_id, api_key_id, operation, idempotency_key_hash) WHERE idempotency_key_hash <> ''`)
+		_, _ = integrationDB.ExecContext(context.Background(), `DELETE FROM schema_migrations WHERE filename = '200_video_idempotency_scope.sql'`)
+		_ = applyMigrationsFS(context.Background(), integrationDB, migrationFS)
+	}
+	t.Cleanup(restore)
+
+	_, err = integrationDB.ExecContext(ctx, `DROP INDEX idx_video_tasks_idempotency`)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `CREATE UNIQUE INDEX idx_video_tasks_idempotency ON video_tasks (user_id, api_key_id, operation, idempotency_key_hash) WHERE idempotency_key_hash <> ''`)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `DELETE FROM schema_migrations WHERE filename = '200_video_idempotency_scope.sql'`)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET idempotency_key_hash = $2 WHERE request_id = $1`, second.RequestID, firstParams.IdempotencyKeyHash)
+	require.NoError(t, err)
+
+	migrationErr := applyMigrationsFS(ctx, integrationDB, migrationFS)
+	require.Error(t, migrationErr)
+	var pqErr *pq.Error
+	require.ErrorAs(t, migrationErr, &pqErr)
+	require.Equal(t, pq.ErrorCode("23505"), pqErr.Code)
+	require.Equal(t, preflightMessage, pqErr.Message)
+	require.Empty(t, pqErr.Detail)
+	require.Empty(t, pqErr.Hint)
+
+	var applied, duplicates int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE filename = '200_video_idempotency_scope.sql'`).Scan(&applied))
+	require.Zero(t, applied)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM video_tasks WHERE user_id = $1 AND api_key_id = $2 AND idempotency_key_hash = $3`, first.UserID, first.APIKeyID, firstParams.IdempotencyKeyHash).Scan(&duplicates))
+	require.Equal(t, 2, duplicates, "failed preflight must preserve every historical task")
+	var definition string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_video_tasks_idempotency'`).Scan(&definition))
+	require.Contains(t, definition, "operation")
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET idempotency_key_hash = $2 WHERE request_id = $1`, second.RequestID, secondParams.IdempotencyKeyHash)
+	require.NoError(t, err)
+	require.NoError(t, applyMigrationsFS(ctx, integrationDB, migrationFS))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_video_tasks_idempotency'`).Scan(&definition))
+	require.NotContains(t, definition, "operation")
+	require.Contains(t, definition, "user_id, api_key_id, idempotency_key_hash")
+}
 
 func TestMigrationsRunner_ConcurrentInstancesSerializeOnSessionLock(t *testing.T) {
 	const instances = 2

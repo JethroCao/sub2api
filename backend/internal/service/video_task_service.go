@@ -13,7 +13,11 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-const videoSubmissionRecoveryDelay = 10 * time.Second
+const (
+	videoSubmissionRecoveryDelay      = 10 * time.Second
+	videoSubmissionCrashRecoveryDelay = 5 * time.Minute
+	videoSubmissionRecoveryIOTimeout  = 5 * time.Second
+)
 
 var (
 	ErrVideoGenerationNotAllowed = infraerrors.Forbidden("VIDEO_GENERATION_NOT_ALLOWED", "video generation is not allowed for this group")
@@ -44,7 +48,6 @@ type VideoTaskService struct {
 	submissions        VideoSubmissionRepository
 	tasks              VideoTaskRepository
 	pricing            *VideoPricingService
-	billing            *VideoBillingService
 	providers          *VideoProviderRegistry
 	capabilities       VideoCapabilityValidator
 	scheduler          VideoAccountScheduler
@@ -57,7 +60,7 @@ func NewVideoTaskService(
 	submissions VideoSubmissionRepository,
 	tasks VideoTaskRepository,
 	pricing *VideoPricingService,
-	billing *VideoBillingService,
+	_ *VideoBillingService,
 	providers *VideoProviderRegistry,
 	capabilities VideoCapabilityValidator,
 	scheduler VideoAccountScheduler,
@@ -67,7 +70,6 @@ func NewVideoTaskService(
 		submissions:        submissions,
 		tasks:              tasks,
 		pricing:            pricing,
-		billing:            billing,
 		providers:          providers,
 		capabilities:       capabilities,
 		scheduler:          scheduler,
@@ -78,7 +80,7 @@ func NewVideoTaskService(
 }
 
 func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitCommand) (*VideoTask, error) {
-	if s == nil || s.submissions == nil || s.tasks == nil || s.pricing == nil || s.billing == nil ||
+	if s == nil || s.submissions == nil || s.tasks == nil || s.pricing == nil ||
 		s.providers == nil || s.capabilities == nil || s.scheduler == nil {
 		return nil, ErrVideoServiceUnavailable
 	}
@@ -104,6 +106,7 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 	if err != nil {
 		return nil, err
 	}
+	routeRecoveryAt := s.currentTime().Add(videoSubmissionCrashRecoveryDelay)
 	task, created, err := s.submissions.CreateTaskAndReserve(ctx, CreateVideoTaskParams{
 		UserID:             command.UserID,
 		APIKeyID:           command.APIKeyID,
@@ -126,6 +129,7 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 		Currency:           "USD",
 		BillingMode:        command.BillingMode,
 		BillingStatus:      "held",
+		NextPollAt:         &routeRecoveryAt,
 	})
 	if err != nil {
 		return nil, err
@@ -142,16 +146,17 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 
 	selection, upstreamModel, err := s.selectValidatedAccount(ctx, command)
 	if err != nil {
-		return nil, s.releaseRejectedSubmission(ctx, task, err)
+		return nil, s.releaseRejectedSubmission(task, err)
 	}
 	defer selection.Release()
 
 	submissionToken, err := s.newSubmissionToken()
 	if err != nil {
-		return nil, s.releaseRejectedSubmission(ctx, task, err)
+		return nil, s.releaseRejectedSubmission(task, err)
 	}
 	updatedAt := s.currentTime()
-	err = s.tasks.AssignAndMarkSubmitting(ctx, AssignVideoSubmissionParams{
+	assignmentRecoveryAt := updatedAt.Add(videoSubmissionCrashRecoveryDelay)
+	assignment := AssignVideoSubmissionParams{
 		RequestID:               task.RequestID,
 		ExpectedVersion:         task.Version,
 		AccountID:               selection.Account.ID,
@@ -159,25 +164,42 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 		Provider:                command.Provider,
 		UpstreamModel:           upstreamModel,
 		ProviderSubmissionToken: submissionToken,
+		NextPollAt:              assignmentRecoveryAt,
 		UpdatedAt:               updatedAt,
-	})
-	if err != nil {
-		return nil, s.releaseRejectedSubmission(ctx, task, err)
 	}
-	task.AccountID = selection.Account.ID
-	task.Platform = command.Platform
-	task.Provider = command.Provider
-	task.UpstreamModel = upstreamModel
-	task.ProviderSubmissionToken = videoStringPointer(submissionToken)
-	task.Status = VideoTaskSubmitting
-	task.Version++
+	err = s.tasks.AssignAndMarkSubmitting(ctx, assignment)
+	if err != nil {
+		stored, readErr := s.readTaskForRecovery(task.RequestID)
+		if readErr != nil || stored == nil {
+			return nil, errors.Join(err, readErr)
+		}
+		if videoTaskMatchesAssignedSubmission(stored, task, assignment) {
+			task = stored
+		} else if videoTaskMatchesPendingSubmission(stored, task) {
+			return nil, s.releaseRejectedSubmission(stored, err)
+		} else {
+			return nil, errors.Join(err, ErrVideoTaskVersionConflict)
+		}
+	} else {
+		task.AccountID = selection.Account.ID
+		task.Platform = command.Platform
+		task.Provider = command.Provider
+		task.UpstreamModel = upstreamModel
+		task.ProviderSubmissionToken = videoStringPointer(submissionToken)
+		task.Status = VideoTaskSubmitting
+		task.NextPollAt = &assignmentRecoveryAt
+		task.Version++
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, s.releaseRejectedSubmission(task, err)
+	}
 
 	result, submitErr := provider.Submit(ctx, selection.Account, command.Request, submissionToken)
 	if submitErr != nil {
 		if videoSubmissionIsAmbiguous(submitErr) {
 			return s.markSubmissionUnknown(ctx, task, videoTaskErrorForAmbiguousSubmission(submitErr))
 		}
-		return nil, s.releaseRejectedSubmission(ctx, task, submitErr)
+		return nil, s.releaseRejectedSubmission(task, submitErr)
 	}
 	if strings.TrimSpace(result.UpstreamTaskID) == "" || result.UpstreamTaskID == task.RequestID {
 		contractErr := VideoProviderError{Code: "provider_contract_error", Retryable: true, Ambiguous: true}
@@ -230,16 +252,13 @@ func (s *VideoTaskService) validateSubmitCommand(command VideoSubmitCommand) (Vi
 	}
 	command.Platform = strings.ToLower(strings.TrimSpace(command.Platform))
 	command.Provider = strings.ToLower(strings.TrimSpace(command.Provider))
-	if command.Platform != PlatformVideo && command.Platform != PlatformGrok {
-		return command, nil, "", "", MinimizedVideoPayload{}, ErrVideoInvalidRequest
+	if command.Platform != PlatformVideo {
+		return command, nil, "", "", MinimizedVideoPayload{}, ErrVideoUnsupportedCapability
 	}
 	if command.Group.Platform != command.Platform && command.Group.Platform != PlatformComposite {
 		return command, nil, "", "", MinimizedVideoPayload{}, ErrVideoGenerationNotAllowed
 	}
-	if command.Platform == PlatformVideo && command.Provider != VideoProviderSeedance && command.Provider != VideoProviderKling {
-		return command, nil, "", "", MinimizedVideoPayload{}, ErrVideoInvalidRequest
-	}
-	if command.Platform == PlatformGrok && command.Provider != PlatformGrok {
+	if command.Provider != VideoProviderSeedance && command.Provider != VideoProviderKling {
 		return command, nil, "", "", MinimizedVideoPayload{}, ErrVideoInvalidRequest
 	}
 
@@ -382,6 +401,11 @@ func (s *VideoTaskService) validateSelectedAccount(ctx context.Context, command 
 }
 
 func (s *VideoTaskService) markSubmissionUnknown(ctx context.Context, task *VideoTask, taskError VideoTaskError) (*VideoTask, error) {
+	if ctx == nil || ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = s.recoveryContext()
+		defer cancel()
+	}
 	now := s.currentTime()
 	nextPollAt := now.Add(videoSubmissionRecoveryDelay)
 	err := s.tasks.MarkSubmissionUnknownAt(ctx, MarkVideoSubmissionUnknownParams{
@@ -406,6 +430,11 @@ func (s *VideoTaskService) markSubmissionUnknown(ctx context.Context, task *Vide
 }
 
 func (s *VideoTaskService) resolveSubmittedPersistenceError(ctx context.Context, task *VideoTask, upstreamTaskID string, persistenceErr error) (*VideoTask, error) {
+	if ctx == nil || ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = s.recoveryContext()
+		defer cancel()
+	}
 	stored, readErr := s.tasks.GetByRequestID(ctx, task.RequestID)
 	if readErr == nil && stored != nil {
 		if stored.UpstreamTaskID != nil && strings.TrimSpace(*stored.UpstreamTaskID) == upstreamTaskID {
@@ -431,21 +460,59 @@ func (s *VideoTaskService) resolveSubmittedPersistenceError(ctx context.Context,
 	return nil, errors.Join(persistenceErr, readErr, unknownErr)
 }
 
-func (s *VideoTaskService) releaseRejectedSubmission(ctx context.Context, task *VideoTask, cause error) error {
+func (s *VideoTaskService) releaseRejectedSubmission(task *VideoTask, cause error) error {
 	if task == nil {
 		return cause
 	}
-	if err := s.billing.Release(ctx, *task); err != nil {
-		return errors.Join(cause, err)
-	}
+	ctx, cancel := s.recoveryContext()
+	defer cancel()
 	failedAt := s.currentTime()
-	markErr := s.tasks.MarkSubmissionFailed(ctx, MarkVideoSubmissionFailedParams{
-		RequestID:       task.RequestID,
-		ExpectedVersion: task.Version,
-		Error:           videoTaskErrorForSubmission(cause),
-		FailedAt:        failedAt,
+	token := ""
+	if task.ProviderSubmissionToken != nil {
+		token = strings.TrimSpace(*task.ProviderSubmissionToken)
+	}
+	_, terminalErr := s.tasks.ReleaseAndMarkSubmissionFailed(ctx, ReleaseAndFailVideoSubmissionParams{
+		RequestID:               task.RequestID,
+		ExpectedVersion:         task.Version,
+		ExpectedStatus:          task.Status,
+		ProviderSubmissionToken: token,
+		Error:                   videoTaskErrorForSubmission(cause),
+		FailedAt:                failedAt,
 	})
-	return errors.Join(cause, markErr)
+	if terminalErr == nil {
+		return cause
+	}
+	stored, readErr := s.tasks.GetByRequestID(ctx, task.RequestID)
+	if readErr == nil && stored != nil && stored.Status == VideoTaskFailed && stored.BillingStatus == "released" {
+		return cause
+	}
+	return errors.Join(cause, terminalErr, readErr)
+}
+
+func (s *VideoTaskService) readTaskForRecovery(requestID string) (*VideoTask, error) {
+	ctx, cancel := s.recoveryContext()
+	defer cancel()
+	return s.tasks.GetByRequestID(ctx, requestID)
+}
+
+func (s *VideoTaskService) recoveryContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), videoSubmissionRecoveryIOTimeout)
+}
+
+func videoTaskMatchesPendingSubmission(stored, original *VideoTask) bool {
+	return stored != nil && original != nil && stored.RequestID == original.RequestID &&
+		stored.RequestHash == original.RequestHash && stored.Version == original.Version &&
+		stored.Status == VideoTaskCreated && stored.AccountID == 0 && strings.TrimSpace(stored.UpstreamModel) == "" &&
+		stored.ProviderSubmissionToken == nil && stored.UpstreamTaskID == nil
+}
+
+func videoTaskMatchesAssignedSubmission(stored, original *VideoTask, assignment AssignVideoSubmissionParams) bool {
+	return stored != nil && original != nil && stored.RequestID == original.RequestID &&
+		stored.RequestHash == original.RequestHash && stored.Version == original.Version+1 &&
+		stored.Status == VideoTaskSubmitting && stored.AccountID == assignment.AccountID &&
+		stored.Platform == assignment.Platform && stored.Provider == assignment.Provider &&
+		stored.UpstreamModel == assignment.UpstreamModel && stored.UpstreamTaskID == nil &&
+		stored.ProviderSubmissionToken != nil && *stored.ProviderSubmissionToken == assignment.ProviderSubmissionToken
 }
 
 func (s *VideoTaskService) refreshTaskOrFallback(ctx context.Context, fallback *VideoTask) *VideoTask {

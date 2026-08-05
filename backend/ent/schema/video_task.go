@@ -16,10 +16,29 @@ type VideoTask struct {
 	ent.Schema
 }
 
+type migrationOwnedIndexAnnotation struct {
+	IndexName string   `json:"index_name"`
+	Fields    []string `json:"fields"`
+	Unique    bool     `json:"unique"`
+	Predicate string   `json:"predicate"`
+}
+
+func (migrationOwnedIndexAnnotation) Name() string { return "MigrationOwnedIndex" }
+
 func (VideoTask) Annotations() []schema.Annotation {
 	// The versioned SQL migration owns this table's constraints and indexes.
 	// Keep the entity for typed access, but exclude it from Ent auto-migration.
-	return []schema.Annotation{entsql.Annotation{Table: "video_tasks", Skip: true}}
+	// A structured annotation records the migration-owned partial index because
+	// Ent 0.14 cannot generate a skipped schema that also declares Indexes().
+	return []schema.Annotation{
+		entsql.Annotation{Table: "video_tasks", Skip: true},
+		migrationOwnedIndexAnnotation{
+			IndexName: "idx_video_tasks_idempotency",
+			Fields:    []string{"user_id", "api_key_id", "idempotency_key_hash"},
+			Unique:    true,
+			Predicate: "idempotency_key_hash <> ''",
+		},
+	}
 }
 
 func (VideoTask) Fields() []ent.Field {
@@ -35,7 +54,8 @@ func (VideoTask) Fields() []ent.Field {
 		field.Enum("operation").Values("generation", "edit", "extension"),
 		field.String("external_model").MaxLen(128),
 		field.String("upstream_model").MaxLen(128),
-		field.String("idempotency_key_hash").MaxLen(64).Default(""),
+		field.String("idempotency_key_hash").MaxLen(64).Default("").
+			Comment("IdempotencyKeyHash stores the caller key digest. Migration 200 enforces a partial unique index with user_id and api_key_id when this value is non-empty."),
 		field.String("request_hash").MaxLen(64),
 		field.String("provider_submission_token").Optional().Nillable().MaxLen(128),
 		field.JSON("request_payload", json.RawMessage{}).

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +25,30 @@ func TestVideoSubmitRejectsUnsupportedBeforeHold(t *testing.T) {
 	require.Zero(t, deps.scheduler.selectCalls)
 	require.Zero(t, deps.provider.submitCalls)
 	require.Equal(t, []string{"validate"}, deps.order)
+}
+
+func TestVideoSubmitRejectsGrokBeforeQuoteOrHold(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	command := deps.command()
+	command.Group.Platform = PlatformGrok
+	command.Platform = PlatformGrok
+	command.Provider = PlatformGrok
+	command.Request.Model = "grok-imagine-video"
+	deps.capabilities.catalog[VideoModelCapabilityKey(PlatformGrok, command.Request.Model)] = VideoProviderCapabilities{
+		VideoOperationGeneration: {Text: true},
+	}
+	grokProvider := &videoSubmitProvider{harness: deps, name: PlatformGrok}
+	registry, err := NewVideoProviderRegistry(deps.provider, grokProvider)
+	require.NoError(t, err)
+	deps.service.providers = registry
+
+	_, err = deps.service.Submit(context.Background(), command)
+
+	require.ErrorIs(t, err, ErrVideoUnsupportedCapability)
+	require.Zero(t, deps.pricing.calls)
+	require.Zero(t, deps.submissions.reserveCalls)
+	require.Zero(t, deps.scheduler.selectCalls)
+	require.Zero(t, deps.provider.submitCalls)
 }
 
 func TestVideoSubmitRejectsPermissionAndInputBeforeQuoteOrHold(t *testing.T) {
@@ -124,6 +147,25 @@ func TestVideoSubmitReplayComparesCanonicalRequestHash(t *testing.T) {
 	require.Equal(t, 1, deps.provider.submitCalls)
 }
 
+func TestVideoSubmitIdempotencyKeyCannotCrossOperations(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	first := deps.commandWithKey("one-caller-key")
+	_, err := deps.service.Submit(context.Background(), first)
+	require.NoError(t, err)
+
+	second := deps.commandWithKey("one-caller-key")
+	second.Request.Operation = VideoOperationExtension
+	second.Request.ReferenceVideos = []VideoAsset{{URL: "https://example.com/source.mp4"}}
+	deps.capabilities.catalog[VideoModelCapabilityKey(VideoProviderSeedance, second.Request.Model)][VideoOperationExtension] = VideoCapability{Extension: true}
+	deps.pricing.quote.Operation = string(VideoOperationExtension)
+	_, err = deps.service.Submit(context.Background(), second)
+
+	require.ErrorIs(t, err, ErrVideoIdempotencyConflict)
+	require.Equal(t, 1, deps.submissions.reserveCalls)
+	require.Equal(t, 1, deps.scheduler.selectCalls)
+	require.Equal(t, 1, deps.provider.submitCalls)
+}
+
 func TestVideoSubmitCanonicalizesProviderOptionsForReplayHash(t *testing.T) {
 	deps := newVideoSubmitHarness(t)
 	first := deps.commandWithKey("same-options")
@@ -211,6 +253,168 @@ func TestVideoSubmitAcceptedAndCommittedDespitePersistenceErrorReturnsStoredTask
 	require.Equal(t, "upstream-task-1", videoSubmitStringValue(task.UpstreamTaskID))
 	require.Zero(t, deps.tasks.unknownCalls)
 	require.Zero(t, deps.billing.releaseCalls)
+}
+
+func TestVideoSubmitAssignmentCommitAcknowledgementLossDoesNotResubmitOrRelease(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.tasks.assignCommits = true
+	deps.tasks.assignErr = errors.New("assignment commit acknowledgement lost")
+
+	task, err := deps.service.Submit(context.Background(), deps.command())
+
+	require.NoError(t, err)
+	require.Equal(t, VideoTaskSubmitted, task.Status)
+	require.Equal(t, 1, deps.tasks.assignCalls)
+	require.Equal(t, 1, deps.provider.submitCalls)
+	require.Zero(t, deps.billing.releaseCalls)
+}
+
+func TestVideoSubmitAssignmentFailureTerminalizesPendingHoldAtomically(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.tasks.assignErr = errors.New("assignment rejected before commit")
+
+	_, err := deps.service.Submit(context.Background(), deps.command())
+
+	require.ErrorContains(t, err, "assignment rejected before commit")
+	require.Equal(t, 1, deps.tasks.failedCalls)
+	require.Equal(t, 1, deps.billing.releaseCalls)
+	require.Zero(t, deps.provider.submitCalls)
+	stored := deps.tasks.byRequestID("vid_00000000000000000000000000000002")
+	require.NotNil(t, stored)
+	require.Equal(t, VideoTaskFailed, stored.Status)
+	require.Equal(t, "released", stored.BillingStatus)
+}
+
+func TestVideoSubmitUncertainAssignmentOutcomeRetainsScheduledHold(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.tasks.assignErr = errors.New("assignment outcome unknown")
+	deps.tasks.getErr = errors.New("confirmation read unavailable")
+
+	_, err := deps.service.Submit(context.Background(), deps.command())
+
+	require.ErrorContains(t, err, "assignment outcome unknown")
+	require.ErrorContains(t, err, "confirmation read unavailable")
+	require.Zero(t, deps.billing.releaseCalls)
+	require.Zero(t, deps.tasks.failedCalls)
+	require.Zero(t, deps.provider.submitCalls)
+	stored := deps.tasks.byRequestID("vid_00000000000000000000000000000002")
+	require.Equal(t, VideoTaskCreated, stored.Status)
+	require.NotNil(t, stored.NextPollAt)
+}
+
+func TestVideoSubmitAssignmentErrorNeverReleasesDifferentDurableAssignment(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.tasks.assignErr = errors.New("assignment outcome unknown")
+	deps.tasks.assignAfter = func() {
+		stored := deps.tasks.byRequestID("vid_00000000000000000000000000000002")
+		stored.AccountID = 999
+		stored.UpstreamModel = "different-route"
+		stored.Status = VideoTaskSubmitting
+		stored.ProviderSubmissionToken = videoSubmitStringPtr("different-token")
+		stored.Version++
+	}
+
+	_, err := deps.service.Submit(context.Background(), deps.command())
+
+	require.ErrorIs(t, err, ErrVideoTaskVersionConflict)
+	require.Zero(t, deps.billing.releaseCalls)
+	require.Zero(t, deps.tasks.failedCalls)
+	require.Zero(t, deps.provider.submitCalls)
+	require.NotNil(t, deps.tasks.byRequestID("vid_00000000000000000000000000000002").NextPollAt)
+}
+
+func TestVideoSubmitTerminalizationCommitAcknowledgementLossIsReconciled(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.provider.submitErr = VideoProviderError{Code: "invalid_request", Retryable: false, Ambiguous: false}
+	deps.tasks.terminalCommits = true
+	deps.tasks.terminalErr = errors.New("terminal commit acknowledgement lost")
+
+	_, err := deps.service.Submit(context.Background(), deps.command())
+
+	var providerErr VideoProviderError
+	require.ErrorAs(t, err, &providerErr)
+	require.NotContains(t, err.Error(), "terminal commit acknowledgement lost")
+	require.Equal(t, 1, deps.billing.releaseCalls)
+	require.Equal(t, VideoTaskFailed, deps.tasks.byRequestID("vid_00000000000000000000000000000002").Status)
+}
+
+func TestVideoSubmitTerminalizationFailureRollsBackRelease(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.provider.submitErr = VideoProviderError{Code: "invalid_request", Retryable: false, Ambiguous: false}
+	deps.tasks.terminalErr = errors.New("terminal mutation failed")
+
+	_, err := deps.service.Submit(context.Background(), deps.command())
+
+	require.ErrorContains(t, err, "terminal mutation failed")
+	require.Zero(t, deps.billing.releaseCalls)
+	require.Equal(t, VideoTaskSubmitting, deps.tasks.byRequestID("vid_00000000000000000000000000000002").Status)
+}
+
+func TestVideoSubmitCancellationAfterAssignmentTerminalizesWithoutUpstreamSubmit(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	deps.tasks.assignAfter = cancel
+
+	_, err := deps.service.Submit(ctx, deps.command())
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, deps.provider.submitCalls)
+	require.Equal(t, 1, deps.billing.releaseCalls)
+	require.Equal(t, VideoTaskFailed, deps.tasks.byRequestID("vid_00000000000000000000000000000002").Status)
+}
+
+func TestVideoSubmitCancellationBeforeReserveCreatesNoHold(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := deps.service.Submit(ctx, deps.command())
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, deps.submissions.reserveCalls)
+	require.Zero(t, deps.billing.releaseCalls)
+	require.Zero(t, deps.provider.submitCalls)
+}
+
+func TestVideoSubmitCancellationAfterReserveTerminalizesPendingTask(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	deps.submissions.reserveAfter = cancel
+
+	_, err := deps.service.Submit(ctx, deps.command())
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, deps.submissions.reserveCalls)
+	require.Equal(t, 1, deps.billing.releaseCalls)
+	require.Zero(t, deps.provider.submitCalls)
+	require.Equal(t, VideoTaskFailed, deps.tasks.byRequestID("vid_00000000000000000000000000000002").Status)
+}
+
+func TestVideoSubmitCancellationDuringUpstreamSubmitQueuesRecovery(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.provider.submitErr = context.Canceled
+
+	task, err := deps.service.Submit(context.Background(), deps.command())
+
+	require.NoError(t, err)
+	require.Equal(t, VideoTaskUnknown, task.Status)
+	require.Zero(t, deps.billing.releaseCalls)
+	require.Equal(t, 1, deps.provider.submitCalls)
+	require.Equal(t, 1, deps.tasks.unknownCalls)
+}
+
+func TestVideoSubmitCancellationAfterUpstreamResponseQueuesRecovery(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	deps.provider.submitAfter = cancel
+
+	task, err := deps.service.Submit(ctx, deps.command())
+
+	require.NoError(t, err)
+	require.Equal(t, VideoTaskUnknown, task.Status)
+	require.Zero(t, deps.billing.releaseCalls)
+	require.Equal(t, 1, deps.provider.submitCalls)
+	require.Equal(t, 1, deps.tasks.unknownCalls)
 }
 
 func TestVideoSubmitUnclassifiedUpstreamFailureDefaultsToAmbiguous(t *testing.T) {
@@ -473,13 +677,20 @@ type videoSubmitRepository struct {
 	createCalls         int
 	reserveCalls        int
 	skipReplayHashCheck bool
+	reserveAfter        func()
 }
 
-func (r *videoSubmitRepository) CreateTaskAndReserve(_ context.Context, params CreateVideoTaskParams) (*VideoTask, bool, error) {
+func (r *videoSubmitRepository) CreateTaskAndReserve(ctx context.Context, params CreateVideoTaskParams) (*VideoTask, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	r.createCalls++
 	r.lastParams = params
 	r.harness.order = append(r.harness.order, "reserve")
-	key := strings.Join([]string{params.IdempotencyKeyHash, params.Operation}, "|")
+	key := params.IdempotencyKeyHash
+	if key == "" {
+		key = params.Operation + "|" + params.RequestHash
+	}
 	if params.IdempotencyKeyHash != "" {
 		if existing := r.tasks[key]; existing != nil {
 			if !r.skipReplayHashCheck && existing.RequestHash != params.RequestHash {
@@ -506,9 +717,15 @@ func (r *videoSubmitRepository) CreateTaskAndReserve(_ context.Context, params C
 		EstimatedUnits: params.EstimatedUnits, EstimatedAmount: params.EstimatedAmount,
 		FrozenAmount: params.FrozenAmount, Currency: params.Currency,
 		BillingMode: params.BillingMode, BillingStatus: params.BillingStatus,
+		NextPollAt: params.NextPollAt,
 	}
 	r.tasks[key] = task
-	return task, true, nil
+	if r.reserveAfter != nil {
+		r.reserveAfter()
+	}
+	copy := *task
+	copy.RequestPayload = append([]byte(nil), task.RequestPayload...)
+	return &copy, true, nil
 }
 
 type videoSubmitTaskRepository struct {
@@ -519,6 +736,12 @@ type videoSubmitTaskRepository struct {
 	failedCalls          int
 	markSubmittedErr     error
 	markSubmittedCommits bool
+	assignErr            error
+	assignCommits        bool
+	assignAfter          func()
+	terminalErr          error
+	terminalCommits      bool
+	getErr               error
 	assignCalls          int
 	lastAssignParams     AssignVideoSubmissionParams
 	owned                *VideoTask
@@ -527,10 +750,19 @@ type videoSubmitTaskRepository struct {
 	ownedAPIKeyID        int64
 }
 
-func (r *videoSubmitTaskRepository) AssignAndMarkSubmitting(_ context.Context, params AssignVideoSubmissionParams) error {
+func (r *videoSubmitTaskRepository) AssignAndMarkSubmitting(ctx context.Context, params AssignVideoSubmissionParams) error {
 	r.harness.order = append(r.harness.order, "mark_submitting")
 	r.assignCalls++
 	r.lastAssignParams = params
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r.assignErr != nil && !r.assignCommits {
+		if r.assignAfter != nil {
+			r.assignAfter()
+		}
+		return r.assignErr
+	}
 	task := r.byRequestID(params.RequestID)
 	if task == nil {
 		return ErrVideoTaskNotFound
@@ -541,12 +773,19 @@ func (r *videoSubmitTaskRepository) AssignAndMarkSubmitting(_ context.Context, p
 	task.UpstreamModel = params.UpstreamModel
 	task.Status = VideoTaskSubmitting
 	task.ProviderSubmissionToken = videoSubmitStringPtr(params.ProviderSubmissionToken)
+	task.NextPollAt = videoSubmitTimePtr(params.NextPollAt)
 	task.Version++
-	return nil
+	if r.assignAfter != nil {
+		r.assignAfter()
+	}
+	return r.assignErr
 }
 
-func (r *videoSubmitTaskRepository) MarkSubmitted(_ context.Context, params MarkVideoSubmittedParams) error {
+func (r *videoSubmitTaskRepository) MarkSubmitted(ctx context.Context, params MarkVideoSubmittedParams) error {
 	r.harness.order = append(r.harness.order, "mark_submitted")
+	if err := ctx.Err(); err != nil && !r.markSubmittedCommits {
+		return err
+	}
 	if r.markSubmittedErr != nil && !r.markSubmittedCommits {
 		return r.markSubmittedErr
 	}
@@ -573,20 +812,49 @@ func (r *videoSubmitTaskRepository) MarkSubmissionUnknownAt(_ context.Context, p
 	return nil
 }
 
-func (r *videoSubmitTaskRepository) MarkSubmissionFailed(_ context.Context, params MarkVideoSubmissionFailedParams) error {
+func (r *videoSubmitTaskRepository) ReleaseAndMarkSubmissionFailed(_ context.Context, params ReleaseAndFailVideoSubmissionParams) (*VideoTask, error) {
 	r.failedCalls++
+	if r.terminalErr != nil && !r.terminalCommits {
+		return nil, r.terminalErr
+	}
 	task := r.byRequestID(params.RequestID)
+	if task == nil {
+		return nil, ErrVideoTaskNotFound
+	}
+	if task.Status != params.ExpectedStatus || task.Version != params.ExpectedVersion {
+		return nil, ErrVideoTaskVersionConflict
+	}
+	wantToken := ""
+	if task.ProviderSubmissionToken != nil {
+		wantToken = *task.ProviderSubmissionToken
+	}
+	if wantToken != params.ProviderSubmissionToken {
+		return nil, ErrVideoTaskInvalidTransition
+	}
+	r.harness.billing.releaseCalls++
 	task.Status = VideoTaskFailed
+	task.BillingStatus = "released"
+	zero := float64(0)
+	task.SettledAmount = &zero
+	task.SettledAt = videoSubmitTimePtr(params.FailedAt)
 	task.LastErrorCode = videoSubmitStringPtr(params.Error.Code())
 	task.LastErrorMessage = videoSubmitStringPtr(params.Error.Message())
 	task.LastErrorRetryable = params.Error.Retryable()
 	task.RequestPayload = nil
 	task.ProviderSubmissionToken = nil
+	task.NextPollAt = nil
 	task.Version++
-	return nil
+	copy := *task
+	if r.terminalErr != nil {
+		return nil, r.terminalErr
+	}
+	return &copy, nil
 }
 
 func (r *videoSubmitTaskRepository) GetByRequestID(_ context.Context, requestID string) (*VideoTask, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	task := r.byRequestID(requestID)
 	if task == nil {
 		return nil, ErrVideoTaskNotFound
@@ -632,9 +900,12 @@ type videoSubmitScheduler struct {
 	requests     []VideoAccountScheduleRequest
 }
 
-func (s *videoSubmitScheduler) Select(_ context.Context, request VideoAccountScheduleRequest) (*VideoAccountSelection, error) {
+func (s *videoSubmitScheduler) Select(ctx context.Context, request VideoAccountScheduleRequest) (*VideoAccountSelection, error) {
 	s.selectCalls++
 	s.harness.order = append(s.harness.order, "select")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	request.ExcludedAccountIDs = cloneExcludedAccountIDs(request.ExcludedAccountIDs)
 	s.requests = append(s.requests, request)
 	if s.err != nil {
@@ -662,6 +933,7 @@ type videoSubmitProvider struct {
 	submitResult VideoSubmitResult
 	submitErr    error
 	submitCalls  int
+	submitAfter  func()
 }
 
 type videoSubmitCapabilities struct {
@@ -685,6 +957,9 @@ func (p *videoSubmitProvider) Capabilities() VideoProviderCapabilities {
 func (p *videoSubmitProvider) Submit(_ context.Context, _ *Account, _ CanonicalVideoRequest, _ string) (VideoSubmitResult, error) {
 	p.submitCalls++
 	p.harness.order = append(p.harness.order, "submit")
+	if p.submitAfter != nil {
+		p.submitAfter()
+	}
 	return p.submitResult, p.submitErr
 }
 func (p *videoSubmitProvider) RecoverSubmission(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, bool, error) {
@@ -716,7 +991,8 @@ func (m *videoSubmitSubscriptionMaintainer) EnsureWindowMaintenance(_ context.Co
 	return sub, nil
 }
 
-func videoSubmitStringPtr(value string) *string { return &value }
+func videoSubmitStringPtr(value string) *string     { return &value }
+func videoSubmitTimePtr(value time.Time) *time.Time { return &value }
 
 func videoSubmitStringValue(value *string) string {
 	if value == nil {
