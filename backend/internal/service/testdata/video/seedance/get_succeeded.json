@@ -1,0 +1,11 @@
+{
+  "id": "cgt-2026-example",
+  "status": "succeeded",
+  "content": {
+    "video_url": "https://example.volces.com/result.mp4",
+    "last_frame_url": "https://example.volces.com/last-frame.png"
+  },
+  "resolution": "720p",
+  "ratio": "16:9",
+  "duration": 5
+}
