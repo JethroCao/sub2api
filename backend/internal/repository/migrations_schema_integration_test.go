@@ -7,10 +7,19 @@ import (
 	"database/sql"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+const originalVideoBillingPrecisionMigration198 = `-- Align the balance ledger with the ten-decimal video/subscription ledger.
+-- Precision 22 preserves the legacy twelve-digit integer range of DECIMAL(20,8).
+
+ALTER TABLE users
+    ALTER COLUMN balance TYPE DECIMAL(22,10) USING balance::DECIMAL(22,10),
+    ALTER COLUMN frozen_balance TYPE DECIMAL(22,10) USING frozen_balance::DECIMAL(22,10);
+`
 
 func TestMigrationsRunner_ConcurrentInstancesSerializeOnSessionLock(t *testing.T) {
 	const instances = 2
@@ -165,6 +174,66 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 
 	// user_allowed_groups: created_at should be timestamptz
 	requireColumn(t, tx, "user_allowed_groups", "created_at", "timestamp with time zone", 0, false)
+}
+
+func TestMigrationsUpgradeFromOriginal198AppliesForward199(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	task, _, user := createVideoBillingTask(t, client, taskRepo, "migration-198-upgrade", "balance", nil, 1, 1, nil, 0)
+
+	_, err := integrationDB.ExecContext(ctx, `
+		ALTER TABLE video_tasks
+			ALTER COLUMN estimated_amount TYPE DECIMAL(20,10) USING estimated_amount::DECIMAL(20,10),
+			ALTER COLUMN frozen_amount TYPE DECIMAL(20,10) USING frozen_amount::DECIMAL(20,10),
+			ALTER COLUMN settled_amount TYPE DECIMAL(20,10) USING settled_amount::DECIMAL(20,10)
+	`)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `DELETE FROM schema_migrations WHERE filename IN ('198_unified_video_billing_precision.sql', '199_restore_video_billing_ledger_scale.sql')`)
+	require.NoError(t, err)
+
+	originalFS := fstest.MapFS{
+		"198_unified_video_billing_precision.sql": {Data: []byte(originalVideoBillingPrecisionMigration198)},
+	}
+	require.Equal(t, "72cce8db8f5371c4e52c8650ac1e06379446d1e70f65782be2d6a18b73383413", migrationChecksum(originalVideoBillingPrecisionMigration198))
+	require.NoError(t, applyMigrationsFS(ctx, integrationDB, originalFS))
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE users SET balance = 0.0000000050, frozen_balance = 1.2345678950 WHERE id = $1`, user.ID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE video_tasks
+		SET status = 'succeeded', estimated_amount = 0.1234567850,
+			frozen_amount = 1.0000000050, settled_amount = 0.3000000050,
+			settled_at = NOW()
+		WHERE request_id = $1
+	`, task.RequestID)
+	require.NoError(t, err)
+
+	require.NoError(t, ApplyMigrations(ctx, integrationDB))
+	requireNumericColumn(t, testTx(t), "users", "balance", 20, 8)
+	requireNumericColumn(t, testTx(t), "users", "frozen_balance", 20, 8)
+	requireNumericColumn(t, testTx(t), "video_tasks", "estimated_amount", 20, 8)
+	requireNumericColumn(t, testTx(t), "video_tasks", "frozen_amount", 20, 8)
+	requireNumericColumn(t, testTx(t), "video_tasks", "settled_amount", 20, 8)
+
+	var valuesMatch bool
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT u.balance = 0.00000001
+		   AND u.frozen_balance = 1.23456790
+		   AND vt.estimated_amount = 0.12345679
+		   AND vt.frozen_amount = 1.00000001
+		   AND vt.settled_amount = 0.30000001
+		FROM users AS u
+		JOIN video_tasks AS vt ON vt.user_id = u.id
+		WHERE u.id = $1 AND vt.request_id = $2
+	`, user.ID, task.RequestID).Scan(&valuesMatch))
+	require.True(t, valuesMatch)
+
+	var originalChecksum, forwardChecksum string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE filename = '198_unified_video_billing_precision.sql'`).Scan(&originalChecksum))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE filename = '199_restore_video_billing_ledger_scale.sql'`).Scan(&forwardChecksum))
+	require.Equal(t, "72cce8db8f5371c4e52c8650ac1e06379446d1e70f65782be2d6a18b73383413", originalChecksum)
+	require.NotEmpty(t, forwardChecksum)
 }
 
 func TestMigrationsRunner_AuthIdentityAndPaymentSchemaStayAligned(t *testing.T) {

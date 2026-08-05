@@ -112,6 +112,70 @@ func TestUsageBillingRepositoryBatchImageRetainsScaleEightPrecisionBehavior(t *t
 	})
 }
 
+func TestVideoTaskRepositoryMarkSettledUsesCanonicalNumericCap(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+
+	t.Run("accepts floating noise that canonicalizes to the hold", func(t *testing.T) {
+		task := createTerminalVideoTaskWithExactHold(t, repo, "settle-noise", "0.30000000")
+		left, right := 0.1, 0.2
+		noisy := left + right
+		require.Greater(t, noisy, 0.3)
+		err := repo.MarkSettled(ctx, service.MarkVideoSettledParams{
+			RequestID: task.RequestID, ExpectedVersion: task.Version,
+			SettledAmount: noisy, BillingStatus: "settled",
+		})
+		require.NoError(t, err)
+		var canonical bool
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT settled_amount = 0.30000000 FROM video_tasks WHERE request_id = $1`, task.RequestID).Scan(&canonical))
+		require.True(t, canonical)
+	})
+
+	t.Run("rejects an amount that rounds one unit above the hold", func(t *testing.T) {
+		task := createTerminalVideoTaskWithExactHold(t, repo, "settle-rounded-over", "0.30000000")
+		err := repo.MarkSettled(ctx, service.MarkVideoSettledParams{
+			RequestID: task.RequestID, ExpectedVersion: task.Version,
+			SettledAmount: 0.300000005, BillingStatus: "settled",
+		})
+		require.ErrorIs(t, err, service.ErrVideoFinalCostExceedsHold)
+		assertVideoTaskSettlementUnchanged(t, task.RequestID, task.Version)
+	})
+
+	t.Run("rejects large float conversion above the exact hold", func(t *testing.T) {
+		task := createTerminalVideoTaskWithExactHold(t, repo, "settle-large-over", "9999999999.12345678")
+		var floatRoundTrip float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT frozen_amount FROM video_tasks WHERE request_id = $1`, task.RequestID).Scan(&floatRoundTrip))
+		err := repo.MarkSettled(ctx, service.MarkVideoSettledParams{
+			RequestID: task.RequestID, ExpectedVersion: task.Version,
+			SettledAmount: floatRoundTrip, BillingStatus: "settled",
+		})
+		require.ErrorIs(t, err, service.ErrVideoFinalCostExceedsHold)
+		assertVideoTaskSettlementUnchanged(t, task.RequestID, task.Version)
+	})
+}
+
+func createTerminalVideoTaskWithExactHold(t *testing.T, repo service.VideoTaskRepository, label, hold string) *service.VideoTask {
+	t.Helper()
+	task, _, err := repo.CreateOrGet(context.Background(), videoTaskCreateParams(t, label, ""))
+	require.NoError(t, err)
+	cleanupVideoTask(t, task.RequestID)
+	_, err = integrationDB.ExecContext(context.Background(), `
+		UPDATE video_tasks SET status = 'succeeded', frozen_amount = $2::numeric WHERE request_id = $1
+	`, task.RequestID, hold)
+	require.NoError(t, err)
+	return task
+}
+
+func assertVideoTaskSettlementUnchanged(t *testing.T, requestID string, version int64) {
+	t.Helper()
+	var unchanged bool
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT settled_amount IS NULL AND settled_at IS NULL AND version = $2
+		FROM video_tasks WHERE request_id = $1
+	`, requestID, version).Scan(&unchanged))
+	require.True(t, unchanged)
+}
+
 func assertVideoBalanceExact(t *testing.T, userID int64, wantBalance, wantFrozen string) {
 	t.Helper()
 	var balanceMatches, frozenMatches bool

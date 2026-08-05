@@ -1,6 +1,8 @@
 package migrations
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,10 +51,17 @@ func TestUnifiedVideoSubscriptionHoldMigration(t *testing.T) {
 }
 
 func TestUnifiedVideoBillingAmountsUseExistingLedgerScale(t *testing.T) {
-	precision, err := FS.ReadFile("198_unified_video_billing_precision.sql")
+	original, err := FS.ReadFile("198_unified_video_billing_precision.sql")
+	require.NoError(t, err)
+	sum := sha256.Sum256(original)
+	require.Equal(t, "f79e36de138d08571f286cb1a992f635b46818d324e01875df2a11940f8afff8", hex.EncodeToString(sum[:]))
+
+	precision, err := FS.ReadFile("199_restore_video_billing_ledger_scale.sql")
 	require.NoError(t, err)
 	sql := string(precision)
-	require.NotContains(t, sql, "ALTER TABLE users")
+	require.Contains(t, sql, "ALTER TABLE users")
+	require.Contains(t, sql, "ALTER COLUMN balance TYPE DECIMAL(20,8)")
+	require.Contains(t, sql, "ALTER COLUMN frozen_balance TYPE DECIMAL(20,8)")
 	require.Contains(t, sql, "ALTER COLUMN estimated_amount TYPE DECIMAL(20,8)")
 	require.Contains(t, sql, "ALTER COLUMN frozen_amount TYPE DECIMAL(20,8)")
 	require.Contains(t, sql, "ALTER COLUMN settled_amount TYPE DECIMAL(20,8)")

@@ -370,10 +370,12 @@ func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.Ma
 	defer func() { _ = tx.Rollback() }()
 	var status service.VideoTaskStatus
 	var version int64
-	var frozenAmount float64
 	var settledAt sql.NullTime
-	if err := tx.QueryRowContext(ctx, `SELECT status, version, frozen_amount, settled_at FROM video_tasks WHERE request_id = $1 FOR UPDATE`, params.RequestID).
-		Scan(&status, &version, &frozenAmount, &settledAt); err != nil {
+	var withinHold bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, version, settled_at, ROUND($2::numeric, 8) <= frozen_amount
+		FROM video_tasks WHERE request_id = $1 FOR UPDATE
+	`, params.RequestID, params.SettledAmount).Scan(&status, &version, &settledAt, &withinHold); err != nil {
 		return translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
 	}
 	if version != params.ExpectedVersion {
@@ -382,8 +384,8 @@ func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.Ma
 	if !service.IsTerminalVideoTaskStatus(status) || settledAt.Valid {
 		return service.ErrVideoTaskInvalidTransition
 	}
-	if params.SettledAmount > frozenAmount {
-		return service.ErrVideoTaskAmountExceedsFrozen
+	if !withinHold {
+		return service.ErrVideoFinalCostExceedsHold
 	}
 	_, err = tx.ExecContext(ctx, `
 UPDATE video_tasks
