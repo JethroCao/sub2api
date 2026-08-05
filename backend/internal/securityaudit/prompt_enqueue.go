@@ -21,13 +21,14 @@ func NewEnqueuer(config ConfigStore, repo JobRepository, payload PayloadStore, m
 }
 
 func (e *Enqueuer) Enqueue(ctx context.Context, req Request) error {
-	if e == nil || e.config == nil || e.repo == nil || e.payload == nil {
+	if e == nil || e.config == nil || e.repo == nil {
 		return errors.New("prompt audit enqueuer unavailable")
 	}
 	cfg, ok := e.config.Active()
 	baseFields := requestLogFields(req)
-	if !ok || cfg.EffectiveMode() != ModeAsync {
-		LogInfo(EventEnqueueSkipped, mergeLogFields(baseFields, map[string]any{"status": "skipped", "error_code": "mode_not_async"}))
+	mode := cfg.EffectiveMode()
+	if !ok || (mode != ModeCaptureOnly && mode != ModeAsync) {
+		LogInfo(EventEnqueueSkipped, mergeLogFields(baseFields, map[string]any{"status": "skipped", "error_code": "mode_not_enqueueing"}))
 		return nil
 	}
 	baseFields["config_version"] = cfg.ConfigVersion
@@ -35,14 +36,38 @@ func (e *Enqueuer) Enqueue(ctx context.Context, req Request) error {
 		LogInfo(EventEnqueueSkipped, mergeLogFields(baseFields, map[string]any{"status": "skipped", "error_code": "group_out_of_scope"}))
 		return nil
 	}
-	if len(cfg.EnabledEndpoints()) == 0 {
-		e.recordDropped()
-		LogWarn(EventEnqueueDropped, mergeLogFields(baseFields, map[string]any{"status": "dropped", "error_code": "no_enabled_endpoint"}))
-		return nil
-	}
 	snapshot, err := ExtractPromptSnapshot(req)
 	if errors.Is(err, ErrNoPromptText) {
 		LogInfo(EventEnqueueSkipped, mergeLogFields(baseFields, map[string]any{"status": "skipped", "error_code": "no_user_text"}))
+		return nil
+	}
+	if mode == ModeCaptureOnly {
+		event, err := e.repo.RecordCapture(ctx, snapshot, cfg.ConfigVersion)
+		if err != nil {
+			e.recordDropped()
+			if e.metrics != nil {
+				e.metrics.IncRecordFailed()
+			}
+			LogWarn(EventEnqueueDropped, mergeLogFields(baseFields, map[string]any{"status": "dropped", "error_code": "capture_store_failed"}))
+			return err
+		}
+		LogInfo(EventProcessed, mergeLogFields(baseFields, map[string]any{
+			"event_id": event.ID, "status": "captured", "config_version": cfg.ConfigVersion,
+			"decision": EventUnreviewed, "risk_level": RiskUnknown, "action": ActionRecord,
+		}))
+		if e.metrics != nil {
+			e.metrics.IncCaptured()
+		}
+		return nil
+	}
+	if e.payload == nil {
+		e.recordDropped()
+		LogWarn(EventEnqueueDropped, mergeLogFields(baseFields, map[string]any{"status": "dropped", "error_code": "payload_store_unavailable"}))
+		return errors.New("prompt audit payload store unavailable")
+	}
+	if len(cfg.EnabledEndpoints()) == 0 {
+		e.recordDropped()
+		LogWarn(EventEnqueueDropped, mergeLogFields(baseFields, map[string]any{"status": "dropped", "error_code": "no_enabled_endpoint"}))
 		return nil
 	}
 	if err != nil {

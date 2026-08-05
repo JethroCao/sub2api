@@ -53,6 +53,7 @@ func TestCoordinatorModesAndPriority(t *testing.T) {
 		wantEvaluation int64
 	}{
 		{name: "off", mode: ModeOff, wantKind: DecisionAllow},
+		{name: "capture only enqueues", mode: ModeCaptureOnly, wantKind: DecisionAllow, wantEnqueue: 1},
 		{name: "async only enqueues", mode: ModeAsync, wantKind: DecisionAllow, wantEnqueue: 1},
 		{name: "prompt block", mode: ModeBlocking, prompt: &PromptDecision{Kind: DecisionBlock}, wantKind: DecisionBlock, wantCode: ErrorCodeBlocked, wantEvaluation: 1},
 		{name: "prompt unavailable", mode: ModeBlocking, promptErr: errors.New("down"), wantKind: DecisionUnavailable, wantCode: ErrorCodeUnavailable, wantEvaluation: 1},
@@ -72,6 +73,17 @@ func TestCoordinatorModesAndPriority(t *testing.T) {
 			require.Equal(t, tt.wantEvaluation, prompt.evaluates.Load())
 		})
 	}
+}
+
+func TestCoordinatorCaptureOnlyFailureNeverChangesBusinessResponse(t *testing.T) {
+	prompt := &fakePromptEngine{mode: ModeCaptureOnly, err: errors.New("database unavailable")}
+	decision := NewCoordinator(&fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}, prompt).
+		Check(context.Background(), Request{RequestID: "capture-failure"})
+
+	require.True(t, decision.AllowNextStage)
+	require.Equal(t, DecisionAllow, decision.Kind)
+	require.Equal(t, int64(1), prompt.enqueues.Load())
+	require.Zero(t, prompt.evaluates.Load())
 }
 
 func TestCoordinatorDoesNotMutateRequestBody(t *testing.T) {

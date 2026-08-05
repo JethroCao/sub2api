@@ -89,6 +89,9 @@ type fakeJobRepository struct {
 	recordBlockingSnapshot PromptSnapshot
 	recordBlockingResult   *NormalizedResult
 	recordBlockingErr      error
+	recordCaptureCalls     int
+	recordCaptureSnapshot  PromptSnapshot
+	recordCaptureErr       error
 }
 
 func (r *fakeJobRepository) record(value string) {
@@ -178,8 +181,15 @@ func (r *fakeJobRepository) RecordBlocking(_ context.Context, snapshot PromptSna
 	r.recordBlockingSnapshot, r.recordBlockingResult = snapshot, result
 	return nil, r.recordBlockingErr
 }
-func (r *fakeJobRepository) RecordCapture(context.Context, PromptSnapshot, int64) (*Event, error) {
-	return nil, nil
+func (r *fakeJobRepository) RecordCapture(_ context.Context, snapshot PromptSnapshot, _ int64) (*Event, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recordCaptureCalls++
+	r.recordCaptureSnapshot = snapshot
+	if r.recordCaptureErr != nil {
+		return nil, r.recordCaptureErr
+	}
+	return &Event{ID: 100, Decision: EventUnreviewed, Snapshot: snapshot}, nil
 }
 
 type fakePayloadStore struct {
@@ -244,6 +254,45 @@ func asyncConfig() ActiveConfig {
 
 func asyncRequest() Request {
 	return Request{RequestID: "request-async", Protocol: "openai_chat_completions", Body: []byte(`{"messages":[{"role":"user","content":"payload canary text"}]}`)}
+}
+
+func TestEnqueuerCaptureOnlyRecordsWithoutRedisOrGuardEndpoint(t *testing.T) {
+	cfg := asyncConfig()
+	cfg.CaptureOnly = true
+	cfg.Endpoints = nil
+	repo := &fakeJobRepository{}
+	metrics := NewAtomicMetrics()
+	enqueuer := NewEnqueuer(&fakeConfigStore{cfg: cfg, active: true}, repo, nil, metrics)
+
+	require.NoError(t, enqueuer.Enqueue(context.Background(), asyncRequest()))
+	require.Equal(t, 1, repo.recordCaptureCalls)
+	require.Contains(t, repo.recordCaptureSnapshot.FullPrompt, "payload canary text")
+	require.Equal(t, AuditMetricsSnapshot{Captured: 1}, metrics.AuditSnapshot())
+}
+
+func TestEnqueuerCaptureOnlyRespectsGroupScopeAndRecordsFailureMetrics(t *testing.T) {
+	cfg := asyncConfig()
+	cfg.CaptureOnly = true
+	cfg.Endpoints = nil
+	cfg.AllGroups = false
+	cfg.GroupIDs = []int64{9}
+	repo := &fakeJobRepository{recordCaptureErr: errors.New("database unavailable")}
+	metrics := NewAtomicMetrics()
+	enqueuer := NewEnqueuer(&fakeConfigStore{cfg: cfg, active: true}, repo, nil, metrics)
+
+	otherGroup := int64(8)
+	require.NoError(t, enqueuer.Enqueue(context.Background(), Request{
+		RequestID: "out-of-scope", GroupID: &otherGroup, Protocol: "openai_chat_completions",
+		Body: []byte(`{"messages":[{"role":"user","content":"do not capture"}]}`),
+	}))
+	require.Zero(t, repo.recordCaptureCalls)
+
+	inScope := asyncRequest()
+	inScope.GroupID = &cfg.GroupIDs[0]
+	require.Error(t, enqueuer.Enqueue(context.Background(), inScope))
+	require.Equal(t, 1, repo.recordCaptureCalls)
+	require.Equal(t, AuditMetricsSnapshot{Dropped: 1}, metrics.AuditSnapshot())
+	require.Equal(t, int64(1), metrics.Snapshot().RecordFailed)
 }
 
 func TestEnqueuerStagingPayloadPublishProtocolAndFailureCleanup(t *testing.T) {
