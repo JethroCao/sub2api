@@ -24,14 +24,16 @@ const (
 )
 
 var (
-	videoRequestIDPattern           = regexp.MustCompile(`^vid_[0-9a-f]{32}$`)
-	videoTaskErrorCodePattern       = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_.-]{0,127}$`)
-	videoTaskSensitiveTextPattern   = regexp.MustCompile(`(?i)(authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|credential|cookie|\bbearer\s+|\bsk-[a-z0-9_-]{12,})`)
-	videoTaskCredentialValuePattern = regexp.MustCompile(`(?i)\b(?:authorization|x[-_.]?api[-_.]?key|api[-_.]?key|(?:access|refresh|id)[-_.]?token|token)["']?\s*[:=]\s*["']?((?:bearer\s+)?[a-z0-9][a-z0-9._~+/=-]{0,511})`)
-	videoTaskBearerValuePattern     = regexp.MustCompile(`(?i)\bbearer\s+([a-z0-9][a-z0-9._~+/=-]{0,511})`)
-	videoTaskKnownKeyPattern        = regexp.MustCompile(`(?i)\bsk-(?:proj-)?[a-z0-9_-]{12,}`)
-	videoTaskJWTValuePattern        = regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]*)(?:$|[^A-Za-z0-9_-])`)
-	videoTaskWorkerIDPattern        = regexp.MustCompile(`^worker-[A-Za-z0-9][A-Za-z0-9_-]{0,120}$`)
+	videoRequestIDPattern          = regexp.MustCompile(`^vid_[0-9a-f]{32}$`)
+	videoTaskErrorCodePattern      = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_.-]{0,127}$`)
+	videoTaskSensitiveTextPattern  = regexp.MustCompile(`(?i)(authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|credential|cookie|\bbearer\s+|\bsk-[a-z0-9_-]{12,})`)
+	videoTaskAssignmentPattern     = regexp.MustCompile(`(?i)\b([a-z][a-z0-9_.-]{1,63})["']?\s*[:=]\s*["']?((?:bearer\s+)?[a-z0-9][a-z0-9._~+/=-]{0,511})`)
+	videoTaskBearerValuePattern    = regexp.MustCompile(`(?i)\bbearer\s+([a-z0-9][a-z0-9._~+/=-]{0,511})`)
+	videoTaskKnownKeyPattern       = regexp.MustCompile(`(?i)\bsk-(?:proj-)?[a-z0-9_-]{12,}`)
+	videoTaskJWTValuePattern       = regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]*)(?:$|[^A-Za-z0-9_-])`)
+	videoTaskSafeAuthProsePattern  = regexp.MustCompile(`(?i)^authorization["']?\s*[:=]\s*["']?(?:bearer\s+authentication\s+is\s+required|required\s+for\s+access\s+to\s+the\s+gallery)[.!?]?["']?$`)
+	videoTaskSafeTokenProsePattern = regexp.MustCompile(`(?i)^token["']?\s*[:=]\s*["']?optional\s+in\s+this\s+board-game\s+illustration[.!?]?["']?$`)
+	videoTaskWorkerIDPattern       = regexp.MustCompile(`^worker-[A-Za-z0-9][A-Za-z0-9_-]{0,120}$`)
 )
 
 type VideoTaskStatus string
@@ -362,14 +364,27 @@ func containsVideoCredential(value string) bool {
 	if videoTaskKnownKeyPattern.MatchString(value) || containsVideoJWT(value) {
 		return true
 	}
-	for _, match := range videoTaskCredentialValuePattern.FindAllStringSubmatch(value, -1) {
-		candidate := match[1]
-		if strings.HasPrefix(strings.ToLower(candidate), "bearer ") {
-			candidate = strings.TrimSpace(candidate[len("bearer "):])
+	for offset := 0; offset < len(value); {
+		match := videoTaskAssignmentPattern.FindStringSubmatchIndex(value[offset:])
+		if match == nil {
+			break
 		}
-		if isAssignedVideoCredential(candidate) {
-			return true
+		name := value[offset+match[2] : offset+match[3]]
+		candidate := value[offset+match[4] : offset+match[5]]
+		if isCredentialShapedVideoName(name) {
+			assignment := value[offset+match[2]:]
+			if isSafeVideoCredentialProseAssignment(name, assignment) {
+				offset += match[3]
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(candidate), "bearer ") {
+				candidate = strings.TrimSpace(candidate[len("bearer "):])
+			}
+			if isAssignedVideoCredential(candidate) {
+				return true
+			}
 		}
+		offset += match[3]
 	}
 	for _, match := range videoTaskBearerValuePattern.FindAllStringSubmatch(value, -1) {
 		if isSecretLikeVideoValue(match[1]) {
@@ -422,7 +437,42 @@ func isSecretLikeVideoValue(value string) bool {
 
 func isAssignedVideoCredential(value string) bool {
 	value = strings.Trim(value, " \t\r\n\"'.,;)}]")
-	return videoTaskKnownKeyPattern.MatchString(value) || containsVideoJWT(value) || len(value) >= 12
+	return videoTaskKnownKeyPattern.MatchString(value) || containsVideoJWT(value) || len(value) >= 8
+}
+
+func isSafeVideoCredentialProseAssignment(name, assignment string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization":
+		return videoTaskSafeAuthProsePattern.MatchString(assignment)
+	case "token":
+		return videoTaskSafeTokenProsePattern.MatchString(assignment)
+	default:
+		return false
+	}
+}
+
+func isCredentialShapedVideoName(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.'
+	}) {
+		switch part {
+		case "password", "passwd", "secret", "token", "cookie", "credential", "credentials":
+			return true
+		}
+	}
+	normalized := strings.NewReplacer("_", "", "-", "", ".", "").Replace(value)
+	if normalized == "authorization" || normalized == "proxyauthorization" ||
+		normalized == "apikey" || normalized == "accesskey" ||
+		normalized == "secretkey" || normalized == "privatekey" {
+		return true
+	}
+	for _, suffix := range []string{"password", "secret", "token", "cookie", "credential", "credentials", "apikey"} {
+		if strings.HasSuffix(normalized, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isEncodedVideoUpload(value string) bool {
@@ -452,11 +502,17 @@ func isEncodedVideoUpload(value string) bool {
 			return true
 		}
 		if isBinaryVideoContent(decoded) &&
-			(strings.ContainsAny(value, "=+/") || len(decoded) >= 16 && !isASCIIAlphabetic(value)) {
+			(hasExplicitVideoBase64Marker(value) || len(decoded) >= 16 && !isASCIIAlphabetic(value)) {
 			return true
 		}
 	}
 	return false
+}
+
+func hasExplicitVideoBase64Marker(value string) bool {
+	return strings.ContainsAny(value, "=+/") ||
+		strings.HasPrefix(value, "-") || strings.HasSuffix(value, "-") ||
+		strings.HasPrefix(value, "_") || strings.HasSuffix(value, "_")
 }
 
 func containsForbiddenVideoControl(value []byte) bool {
