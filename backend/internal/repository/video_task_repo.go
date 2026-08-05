@@ -25,7 +25,8 @@ func NewVideoTaskRepository(db *sql.DB) service.VideoTaskRepository {
 }
 
 func (r *videoTaskRepository) CreateOrGet(ctx context.Context, params service.CreateVideoTaskParams) (*service.VideoTask, bool, error) {
-	if err := validateCreateVideoTaskParams(params); err != nil {
+	params, err := normalizeCreateVideoTaskParams(params)
+	if err != nil {
 		return nil, false, err
 	}
 	requestID, err := service.NewVideoRequestID()
@@ -37,7 +38,59 @@ func (r *videoTaskRepository) CreateOrGet(ctx context.Context, params service.Cr
 		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	task, created, err := createOrGetVideoTask(ctx, tx, params, requestID)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	return task, created, nil
+}
 
+func (r *videoTaskRepository) CreateTaskAndReserve(ctx context.Context, params service.CreateVideoTaskParams) (*service.VideoTask, bool, error) {
+	params, err := normalizeCreateVideoTaskParams(params)
+	if err != nil {
+		return nil, false, err
+	}
+	requestID, err := service.NewVideoRequestID()
+	if err != nil {
+		return nil, false, err
+	}
+	tx, err := r.begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	task, created, err := createOrGetVideoTask(ctx, tx, params, requestID)
+	if err != nil {
+		return nil, false, err
+	}
+	cmd := &service.VideoHoldCommand{
+		RequestID:          service.VideoHoldRequestID(task.RequestID),
+		RequestPayloadHash: task.RequestHash,
+		UserID:             task.UserID,
+		APIKeyID:           task.APIKeyID,
+		SubscriptionID:     task.SubscriptionID,
+		VideoRequestID:     task.RequestID,
+		BillingMode:        task.BillingMode,
+		HoldAmount:         task.FrozenAmount,
+	}
+	if _, err := applyVideoHoldInTx(ctx, tx, cmd, reserveVideoHold); err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	return task, created, nil
+}
+
+func createOrGetVideoTask(
+	ctx context.Context,
+	tx *sql.Tx,
+	params service.CreateVideoTaskParams,
+	requestID string,
+) (*service.VideoTask, bool, error) {
 	task, err := scanVideoTask(tx.QueryRowContext(ctx, `
 INSERT INTO video_tasks (
     request_id, user_id, api_key_id, subscription_id, group_id, account_id,
@@ -72,9 +125,6 @@ FOR SHARE`, params.UserID, params.APIKeyID, params.Operation, params.Idempotency
 		}
 	}
 	if err != nil {
-		return nil, false, err
-	}
-	if err := tx.Commit(); err != nil {
 		return nil, false, err
 	}
 	return task, created, nil
@@ -484,6 +534,17 @@ func checkVideoMutationResult(ctx context.Context, sqlq interface {
 	return service.ErrVideoTaskInvalidTransition
 }
 
+func normalizeCreateVideoTaskParams(params service.CreateVideoTaskParams) (service.CreateVideoTaskParams, error) {
+	params.Currency = strings.TrimSpace(params.Currency)
+	if params.Currency == "" {
+		params.Currency = "USD"
+	}
+	if err := validateCreateVideoTaskParams(params); err != nil {
+		return service.CreateVideoTaskParams{}, err
+	}
+	return params, nil
+}
+
 func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
 	if params.UserID <= 0 || params.APIKeyID <= 0 || params.GroupID <= 0 || params.AccountID <= 0 ||
 		params.Platform != service.PlatformVideo ||
@@ -494,12 +555,9 @@ func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
 		(params.IdempotencyKeyHash != "" && !videoTaskSHA256Pattern.MatchString(params.IdempotencyKeyHash)) ||
 		!isFiniteNonNegativeVideoAmount(params.UnitPrice) || !isFiniteNonNegativeVideoAmount(params.EstimatedUnits) ||
 		!isFiniteNonNegativeVideoAmount(params.EstimatedAmount) || !isFiniteNonNegativeVideoAmount(params.FrozenAmount) ||
-		strings.TrimSpace(params.PricingUnit) == "" || strings.TrimSpace(params.BillingMode) == "" ||
+		strings.TrimSpace(params.PricingUnit) == "" || strings.TrimSpace(params.Currency) == "" || strings.TrimSpace(params.BillingMode) == "" ||
 		strings.TrimSpace(params.BillingStatus) == "" {
 		return service.ErrVideoTaskInvalidRequest
-	}
-	if params.Currency == "" {
-		params.Currency = "USD"
 	}
 	return nil
 }

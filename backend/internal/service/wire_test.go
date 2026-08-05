@@ -15,6 +15,15 @@ import (
 )
 
 func TestProviderSetRegistersVideoPricingService(t *testing.T) {
+	require.True(t, providerSetRegisters(t, "NewVideoPricingService"), "service.ProviderSet must provide VideoPricingService to future Wire consumers")
+}
+
+func TestProviderSetRegistersVideoBillingService(t *testing.T) {
+	require.True(t, providerSetRegisters(t, "NewVideoBillingService"), "service.ProviderSet must provide VideoBillingService to future Wire consumers")
+}
+
+func providerSetRegisters(t *testing.T, providerName string) bool {
+	t.Helper()
 	_, testFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 
@@ -37,14 +46,14 @@ func TestProviderSetRegistersVideoPricingService(t *testing.T) {
 		}
 		for _, argument := range call.Args {
 			provider, ok := argument.(*ast.Ident)
-			if ok && provider.Name == "NewVideoPricingService" {
+			if ok && provider.Name == providerName {
 				registered = true
 			}
 		}
 		return false
 	})
 
-	require.True(t, registered, "service.ProviderSet must provide VideoPricingService to future Wire consumers")
+	return registered
 }
 
 func TestProvideTimingWheelService_ReturnsError(t *testing.T) {

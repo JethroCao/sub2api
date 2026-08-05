@@ -5,7 +5,12 @@ import (
 	"time"
 )
 
+type VideoSubmissionRepository interface {
+	CreateTaskAndReserve(context.Context, CreateVideoTaskParams) (*VideoTask, bool, error)
+}
+
 type VideoTaskRepository interface {
+	VideoSubmissionRepository
 	CreateOrGet(context.Context, CreateVideoTaskParams) (*VideoTask, bool, error)
 	GetOwned(context.Context, string, int64, int64) (*VideoTask, error)
 	GetByRequestID(context.Context, string) (*VideoTask, error)

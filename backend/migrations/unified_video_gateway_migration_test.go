@@ -39,3 +39,11 @@ func TestUnifiedVideoMigrationsDefineTasks(t *testing.T) {
 	require.Contains(t, sql, "CONSTRAINT video_tasks_settlement_status")
 	require.Contains(t, sql, "CONSTRAINT video_tasks_settlement_complete")
 }
+
+func TestUnifiedVideoSubscriptionHoldMigration(t *testing.T) {
+	hold, err := FS.ReadFile("197_video_subscription_frozen_quota.sql")
+	require.NoError(t, err)
+	sql := string(hold)
+	require.Contains(t, sql, "frozen_quota DECIMAL(20,10) NOT NULL DEFAULT 0")
+	require.Contains(t, sql, "CHECK (frozen_quota >= 0)")
+}

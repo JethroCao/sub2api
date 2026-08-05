@@ -31,6 +31,149 @@ func TestVideoTaskRepositoryRequestIDFormat(t *testing.T) {
 	cleanupVideoTask(t, task.RequestID)
 }
 
+func TestCreateVideoTaskAndReserveIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewVideoTaskRepository(integrationDB)
+
+	hold := 2.0
+	user := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("video-atomic-user-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Balance:      1,
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name:                 "video-atomic-group-" + videoTaskHash(t.Name())[:12],
+		Platform:             service.PlatformVideo,
+		SubscriptionType:     service.SubscriptionTypeStandard,
+		AllowVideoGeneration: true,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID:  user.ID,
+		GroupID: &group.ID,
+		Key:     "sk-video-atomic-" + videoTaskHash(t.Name())[:20],
+		Name:    "video-atomic",
+	})
+	account := mustCreateAccount(t, client, &service.Account{
+		Name:     "video-atomic-account-" + videoTaskHash(t.Name())[:12],
+		Platform: service.PlatformVideo,
+	})
+	params := videoTaskCreateParams(t, "atomic-reserve", videoTaskHash("atomic-"+t.Name()))
+	params.UserID = user.ID
+	params.APIKeyID = apiKey.ID
+	params.GroupID = group.ID
+	params.AccountID = account.ID
+	params.FrozenAmount = hold
+	params.EstimatedAmount = hold
+	params.Currency = ""
+
+	_, _, err := repo.CreateTaskAndReserve(ctx, params)
+	require.ErrorIs(t, err, service.ErrVideoInsufficientBalance)
+
+	var taskCount, holdCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM video_tasks WHERE idempotency_key_hash = $1`, params.IdempotencyKeyHash).Scan(&taskCount))
+	require.Zero(t, taskCount)
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_billing_dedup WHERE api_key_id = $1 AND request_id LIKE 'video_hold:%'`, apiKey.ID).Scan(&holdCount))
+	require.Zero(t, holdCount)
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE users SET balance = 10 WHERE id = $1`, user.ID)
+	require.NoError(t, err)
+	task, created, err := repo.CreateTaskAndReserve(ctx, params)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, "USD", task.Currency)
+	cleanupVideoTask(t, task.RequestID)
+
+	replayed, created, err := repo.CreateTaskAndReserve(ctx, params)
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Equal(t, task.RequestID, replayed.RequestID)
+
+	var balance, frozen float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT balance, frozen_balance FROM users WHERE id = $1`, user.ID).Scan(&balance, &frozen))
+	require.InDelta(t, 8, balance, 0.000000001)
+	require.InDelta(t, 2, frozen, 0.000000001)
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_billing_dedup WHERE api_key_id = $1 AND request_id = $2`, apiKey.ID, service.VideoHoldRequestID(task.RequestID)).Scan(&holdCount))
+	require.Equal(t, 1, holdCount)
+}
+
+func TestCreateVideoTaskAndReserveSubscriptionIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := NewVideoTaskRepository(integrationDB)
+	dailyLimit := 3.0
+	user := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("video-atomic-sub-user-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Balance:      100,
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name:                 "video-atomic-sub-group-" + videoTaskHash(t.Name())[:12],
+		Platform:             service.PlatformVideo,
+		SubscriptionType:     service.SubscriptionTypeSubscription,
+		DailyLimitUSD:        &dailyLimit,
+		AllowVideoGeneration: true,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID:  user.ID,
+		GroupID: &group.ID,
+		Key:     "sk-video-atomic-sub-" + videoTaskHash(t.Name())[:20],
+		Name:    "video-atomic-sub",
+	})
+	account := mustCreateAccount(t, client, &service.Account{
+		Name:     "video-atomic-sub-account-" + videoTaskHash(t.Name())[:12],
+		Platform: service.PlatformVideo,
+	})
+	subscription := mustCreateSubscription(t, client, &service.UserSubscription{
+		UserID:        user.ID,
+		GroupID:       group.ID,
+		DailyUsageUSD: 0.5,
+	})
+	params := videoTaskCreateParams(t, "atomic-subscription", videoTaskHash("atomic-sub-"+t.Name()))
+	params.UserID = user.ID
+	params.APIKeyID = apiKey.ID
+	params.SubscriptionID = &subscription.ID
+	params.GroupID = group.ID
+	params.AccountID = account.ID
+	params.FrozenAmount = 2
+	params.EstimatedAmount = 2
+	params.BillingMode = "subscription"
+
+	task, created, err := repo.CreateTaskAndReserve(ctx, params)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, task.RequestID)
+	replayed, created, err := repo.CreateTaskAndReserve(ctx, params)
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Equal(t, task.RequestID, replayed.RequestID)
+
+	var balance, frozen, daily float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT balance FROM users WHERE id = $1`, user.ID).Scan(&balance))
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT frozen_quota, daily_usage_usd FROM user_subscriptions WHERE id = $1`, subscription.ID).Scan(&frozen, &daily))
+	require.InDelta(t, 100, balance, 0.000000001)
+	require.InDelta(t, 2, frozen, 0.000000001)
+	require.InDelta(t, 0.5, daily, 0.000000001)
+}
+
+func TestVideoTaskRepositoryDefaultsEmptyCurrencyBeforeCreate(t *testing.T) {
+	repo := NewVideoTaskRepository(integrationDB)
+	params := videoTaskCreateParams(t, "empty-currency", "")
+	params.Currency = ""
+
+	task, created, err := repo.CreateOrGet(context.Background(), params)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, "USD", task.Currency)
+	cleanupVideoTask(t, task.RequestID)
+}
+
 func TestVideoTaskRepositoryCreateIdempotencyConflict(t *testing.T) {
 	repoA := NewVideoTaskRepository(integrationDB)
 	repoB := NewVideoTaskRepository(integrationDB)

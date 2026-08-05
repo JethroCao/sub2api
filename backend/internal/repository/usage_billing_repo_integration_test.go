@@ -4,16 +4,361 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
+
+func TestUsageBillingRepositoryBalanceVideoHoldLifecycleIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	task, apiKey, user := createVideoBillingTask(t, client, taskRepo, "balance-lifecycle", "balance", nil, 2, 10, nil, 0)
+
+	reserve := videoHoldCommand(task, service.VideoHoldRequestID(task.RequestID), 0)
+	result, err := billing.ReserveVideo(ctx, reserve)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	result, err = billing.ReserveVideo(ctx, reserve)
+	require.NoError(t, err)
+	require.False(t, result.Applied)
+
+	capture := videoHoldCommand(task, service.VideoCaptureRequestID(task.RequestID), 1.25)
+	result, err = billing.CaptureVideo(ctx, capture)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	result, err = billing.CaptureVideo(ctx, capture)
+	require.NoError(t, err)
+	require.False(t, result.Applied)
+
+	var balance, frozen float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT balance, frozen_balance FROM users WHERE id = $1`, user.ID).Scan(&balance, &frozen))
+	require.InDelta(t, 8.75, balance, 0.000000001)
+	require.InDelta(t, 0, frozen, 0.000000001)
+
+	var dedupCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_billing_dedup WHERE api_key_id = $1 AND request_id IN ($2, $3)`,
+		apiKey.ID, reserve.RequestID, capture.RequestID).Scan(&dedupCount))
+	require.Equal(t, 2, dedupCount)
+}
+
+func TestUsageBillingRepositoryBalanceVideoCaptureUsesStoredHold(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	task, _, user := createVideoBillingTask(t, client, taskRepo, "stored-balance-hold", "balance", nil, 2, 10, nil, 0)
+	require.NoError(t, reserveVideoTask(t, billing, task))
+
+	capture := videoHoldCommand(task, service.VideoCaptureRequestID(task.RequestID), 2.01)
+	capture.HoldAmount = 99
+	_, err := billing.CaptureVideo(ctx, capture)
+	require.ErrorIs(t, err, service.ErrVideoFinalCostExceedsHold)
+
+	var balance, frozen float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT balance, frozen_balance FROM users WHERE id = $1`, user.ID).Scan(&balance, &frozen))
+	require.InDelta(t, 8, balance, 0.000000001)
+	require.InDelta(t, 2, frozen, 0.000000001)
+}
+
+func TestUsageBillingRepositorySubscriptionVideoHoldLifecycleAndQuota(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	dailyLimit := 3.0
+	task, _, _ := createVideoBillingTask(t, client, taskRepo, "subscription-lifecycle", "subscription", nil, 2, 0, &dailyLimit, 0.5)
+
+	reserve := videoHoldCommand(task, service.VideoHoldRequestID(task.RequestID), 0)
+	result, err := billing.ReserveVideo(ctx, reserve)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	result, err = billing.ReserveVideo(ctx, reserve)
+	require.NoError(t, err)
+	require.False(t, result.Applied)
+
+	capture := videoHoldCommand(task, service.VideoCaptureRequestID(task.RequestID), 1.25)
+	result, err = billing.CaptureVideo(ctx, capture)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+
+	var frozen, daily, weekly, monthly float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT frozen_quota, daily_usage_usd, weekly_usage_usd, monthly_usage_usd
+		FROM user_subscriptions WHERE id = $1`, *task.SubscriptionID).Scan(&frozen, &daily, &weekly, &monthly))
+	require.InDelta(t, 0, frozen, 0.000000001)
+	require.InDelta(t, 1.75, daily, 0.000000001)
+	require.InDelta(t, 1.25, weekly, 0.000000001)
+	require.InDelta(t, 1.25, monthly, 0.000000001)
+}
+
+func TestUsageBillingRepositorySubscriptionVideoReserveRejectsInsufficientQuota(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	dailyLimit := 3.0
+	task, apiKey, _ := createVideoBillingTask(t, client, taskRepo, "subscription-insufficient", "subscription", nil, 2.51, 0, &dailyLimit, 0.5)
+
+	_, err := billing.ReserveVideo(ctx, videoHoldCommand(task, service.VideoHoldRequestID(task.RequestID), 0))
+	require.ErrorIs(t, err, service.ErrVideoSubscriptionQuotaExceeded)
+
+	var frozen float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT frozen_quota FROM user_subscriptions WHERE id = $1`, *task.SubscriptionID).Scan(&frozen))
+	require.Zero(t, frozen)
+	var dedupCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_billing_dedup WHERE api_key_id = $1 AND request_id = $2`,
+		apiKey.ID, service.VideoHoldRequestID(task.RequestID)).Scan(&dedupCount))
+	require.Zero(t, dedupCount)
+}
+
+func TestUsageBillingRepositorySubscriptionVideoReleaseDoesNotConsumeQuota(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	dailyLimit := 3.0
+	task, _, _ := createVideoBillingTask(t, client, taskRepo, "subscription-release", "subscription", nil, 2, 0, &dailyLimit, 0.5)
+	require.NoError(t, reserveVideoTask(t, billing, task))
+
+	release := videoHoldCommand(task, service.VideoReleaseRequestID(task.RequestID), 0)
+	result, err := billing.ReleaseVideo(ctx, release)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	result, err = billing.ReleaseVideo(ctx, release)
+	require.NoError(t, err)
+	require.False(t, result.Applied)
+
+	var frozen, daily, weekly, monthly float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT frozen_quota, daily_usage_usd, weekly_usage_usd, monthly_usage_usd
+		FROM user_subscriptions WHERE id = $1`, *task.SubscriptionID).Scan(&frozen, &daily, &weekly, &monthly))
+	require.InDelta(t, 0, frozen, 0.000000001)
+	require.InDelta(t, 0.5, daily, 0.000000001)
+	require.InDelta(t, 0, weekly, 0.000000001)
+	require.InDelta(t, 0, monthly, 0.000000001)
+}
+
+func TestUsageBillingRepositoryBalanceVideoCannotReleaseAfterCapture(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	task, _, user := createVideoBillingTask(t, client, taskRepo, "capture-then-release", "balance", nil, 2, 10, nil, 0)
+	require.NoError(t, reserveVideoTask(t, billing, task))
+	_, err := billing.CaptureVideo(ctx, videoHoldCommand(task, service.VideoCaptureRequestID(task.RequestID), 1.25))
+	require.NoError(t, err)
+
+	_, err = billing.ReleaseVideo(ctx, videoHoldCommand(task, service.VideoReleaseRequestID(task.RequestID), 0))
+	require.ErrorIs(t, err, service.ErrVideoBillingAlreadyFinalized)
+
+	var balance, frozen float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT balance, frozen_balance FROM users WHERE id = $1`, user.ID).Scan(&balance, &frozen))
+	require.InDelta(t, 8.75, balance, 0.000000001)
+	require.InDelta(t, 0, frozen, 0.000000001)
+}
+
+func TestUsageBillingRepositorySubscriptionVideoConcurrentReservesLockQuota(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	dailyLimit := 3.0
+	user := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("video-lock-user-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name:                 "video-lock-group-" + uuid.NewString(),
+		Platform:             service.PlatformVideo,
+		SubscriptionType:     service.SubscriptionTypeSubscription,
+		DailyLimitUSD:        &dailyLimit,
+		AllowVideoGeneration: true,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID:  user.ID,
+		GroupID: &group.ID,
+		Key:     "sk-video-lock-" + uuid.NewString(),
+		Name:    "video-lock",
+	})
+	account := mustCreateAccount(t, client, &service.Account{
+		Name:     "video-lock-account-" + uuid.NewString(),
+		Platform: service.PlatformVideo,
+	})
+	subscription := mustCreateSubscription(t, client, &service.UserSubscription{
+		UserID:  user.ID,
+		GroupID: group.ID,
+		Notes:   "video-hold-overlap",
+	})
+	tasks := make([]*service.VideoTask, 2)
+	for i := range tasks {
+		params := videoTaskCreateParams(t, fmt.Sprintf("concurrent-%d", i), "")
+		params.UserID = user.ID
+		params.APIKeyID = apiKey.ID
+		params.SubscriptionID = &subscription.ID
+		params.GroupID = group.ID
+		params.AccountID = account.ID
+		params.BillingMode = "subscription"
+		params.FrozenAmount = 2
+		params.EstimatedAmount = 2
+		var err error
+		tasks[i], _, err = taskRepo.CreateOrGet(ctx, params)
+		require.NoError(t, err)
+		cleanupVideoTask(t, tasks[i].RequestID)
+	}
+	installVideoSubscriptionReserveOverlapTrigger(t)
+
+	errs := make([]error, len(tasks))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, task := range tasks {
+		wg.Add(1)
+		go func(i int, task *service.VideoTask) {
+			defer wg.Done()
+			<-start
+			_, errs[i] = billing.ReserveVideo(ctx, videoHoldCommand(task, service.VideoHoldRequestID(task.RequestID), 0))
+		}(i, task)
+	}
+	close(start)
+	wg.Wait()
+
+	var success, exceeded int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, service.ErrVideoSubscriptionQuotaExceeded):
+			exceeded++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	require.Equal(t, 1, success)
+	require.Equal(t, 1, exceeded)
+	var frozen float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT frozen_quota FROM user_subscriptions WHERE id = $1`, subscription.ID).Scan(&frozen))
+	require.InDelta(t, 2, frozen, 0.000000001)
+	var holdClaims int
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_billing_dedup WHERE api_key_id = $1 AND request_id LIKE 'video_hold:%'`, apiKey.ID).Scan(&holdClaims))
+	require.Equal(t, 1, holdClaims)
+}
+
+func installVideoSubscriptionReserveOverlapTrigger(t *testing.T) {
+	t.Helper()
+	_, err := integrationDB.ExecContext(context.Background(), `
+		CREATE OR REPLACE FUNCTION video_subscription_test_hold_reserve()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.notes = 'video-hold-overlap' AND NEW.frozen_quota > OLD.frozen_quota THEN
+				PERFORM pg_sleep(1);
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER trg_video_subscription_test_hold_reserve
+		BEFORE UPDATE ON user_subscriptions
+		FOR EACH ROW EXECUTE FUNCTION video_subscription_test_hold_reserve();
+	`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS trg_video_subscription_test_hold_reserve ON user_subscriptions`)
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP FUNCTION IF EXISTS video_subscription_test_hold_reserve()`)
+	})
+}
+
+func createVideoBillingTask(
+	t *testing.T,
+	client *dbent.Client,
+	repo service.VideoTaskRepository,
+	label, billingMode string,
+	subscriptionID *int64,
+	hold, balance float64,
+	dailyLimit *float64,
+	dailyUsage float64,
+) (*service.VideoTask, *service.APIKey, *service.User) {
+	t.Helper()
+	user := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("video-billing-%s-%d@example.com", label, time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Balance:      balance,
+	})
+	group := mustCreateGroup(t, client, &service.Group{
+		Name:                 "video-billing-" + label + "-" + uuid.NewString(),
+		Platform:             service.PlatformVideo,
+		SubscriptionType:     service.SubscriptionTypeSubscription,
+		DailyLimitUSD:        dailyLimit,
+		AllowVideoGeneration: true,
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID:  user.ID,
+		GroupID: &group.ID,
+		Key:     "sk-video-billing-" + uuid.NewString(),
+		Name:    "video-billing-" + label,
+	})
+	account := mustCreateAccount(t, client, &service.Account{
+		Name:     "video-billing-account-" + uuid.NewString(),
+		Platform: service.PlatformVideo,
+	})
+	if billingMode == "subscription" && subscriptionID == nil {
+		subscription := mustCreateSubscription(t, client, &service.UserSubscription{
+			UserID:        user.ID,
+			GroupID:       group.ID,
+			DailyUsageUSD: dailyUsage,
+		})
+		subscriptionID = &subscription.ID
+	}
+	params := videoTaskCreateParams(t, label, "")
+	params.UserID = user.ID
+	params.APIKeyID = apiKey.ID
+	params.SubscriptionID = subscriptionID
+	params.GroupID = group.ID
+	params.AccountID = account.ID
+	params.FrozenAmount = hold
+	params.EstimatedAmount = hold
+	params.BillingMode = billingMode
+	task, _, err := repo.CreateOrGet(context.Background(), params)
+	require.NoError(t, err)
+	cleanupVideoTask(t, task.RequestID)
+	return task, apiKey, user
+}
+
+func videoHoldCommand(task *service.VideoTask, requestID string, actual float64) *service.VideoHoldCommand {
+	return &service.VideoHoldCommand{
+		RequestID:          requestID,
+		RequestPayloadHash: task.RequestHash,
+		UserID:             task.UserID,
+		APIKeyID:           task.APIKeyID,
+		SubscriptionID:     task.SubscriptionID,
+		VideoRequestID:     task.RequestID,
+		BillingMode:        task.BillingMode,
+		HoldAmount:         task.FrozenAmount,
+		ActualAmount:       actual,
+	}
+}
+
+func reserveVideoTask(t *testing.T, billing service.UsageBillingRepository, task *service.VideoTask) error {
+	t.Helper()
+	_, err := billing.ReserveVideo(context.Background(), videoHoldCommand(task, service.VideoHoldRequestID(task.RequestID), 0))
+	return err
+}
 
 func TestUsageBillingRepositoryApply_DeduplicatesBalanceBilling(t *testing.T) {
 	ctx := context.Background()

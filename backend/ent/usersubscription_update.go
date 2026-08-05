@@ -250,6 +250,27 @@ func (_u *UserSubscriptionUpdate) AddMonthlyUsageUsd(v float64) *UserSubscriptio
 	return _u
 }
 
+// SetFrozenQuota sets the "frozen_quota" field.
+func (_u *UserSubscriptionUpdate) SetFrozenQuota(v float64) *UserSubscriptionUpdate {
+	_u.mutation.ResetFrozenQuota()
+	_u.mutation.SetFrozenQuota(v)
+	return _u
+}
+
+// SetNillableFrozenQuota sets the "frozen_quota" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableFrozenQuota(v *float64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetFrozenQuota(*v)
+	}
+	return _u
+}
+
+// AddFrozenQuota adds value to the "frozen_quota" field.
+func (_u *UserSubscriptionUpdate) AddFrozenQuota(v float64) *UserSubscriptionUpdate {
+	_u.mutation.AddFrozenQuota(v)
+	return _u
+}
+
 // SetAssignedBy sets the "assigned_by" field.
 func (_u *UserSubscriptionUpdate) SetAssignedBy(v int64) *UserSubscriptionUpdate {
 	_u.mutation.SetAssignedBy(v)
@@ -515,6 +536,12 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if value, ok := _u.mutation.AddedMonthlyUsageUsd(); ok {
 		_spec.AddField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.FrozenQuota(); ok {
+		_spec.SetField(usersubscription.FieldFrozenQuota, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedFrozenQuota(); ok {
+		_spec.AddField(usersubscription.FieldFrozenQuota, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)
@@ -896,6 +923,27 @@ func (_u *UserSubscriptionUpdateOne) AddMonthlyUsageUsd(v float64) *UserSubscrip
 	return _u
 }
 
+// SetFrozenQuota sets the "frozen_quota" field.
+func (_u *UserSubscriptionUpdateOne) SetFrozenQuota(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetFrozenQuota()
+	_u.mutation.SetFrozenQuota(v)
+	return _u
+}
+
+// SetNillableFrozenQuota sets the "frozen_quota" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableFrozenQuota(v *float64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetFrozenQuota(*v)
+	}
+	return _u
+}
+
+// AddFrozenQuota adds value to the "frozen_quota" field.
+func (_u *UserSubscriptionUpdateOne) AddFrozenQuota(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddFrozenQuota(v)
+	return _u
+}
+
 // SetAssignedBy sets the "assigned_by" field.
 func (_u *UserSubscriptionUpdateOne) SetAssignedBy(v int64) *UserSubscriptionUpdateOne {
 	_u.mutation.SetAssignedBy(v)
@@ -1191,6 +1239,12 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 	}
 	if value, ok := _u.mutation.AddedMonthlyUsageUsd(); ok {
 		_spec.AddField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.FrozenQuota(); ok {
+		_spec.SetField(usersubscription.FieldFrozenQuota, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedFrozenQuota(); ok {
+		_spec.AddField(usersubscription.FieldFrozenQuota, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)

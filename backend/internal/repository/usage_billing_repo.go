@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -42,7 +43,7 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		}
 	}()
 
-	applied, err := r.claimUsageBillingKey(ctx, tx, cmd)
+	applied, err := claimUsageBillingRequest(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -62,11 +63,7 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	return result, nil
 }
 
-func (r *usageBillingRepository) claimUsageBillingKey(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) (bool, error) {
-	return r.claimUsageBillingRequest(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
-}
-
-func (r *usageBillingRepository) claimUsageBillingRequest(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64, requestFingerprint string) (bool, error) {
+func claimUsageBillingRequest(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64, requestFingerprint string) (bool, error) {
 	var id int64
 	err := tx.QueryRowContext(ctx, `
 		INSERT INTO usage_billing_dedup (request_id, api_key_id, request_fingerprint)
@@ -100,6 +97,9 @@ func (r *usageBillingRepository) claimUsageBillingRequest(ctx context.Context, t
 	if err == nil {
 		if strings.TrimSpace(archivedFingerprint) != strings.TrimSpace(requestFingerprint) {
 			return false, service.ErrUsageBillingRequestConflict
+		}
+		if _, deleteErr := tx.ExecContext(ctx, `DELETE FROM usage_billing_dedup WHERE id = $1`, id); deleteErr != nil {
+			return false, deleteErr
 		}
 		return false, nil
 	}
@@ -147,7 +147,7 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 		}
 	}()
 
-	applied, err := r.claimUsageBillingRequest(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
+	applied, err := claimUsageBillingRequest(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +169,369 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 	}
 	tx = nil
 	return result, nil
+}
+
+type videoHoldMutation int
+
+const (
+	reserveVideoHold videoHoldMutation = iota
+	captureVideoHold
+	releaseVideoHold
+)
+
+type storedVideoHold struct {
+	UserID         int64
+	APIKeyID       int64
+	SubscriptionID *int64
+	GroupID        int64
+	BillingMode    string
+	Amount         float64
+}
+
+func (r *usageBillingRepository) ReserveVideo(ctx context.Context, cmd *service.VideoHoldCommand) (*service.VideoHoldResult, error) {
+	return r.applyVideoHold(ctx, cmd, reserveVideoHold)
+}
+
+func (r *usageBillingRepository) CaptureVideo(ctx context.Context, cmd *service.VideoHoldCommand) (*service.VideoHoldResult, error) {
+	return r.applyVideoHold(ctx, cmd, captureVideoHold)
+}
+
+func (r *usageBillingRepository) ReleaseVideo(ctx context.Context, cmd *service.VideoHoldCommand) (*service.VideoHoldResult, error) {
+	return r.applyVideoHold(ctx, cmd, releaseVideoHold)
+}
+
+func (r *usageBillingRepository) applyVideoHold(
+	ctx context.Context,
+	cmd *service.VideoHoldCommand,
+	mutation videoHoldMutation,
+) (_ *service.VideoHoldResult, err error) {
+	if cmd == nil {
+		return &service.VideoHoldResult{}, nil
+	}
+	if r == nil || r.db == nil {
+		return nil, errors.New("usage billing repository db is nil")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	result, err := applyVideoHoldInTx(ctx, tx, cmd, mutation)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	tx = nil
+	return result, nil
+}
+
+func applyVideoHoldInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	cmd *service.VideoHoldCommand,
+	mutation videoHoldMutation,
+) (*service.VideoHoldResult, error) {
+	if err := validateVideoHoldCommand(cmd); err != nil {
+		return nil, err
+	}
+	cmd.Normalize()
+	applied, err := claimUsageBillingRequest(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return &service.VideoHoldResult{Applied: false}, nil
+	}
+
+	hold, err := lockStoredVideoHold(ctx, tx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	if mutation != reserveVideoHold {
+		held, err := usageBillingClaimExists(ctx, tx, service.VideoHoldRequestID(cmd.VideoRequestID), cmd.APIKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if !held {
+			return nil, service.ErrVideoTaskInvalidTransition
+		}
+		otherPrefix := service.VideoReleaseRequestID(cmd.VideoRequestID)
+		if mutation == releaseVideoHold {
+			otherPrefix = service.VideoCaptureRequestID(cmd.VideoRequestID)
+		}
+		finalized, err := usageBillingClaimExists(ctx, tx, otherPrefix, cmd.APIKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if finalized {
+			return nil, service.ErrVideoBillingAlreadyFinalized
+		}
+	}
+	if mutation == captureVideoHold && cmd.ActualAmount > hold.Amount {
+		return nil, service.ErrVideoFinalCostExceedsHold
+	}
+
+	var result *service.VideoHoldResult
+	switch hold.BillingMode {
+	case "balance":
+		result, err = mutateVideoBalanceHold(ctx, tx, hold, cmd.ActualAmount, mutation)
+	case "subscription":
+		result, err = mutateVideoSubscriptionHold(ctx, tx, hold, cmd.ActualAmount, mutation)
+	default:
+		return nil, service.ErrVideoTaskInvalidRequest
+	}
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = &service.VideoHoldResult{}
+	}
+	result.Applied = true
+	return result, nil
+}
+
+func validateVideoHoldCommand(cmd *service.VideoHoldCommand) error {
+	if cmd == nil {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	cmd.Normalize()
+	if cmd.RequestID == "" {
+		return service.ErrUsageBillingRequestIDRequired
+	}
+	if cmd.UserID <= 0 || cmd.APIKeyID <= 0 || !service.IsVideoRequestID(cmd.VideoRequestID) ||
+		cmd.HoldAmount < 0 || math.IsNaN(cmd.HoldAmount) || math.IsInf(cmd.HoldAmount, 0) ||
+		cmd.ActualAmount < 0 || math.IsNaN(cmd.ActualAmount) || math.IsInf(cmd.ActualAmount, 0) ||
+		(cmd.BillingMode != "balance" && cmd.BillingMode != "subscription") ||
+		(cmd.BillingMode == "subscription" && (cmd.SubscriptionID == nil || *cmd.SubscriptionID <= 0)) {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	return nil
+}
+
+func lockStoredVideoHold(ctx context.Context, tx *sql.Tx, cmd *service.VideoHoldCommand) (*storedVideoHold, error) {
+	var hold storedVideoHold
+	var subscriptionID sql.NullInt64
+	err := tx.QueryRowContext(ctx, `
+		SELECT user_id, api_key_id, subscription_id, group_id, billing_mode, frozen_amount
+		FROM video_tasks
+		WHERE request_id = $1
+		FOR UPDATE
+	`, cmd.VideoRequestID).Scan(
+		&hold.UserID,
+		&hold.APIKeyID,
+		&subscriptionID,
+		&hold.GroupID,
+		&hold.BillingMode,
+		&hold.Amount,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrVideoTaskNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if subscriptionID.Valid {
+		hold.SubscriptionID = &subscriptionID.Int64
+	}
+	hold.BillingMode = strings.ToLower(strings.TrimSpace(hold.BillingMode))
+	if hold.UserID != cmd.UserID || hold.APIKeyID != cmd.APIKeyID || hold.BillingMode != cmd.BillingMode ||
+		valueOrZeroInt64(hold.SubscriptionID) != valueOrZeroInt64(cmd.SubscriptionID) {
+		return nil, service.ErrVideoTaskInvalidRequest
+	}
+	return &hold, nil
+}
+
+func mutateVideoBalanceHold(
+	ctx context.Context,
+	tx *sql.Tx,
+	hold *storedVideoHold,
+	actualAmount float64,
+	mutation videoHoldMutation,
+) (*service.VideoHoldResult, error) {
+	var balance, frozen float64
+	err := tx.QueryRowContext(ctx, `
+		SELECT balance, COALESCE(frozen_balance, 0)
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`, hold.UserID).Scan(&balance, &frozen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	switch mutation {
+	case reserveVideoHold:
+		if balance < hold.Amount {
+			return nil, service.ErrVideoInsufficientBalance
+		}
+		err = tx.QueryRowContext(ctx, `
+			UPDATE users
+			SET balance = balance - $1,
+				frozen_balance = COALESCE(frozen_balance, 0) + $1,
+				updated_at = NOW()
+			WHERE id = $2 AND deleted_at IS NULL
+			RETURNING balance, frozen_balance
+		`, hold.Amount, hold.UserID).Scan(&balance, &frozen)
+	case captureVideoHold:
+		err = tx.QueryRowContext(ctx, `
+			UPDATE users
+			SET balance = balance + $1 - $2,
+				frozen_balance = COALESCE(frozen_balance, 0) - $1,
+				updated_at = NOW()
+			WHERE id = $3 AND deleted_at IS NULL
+			  AND COALESCE(frozen_balance, 0) >= $1
+			RETURNING balance, frozen_balance
+		`, hold.Amount, actualAmount, hold.UserID).Scan(&balance, &frozen)
+	case releaseVideoHold:
+		err = tx.QueryRowContext(ctx, `
+			UPDATE users
+			SET balance = balance + $1,
+				frozen_balance = COALESCE(frozen_balance, 0) - $1,
+				updated_at = NOW()
+			WHERE id = $2 AND deleted_at IS NULL
+			  AND COALESCE(frozen_balance, 0) >= $1
+			RETURNING balance, frozen_balance
+		`, hold.Amount, hold.UserID).Scan(&balance, &frozen)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, errors.New("video frozen balance is insufficient")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &service.VideoHoldResult{NewBalance: &balance, FrozenBalance: &frozen}, nil
+}
+
+func mutateVideoSubscriptionHold(
+	ctx context.Context,
+	tx *sql.Tx,
+	hold *storedVideoHold,
+	actualAmount float64,
+	mutation videoHoldMutation,
+) (*service.VideoHoldResult, error) {
+	if hold.SubscriptionID == nil {
+		return nil, service.ErrVideoTaskInvalidRequest
+	}
+	if mutation == reserveVideoHold {
+		return reserveVideoSubscriptionHold(ctx, tx, hold)
+	}
+	var frozen float64
+	err := tx.QueryRowContext(ctx, `
+		SELECT frozen_quota
+		FROM user_subscriptions
+		WHERE id = $1 AND user_id = $2
+		FOR UPDATE
+	`, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrSubscriptionNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if mutation == captureVideoHold {
+		err = tx.QueryRowContext(ctx, `
+			UPDATE user_subscriptions
+			SET frozen_quota = frozen_quota - $1,
+				daily_usage_usd = daily_usage_usd + $2,
+				weekly_usage_usd = weekly_usage_usd + $2,
+				monthly_usage_usd = monthly_usage_usd + $2,
+				updated_at = NOW()
+			WHERE id = $3 AND user_id = $4 AND frozen_quota >= $1
+			RETURNING frozen_quota
+		`, hold.Amount, actualAmount, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			UPDATE user_subscriptions
+			SET frozen_quota = frozen_quota - $1, updated_at = NOW()
+			WHERE id = $2 AND user_id = $3 AND frozen_quota >= $1
+			RETURNING frozen_quota
+		`, hold.Amount, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, errors.New("video subscription frozen quota is insufficient")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &service.VideoHoldResult{FrozenQuota: &frozen}, nil
+}
+
+func reserveVideoSubscriptionHold(ctx context.Context, tx *sql.Tx, hold *storedVideoHold) (*service.VideoHoldResult, error) {
+	var frozen float64
+	var sufficient bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT us.frozen_quota,
+		       (g.daily_limit_usd IS NULL OR g.daily_limit_usd <= 0
+		        OR us.daily_usage_usd + us.frozen_quota + $5 <= g.daily_limit_usd)
+		       AND (g.weekly_limit_usd IS NULL OR g.weekly_limit_usd <= 0
+		        OR us.weekly_usage_usd + us.frozen_quota + $5 <= g.weekly_limit_usd)
+		       AND (g.monthly_limit_usd IS NULL OR g.monthly_limit_usd <= 0
+		        OR us.monthly_usage_usd + us.frozen_quota + $5 <= g.monthly_limit_usd)
+		FROM user_subscriptions AS us
+		JOIN groups AS g ON g.id = us.group_id
+		WHERE us.id = $1 AND us.user_id = $2 AND us.group_id = $3
+		  AND us.deleted_at IS NULL AND us.status = $4 AND us.expires_at > NOW()
+		  AND g.deleted_at IS NULL
+		FOR UPDATE OF us, g
+	`, *hold.SubscriptionID, hold.UserID, hold.GroupID, service.SubscriptionStatusActive, hold.Amount).Scan(&frozen, &sufficient)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrSubscriptionNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !sufficient {
+		return nil, service.ErrVideoSubscriptionQuotaExceeded
+	}
+	if err := tx.QueryRowContext(ctx, `
+		UPDATE user_subscriptions
+		SET frozen_quota = frozen_quota + $1, updated_at = NOW()
+		WHERE id = $2 AND user_id = $3
+		RETURNING frozen_quota
+	`, hold.Amount, *hold.SubscriptionID, hold.UserID).Scan(&frozen); err != nil {
+		return nil, err
+	}
+	return &service.VideoHoldResult{FrozenQuota: &frozen}, nil
+}
+
+func usageBillingClaimExists(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64) (bool, error) {
+	var exists int
+	err := tx.QueryRowContext(ctx, `
+		SELECT 1 FROM usage_billing_dedup
+		WHERE request_id = $1 AND api_key_id = $2
+	`, requestID, apiKeyID).Scan(&exists)
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	err = tx.QueryRowContext(ctx, `
+		SELECT 1 FROM usage_billing_dedup_archive
+		WHERE request_id = $1 AND api_key_id = $2
+	`, requestID, apiKeyID).Scan(&exists)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return false, err
+}
+
+func valueOrZeroInt64(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {

@@ -167,9 +167,68 @@ type BatchImageBalanceHoldResult struct {
 	FrozenBalance *float64
 }
 
+// VideoHoldCommand describes one idempotent video hold mutation. HoldAmount is
+// the caller's immutable quote snapshot; repositories must still settle against
+// the frozen_amount stored on the durable video task.
+type VideoHoldCommand struct {
+	RequestID          string
+	RequestFingerprint string
+	RequestPayloadHash string
+	UserID             int64
+	APIKeyID           int64
+	SubscriptionID     *int64
+	VideoRequestID     string
+	BillingMode        string
+	HoldAmount         float64
+	ActualAmount       float64
+}
+
+func (c *VideoHoldCommand) Normalize() {
+	if c == nil {
+		return
+	}
+	c.RequestID = strings.TrimSpace(c.RequestID)
+	c.VideoRequestID = strings.TrimSpace(c.VideoRequestID)
+	c.BillingMode = strings.ToLower(strings.TrimSpace(c.BillingMode))
+	if strings.TrimSpace(c.RequestFingerprint) == "" {
+		c.RequestFingerprint = buildVideoHoldFingerprint(c)
+	}
+}
+
+func buildVideoHoldFingerprint(c *VideoHoldCommand) string {
+	if c == nil {
+		return ""
+	}
+	raw := fmt.Sprintf(
+		"%d|%d|%d|%s|%s|%0.10f|%0.10f",
+		c.UserID,
+		c.APIKeyID,
+		valueOrZero(c.SubscriptionID),
+		strings.TrimSpace(c.VideoRequestID),
+		strings.ToLower(strings.TrimSpace(c.BillingMode)),
+		c.HoldAmount,
+		c.ActualAmount,
+	)
+	if payloadHash := strings.TrimSpace(c.RequestPayloadHash); payloadHash != "" {
+		raw += "|" + payloadHash
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+type VideoHoldResult struct {
+	Applied       bool
+	NewBalance    *float64
+	FrozenBalance *float64
+	FrozenQuota   *float64
+}
+
 type UsageBillingRepository interface {
 	Apply(ctx context.Context, cmd *UsageBillingCommand) (*UsageBillingApplyResult, error)
 	ReserveBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error)
 	CaptureBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error)
 	ReleaseBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error)
+	ReserveVideo(ctx context.Context, cmd *VideoHoldCommand) (*VideoHoldResult, error)
+	CaptureVideo(ctx context.Context, cmd *VideoHoldCommand) (*VideoHoldResult, error)
+	ReleaseVideo(ctx context.Context, cmd *VideoHoldCommand) (*VideoHoldResult, error)
 }

@@ -125,6 +125,11 @@ func MonthlyUsageUsd(v float64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldMonthlyUsageUsd, v))
 }
 
+// FrozenQuota applies equality check predicate on the "frozen_quota" field. It's identical to FrozenQuotaEQ.
+func FrozenQuota(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldFrozenQuota, v))
+}
+
 // AssignedBy applies equality check predicate on the "assigned_by" field. It's identical to AssignedByEQ.
 func AssignedBy(v int64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldAssignedBy, v))
@@ -723,6 +728,46 @@ func MonthlyUsageUsdLT(v float64) predicate.UserSubscription {
 // MonthlyUsageUsdLTE applies the LTE predicate on the "monthly_usage_usd" field.
 func MonthlyUsageUsdLTE(v float64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldLTE(FieldMonthlyUsageUsd, v))
+}
+
+// FrozenQuotaEQ applies the EQ predicate on the "frozen_quota" field.
+func FrozenQuotaEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldFrozenQuota, v))
+}
+
+// FrozenQuotaNEQ applies the NEQ predicate on the "frozen_quota" field.
+func FrozenQuotaNEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldFrozenQuota, v))
+}
+
+// FrozenQuotaIn applies the In predicate on the "frozen_quota" field.
+func FrozenQuotaIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldFrozenQuota, vs...))
+}
+
+// FrozenQuotaNotIn applies the NotIn predicate on the "frozen_quota" field.
+func FrozenQuotaNotIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldFrozenQuota, vs...))
+}
+
+// FrozenQuotaGT applies the GT predicate on the "frozen_quota" field.
+func FrozenQuotaGT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldFrozenQuota, v))
+}
+
+// FrozenQuotaGTE applies the GTE predicate on the "frozen_quota" field.
+func FrozenQuotaGTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldFrozenQuota, v))
+}
+
+// FrozenQuotaLT applies the LT predicate on the "frozen_quota" field.
+func FrozenQuotaLT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldFrozenQuota, v))
+}
+
+// FrozenQuotaLTE applies the LTE predicate on the "frozen_quota" field.
+func FrozenQuotaLTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldFrozenQuota, v))
 }
 
 // AssignedByEQ applies the EQ predicate on the "assigned_by" field.
