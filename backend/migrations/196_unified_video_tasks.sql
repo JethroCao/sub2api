@@ -30,10 +30,10 @@ CREATE TABLE IF NOT EXISTS video_tasks (
     result_width              INTEGER,
     result_height             INTEGER,
     pricing_unit              VARCHAR(32) NOT NULL,
-    unit_price                DECIMAL(20,10) NOT NULL CHECK (unit_price >= 0),
-    estimated_units           DECIMAL(20,6) NOT NULL CHECK (estimated_units >= 0),
-    estimated_amount          DECIMAL(20,10) NOT NULL CHECK (estimated_amount >= 0),
-    frozen_amount             DECIMAL(20,10) NOT NULL CHECK (frozen_amount >= 0),
+    unit_price                DECIMAL(20,10) NOT NULL,
+    estimated_units           DECIMAL(20,6) NOT NULL,
+    estimated_amount          DECIMAL(20,10) NOT NULL,
+    frozen_amount             DECIMAL(20,10) NOT NULL,
     settled_amount            DECIMAL(20,10),
     currency                  VARCHAR(16) NOT NULL DEFAULT 'USD',
     billing_mode              VARCHAR(32) NOT NULL,
@@ -55,8 +55,29 @@ CREATE TABLE IF NOT EXISTS video_tasks (
     started_at                TIMESTAMPTZ,
     finished_at               TIMESTAMPTZ,
     settled_at                TIMESTAMPTZ,
-    CHECK (settled_amount IS NULL OR (settled_amount >= 0 AND settled_amount <= frozen_amount)),
-    CHECK (upstream_task_id IS NULL OR upstream_task_id <> request_id)
+    CONSTRAINT video_tasks_finite_amounts CHECK (
+        unit_price >= 0 AND unit_price < 'Infinity'::numeric
+        AND estimated_units >= 0 AND estimated_units < 'Infinity'::numeric
+        AND estimated_amount >= 0 AND estimated_amount < 'Infinity'::numeric
+        AND frozen_amount >= 0 AND frozen_amount < 'Infinity'::numeric
+        AND (settled_amount IS NULL OR (settled_amount >= 0 AND settled_amount < 'Infinity'::numeric))
+        AND (result_duration_seconds IS NULL OR (result_duration_seconds >= 0 AND result_duration_seconds < 'Infinity'::numeric))
+    ),
+    CONSTRAINT video_tasks_settlement_cap CHECK (
+        settled_amount IS NULL OR settled_amount <= frozen_amount
+    ),
+    CONSTRAINT video_tasks_settlement_status CHECK (
+        settled_amount IS NULL OR status IN ('succeeded', 'failed', 'cancelled')
+    ),
+    CONSTRAINT video_tasks_settlement_complete CHECK (
+        (settled_amount IS NULL) = (settled_at IS NULL)
+    ),
+    CONSTRAINT video_tasks_upstream_identity_distinct CHECK (
+        upstream_task_id IS NULL OR upstream_task_id <> request_id
+    ),
+    CONSTRAINT video_tasks_upstream_payload_cleared CHECK (
+        upstream_task_id IS NULL OR request_payload IS NULL
+    )
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_video_tasks_idempotency

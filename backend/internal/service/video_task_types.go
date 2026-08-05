@@ -2,17 +2,31 @@ package service
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"net/http"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 )
 
-const MaxVideoTaskPayloadBytes = 64 * 1024
+const (
+	MaxVideoTaskPayloadBytes      = 64 * 1024
+	MaxVideoTaskErrorMessageBytes = 2048
+)
+
+var (
+	videoRequestIDPattern         = regexp.MustCompile(`^vid_[0-9a-f]{32}$`)
+	videoTaskErrorCodePattern     = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_.-]{0,127}$`)
+	videoTaskSensitiveTextPattern = regexp.MustCompile(`(?i)(authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|credential|cookie|\bbearer\s+|\bsk-[a-z0-9_-]{12,})`)
+)
 
 type VideoTaskStatus string
 
@@ -64,7 +78,7 @@ func NewMinimizedVideoPayload(value any) (MinimizedVideoPayload, error) {
 	if err := json.Unmarshal(b, &decoded); err != nil {
 		return MinimizedVideoPayload{}, ErrVideoTaskInvalidRequest.WithCause(err)
 	}
-	if containsUnsafeVideoJSON(decoded) {
+	if !isAllowlistedVideoPayload(decoded) {
 		return MinimizedVideoPayload{}, ErrVideoTaskUnsafePayload
 	}
 	return MinimizedVideoPayload{data: append([]byte(nil), b...)}, nil
@@ -82,10 +96,43 @@ func NewVideoRequestID() (string, error) {
 	return "vid_" + hex.EncodeToString(value[:]), nil
 }
 
+func IsVideoRequestID(requestID string) bool {
+	return videoRequestIDPattern.MatchString(requestID)
+}
+
 type VideoTaskError struct {
-	Code      string
-	Message   string
-	Retryable bool
+	code      string
+	message   string
+	retryable bool
+}
+
+func NewVideoTaskError(code, message string, retryable bool) VideoTaskError {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if !videoTaskErrorCodePattern.MatchString(code) {
+		code = "UPSTREAM_ERROR"
+	}
+	message = strings.TrimSpace(message)
+	if message != "" {
+		if json.Valid([]byte(message)) || videoTaskSensitiveTextPattern.MatchString(message) {
+			message = "<credential-bearing upstream error redacted>"
+		} else {
+			message = logredact.RedactText(message, "authorization", "x-api-key", "api_key", "secret_key", "access_key", "credential")
+		}
+		message = truncateVideoText(message, MaxVideoTaskErrorMessageBytes)
+	}
+	return VideoTaskError{code: code, message: message, retryable: retryable}
+}
+
+func (e VideoTaskError) Code() string {
+	return e.code
+}
+
+func (e VideoTaskError) Message() string {
+	return e.message
+}
+
+func (e VideoTaskError) Retryable() bool {
+	return e.retryable
 }
 
 type VideoTask struct {
@@ -255,30 +302,72 @@ func CanApplyVideoPollStatus(from, to VideoTaskStatus) bool {
 	}
 }
 
-func containsUnsafeVideoJSON(value any) bool {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, child := range typed {
-			normalized := strings.NewReplacer("_", "", "-", "", ".", "").Replace(strings.ToLower(key))
-			switch normalized {
-			case "authorization", "proxyauthorization", "apikey", "token", "accesstoken", "refreshtoken",
-				"password", "secret", "secretkey", "accesskey", "cookie", "setcookie", "credential", "credentials":
-				return true
+func isAllowlistedVideoPayload(value any) bool {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range object {
+		switch key {
+		case "prompt", "negative_prompt":
+			text, ok := value.(string)
+			if !ok || len(text) > 20_000 || isEncodedVideoUpload(text) {
+				return false
 			}
-			if containsUnsafeVideoJSON(child) {
-				return true
+		case "input_image_ref", "input_video_ref", "first_frame_ref", "last_frame_ref", "source_task_id":
+			ref, ok := value.(string)
+			if !ok || len(ref) == 0 || len(ref) > 512 || strings.ContainsAny(ref, "?&#") || isEncodedVideoUpload(ref) {
+				return false
 			}
+		case "resolution", "aspect_ratio", "audio_mode", "status", "from_status", "to_status",
+			"upstream_status", "error_code", "worker_id", "billing_status":
+			text, ok := value.(string)
+			if !ok || len(text) > 256 || isEncodedVideoUpload(text) {
+				return false
+			}
+		case "duration_seconds", "seed", "attempt", "settled_amount":
+			number, ok := value.(float64)
+			if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
+				return false
+			}
+		case "camera_fixed", "watermark":
+			if _, ok := value.(bool); !ok {
+				return false
+			}
+		default:
+			return false
 		}
-	case []any:
-		for _, child := range typed {
-			if containsUnsafeVideoJSON(child) {
-				return true
-			}
+	}
+	return true
+}
+
+func isEncodedVideoUpload(value string) bool {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "data:") {
+		return true
+	}
+	if len(value) < 256 {
+		return false
+	}
+	encodings := []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding}
+	for _, encoding := range encodings {
+		decoded, err := encoding.DecodeString(value)
+		if err == nil && len(decoded) >= 128 {
+			return true
 		}
-	case string:
-		return strings.HasPrefix(strings.ToLower(strings.TrimSpace(typed)), "data:")
 	}
 	return false
+}
+
+func truncateVideoText(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	value = value[:maxBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func containsBinaryVideoValue(value reflect.Value, seen map[uintptr]struct{}) bool {

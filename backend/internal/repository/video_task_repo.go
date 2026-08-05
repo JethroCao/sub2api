@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -80,6 +81,9 @@ FOR SHARE`, params.UserID, params.APIKeyID, params.Operation, params.Idempotency
 }
 
 func (r *videoTaskRepository) GetOwned(ctx context.Context, requestID string, userID, apiKeyID int64) (*service.VideoTask, error) {
+	if err := validateVideoRequestID(requestID); err != nil {
+		return nil, err
+	}
 	task, err := scanVideoTask(r.db.QueryRowContext(ctx, `SELECT `+videoTaskColumns+`
 FROM video_tasks WHERE request_id = $1 AND user_id = $2 AND api_key_id = $3`, requestID, userID, apiKeyID))
 	if err != nil {
@@ -89,6 +93,9 @@ FROM video_tasks WHERE request_id = $1 AND user_id = $2 AND api_key_id = $3`, re
 }
 
 func (r *videoTaskRepository) GetByRequestID(ctx context.Context, requestID string) (*service.VideoTask, error) {
+	if err := validateVideoRequestID(requestID); err != nil {
+		return nil, err
+	}
 	task, err := scanVideoTask(r.db.QueryRowContext(ctx, `SELECT `+videoTaskColumns+` FROM video_tasks WHERE request_id = $1`, requestID))
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
@@ -97,6 +104,9 @@ func (r *videoTaskRepository) GetByRequestID(ctx context.Context, requestID stri
 }
 
 func (r *videoTaskRepository) MarkSubmitting(ctx context.Context, requestID string, expectedVersion int64, providerSubmissionToken string) error {
+	if err := validateVideoRequestID(requestID); err != nil {
+		return err
+	}
 	result, err := r.db.ExecContext(ctx, `
 UPDATE video_tasks
 SET status = 'submitting', provider_submission_token = NULLIF($3, ''),
@@ -111,6 +121,9 @@ WHERE request_id = $1 AND version = $2 AND status = 'created'`, requestID, expec
 }
 
 func (r *videoTaskRepository) MarkSubmitted(ctx context.Context, params service.MarkVideoSubmittedParams) error {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
+		return err
+	}
 	if strings.TrimSpace(params.UpstreamTaskID) == "" || params.UpstreamTaskID == params.RequestID {
 		return service.ErrVideoTaskInvalidRequest
 	}
@@ -140,13 +153,16 @@ WHERE request_id = $1 AND version = $2 AND status = 'submitting'`, params.Reques
 }
 
 func (r *videoTaskRepository) MarkSubmissionUnknown(ctx context.Context, requestID string, expectedVersion int64, taskError service.VideoTaskError) error {
+	if err := validateVideoRequestID(requestID); err != nil {
+		return err
+	}
 	result, err := r.db.ExecContext(ctx, `
 UPDATE video_tasks
 SET status = 'unknown', last_error_code = NULLIF($3, ''),
     last_error_message = NULLIF($4, ''), last_error_retryable = $5,
     version = version + 1, updated_at = NOW()
 WHERE request_id = $1 AND version = $2 AND status = 'submitting'`, requestID, expectedVersion,
-		taskError.Code, taskError.Message, taskError.Retryable)
+		taskError.Code(), taskError.Message(), taskError.Retryable())
 	if err != nil {
 		return err
 	}
@@ -205,7 +221,11 @@ RETURNING `+prefixedVideoTaskColumns("task"), owner, limit, now, now.Add(lease))
 }
 
 func (r *videoTaskRepository) ApplyPollResult(ctx context.Context, params service.ApplyVideoPollResultParams) error {
-	if strings.TrimSpace(params.LeaseOwner) == "" || !service.IsVideoTaskStatus(params.Status) {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(params.LeaseOwner) == "" || !service.IsVideoTaskStatus(params.Status) ||
+		(params.ResultDurationSeconds != nil && !isFiniteNonNegativeVideoAmount(*params.ResultDurationSeconds)) {
 		return service.ErrVideoTaskInvalidRequest
 	}
 	if params.UpdatedAt.IsZero() {
@@ -223,14 +243,18 @@ func (r *videoTaskRepository) ApplyPollResult(ctx context.Context, params servic
 	var current service.VideoTaskStatus
 	var version int64
 	var leaseOwner sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT status, version, lease_owner FROM video_tasks WHERE request_id = $1 FOR UPDATE`, params.RequestID).
-		Scan(&current, &version, &leaseOwner); err != nil {
+	var leaseExpiresAt sql.NullTime
+	var databaseNow time.Time
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, version, lease_owner, lease_expires_at, clock_timestamp()
+		FROM video_tasks WHERE request_id = $1 FOR UPDATE`, params.RequestID).
+		Scan(&current, &version, &leaseOwner, &leaseExpiresAt, &databaseNow); err != nil {
 		return translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
 	}
 	if version != params.ExpectedVersion {
 		return service.ErrVideoTaskVersionConflict
 	}
-	if !leaseOwner.Valid || leaseOwner.String != params.LeaseOwner {
+	if !leaseOwner.Valid || leaseOwner.String != params.LeaseOwner || !leaseExpiresAt.Valid || !leaseExpiresAt.Time.After(databaseNow) {
 		return service.ErrVideoTaskLeaseConflict
 	}
 	if !service.CanApplyVideoPollStatus(current, params.Status) {
@@ -239,11 +263,11 @@ func (r *videoTaskRepository) ApplyPollResult(ctx context.Context, params servic
 	var errorCode, errorMessage any
 	errorRetryable := false
 	if params.Error != nil {
-		errorCode = nullableString(params.Error.Code)
-		errorMessage = nullableString(params.Error.Message)
-		errorRetryable = params.Error.Retryable
+		errorCode = nullableString(params.Error.Code())
+		errorMessage = nullableString(params.Error.Message())
+		errorRetryable = params.Error.Retryable()
 	}
-	_, err = tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 UPDATE video_tasks
 SET status = $3, upstream_status = NULLIF($4, ''), next_poll_at = $5,
     result_url = $6, result_url_expires_at = $7, result_content_type = $8,
@@ -252,18 +276,28 @@ SET status = $3, upstream_status = NULLIF($4, ''), next_poll_at = $5,
     started_at = COALESCE(started_at, $15), finished_at = COALESCE(finished_at, $16),
     poll_attempts = poll_attempts + 1, lease_owner = NULL, lease_expires_at = NULL,
     version = version + 1, updated_at = $17
-WHERE request_id = $1 AND version = $2`, params.RequestID, params.ExpectedVersion, params.Status,
+WHERE request_id = $1 AND version = $2 AND lease_owner = $18 AND lease_expires_at > clock_timestamp()`, params.RequestID, params.ExpectedVersion, params.Status,
 		params.UpstreamStatus, params.NextPollAt, params.ResultURL, params.ResultURLExpiresAt,
 		params.ResultContentType, params.ResultDurationSeconds, params.ResultWidth, params.ResultHeight,
-		errorCode, errorMessage, errorRetryable, params.StartedAt, params.FinishedAt, params.UpdatedAt)
+		errorCode, errorMessage, errorRetryable, params.StartedAt, params.FinishedAt, params.UpdatedAt, params.LeaseOwner)
 	if err != nil {
 		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return service.ErrVideoTaskLeaseConflict
 	}
 	return tx.Commit()
 }
 
 func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.MarkVideoSettledParams) error {
-	if params.SettledAmount < 0 || strings.TrimSpace(params.BillingStatus) == "" {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
+		return err
+	}
+	if !isFiniteNonNegativeVideoAmount(params.SettledAmount) || strings.TrimSpace(params.BillingStatus) == "" {
 		return service.ErrVideoTaskInvalidRequest
 	}
 	if params.SettledAt.IsZero() {
@@ -274,14 +308,19 @@ func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.Ma
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var status service.VideoTaskStatus
 	var version int64
 	var frozenAmount float64
-	if err := tx.QueryRowContext(ctx, `SELECT version, frozen_amount FROM video_tasks WHERE request_id = $1 FOR UPDATE`, params.RequestID).
-		Scan(&version, &frozenAmount); err != nil {
+	var settledAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT status, version, frozen_amount, settled_at FROM video_tasks WHERE request_id = $1 FOR UPDATE`, params.RequestID).
+		Scan(&status, &version, &frozenAmount, &settledAt); err != nil {
 		return translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
 	}
 	if version != params.ExpectedVersion {
 		return service.ErrVideoTaskVersionConflict
+	}
+	if !service.IsTerminalVideoTaskStatus(status) || settledAt.Valid {
+		return service.ErrVideoTaskInvalidTransition
 	}
 	if params.SettledAmount > frozenAmount {
 		return service.ErrVideoTaskAmountExceedsFrozen
@@ -291,7 +330,8 @@ UPDATE video_tasks
 SET settled_amount = $3, billing_status = $4, billing_reference = $5,
     settlement_attempts = settlement_attempts + 1, settled_at = COALESCE(settled_at, $6),
     version = version + 1, updated_at = $6
-WHERE request_id = $1 AND version = $2`, params.RequestID, params.ExpectedVersion,
+WHERE request_id = $1 AND version = $2 AND status IN ('succeeded', 'failed', 'cancelled')
+  AND settled_amount IS NULL AND settled_at IS NULL`, params.RequestID, params.ExpectedVersion,
 		params.SettledAmount, params.BillingStatus, params.BillingReference, params.SettledAt)
 	if err != nil {
 		return err
@@ -300,6 +340,9 @@ WHERE request_id = $1 AND version = $2`, params.RequestID, params.ExpectedVersio
 }
 
 func (r *videoTaskRepository) ReleaseLease(ctx context.Context, requestID, owner string, now time.Time) error {
+	if err := validateVideoRequestID(requestID); err != nil {
+		return err
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -328,7 +371,7 @@ WHERE request_id = $1 AND lease_owner = $2`, requestID, owner, now)
 }
 
 func (r *videoTaskRepository) AppendEvent(ctx context.Context, event service.VideoTaskEvent) error {
-	if event.RequestID == "" || strings.TrimSpace(event.EventType) == "" || len(event.EventType) > 64 {
+	if !service.IsVideoRequestID(event.RequestID) || strings.TrimSpace(event.EventType) == "" || len(event.EventType) > 64 {
 		return service.ErrVideoTaskInvalidRequest
 	}
 	createdAt := event.CreatedAt
@@ -342,6 +385,9 @@ VALUES ($1, $2, $3, $4)`, event.RequestID, event.EventType, videoPayloadSQLValue
 }
 
 func (r *videoTaskRepository) ListAdmin(ctx context.Context, query service.VideoTaskListQuery) ([]service.VideoTask, int, error) {
+	if query.RequestID != "" && !service.IsVideoRequestID(query.RequestID) {
+		return nil, 0, service.ErrVideoTaskInvalidRequest
+	}
 	where := make([]string, 0, 7)
 	args := make([]any, 0, 9)
 	add := func(clause string, value any) {
@@ -446,7 +492,8 @@ func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
 		strings.TrimSpace(params.ExternalModel) == "" || strings.TrimSpace(params.UpstreamModel) == "" ||
 		!videoTaskSHA256Pattern.MatchString(params.RequestHash) ||
 		(params.IdempotencyKeyHash != "" && !videoTaskSHA256Pattern.MatchString(params.IdempotencyKeyHash)) ||
-		params.UnitPrice < 0 || params.EstimatedUnits < 0 || params.EstimatedAmount < 0 || params.FrozenAmount < 0 ||
+		!isFiniteNonNegativeVideoAmount(params.UnitPrice) || !isFiniteNonNegativeVideoAmount(params.EstimatedUnits) ||
+		!isFiniteNonNegativeVideoAmount(params.EstimatedAmount) || !isFiniteNonNegativeVideoAmount(params.FrozenAmount) ||
 		strings.TrimSpace(params.PricingUnit) == "" || strings.TrimSpace(params.BillingMode) == "" ||
 		strings.TrimSpace(params.BillingStatus) == "" {
 		return service.ErrVideoTaskInvalidRequest
@@ -455,6 +502,17 @@ func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
 		params.Currency = "USD"
 	}
 	return nil
+}
+
+func validateVideoRequestID(requestID string) error {
+	if !service.IsVideoRequestID(requestID) {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	return nil
+}
+
+func isFiniteNonNegativeVideoAmount(value float64) bool {
+	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func videoPayloadSQLValue(payload service.MinimizedVideoPayload) any {

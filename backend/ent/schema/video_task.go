@@ -9,7 +9,6 @@ import (
 	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
-	"entgo.io/ent/schema/index"
 )
 
 // VideoTask is the authoritative durable ledger for asynchronous video work.
@@ -18,7 +17,9 @@ type VideoTask struct {
 }
 
 func (VideoTask) Annotations() []schema.Annotation {
-	return []schema.Annotation{entsql.Annotation{Table: "video_tasks"}}
+	// The versioned SQL migration owns this table's constraints and indexes.
+	// Keep the entity for typed access, but exclude it from Ent auto-migration.
+	return []schema.Annotation{entsql.Annotation{Table: "video_tasks", Skip: true}}
 }
 
 func (VideoTask) Fields() []ent.Field {
@@ -78,18 +79,5 @@ func (VideoTask) Fields() []ent.Field {
 		field.Time("started_at").Optional().Nillable().SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
 		field.Time("finished_at").Optional().Nillable().SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
 		field.Time("settled_at").Optional().Nillable().SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
-	}
-}
-
-func (VideoTask) Indexes() []ent.Index {
-	return []ent.Index{
-		index.Fields("request_id").Unique(),
-		index.Fields("user_id", "api_key_id", "operation", "idempotency_key_hash").
-			Unique().
-			Annotations(entsql.IndexWhere("idempotency_key_hash <> ''")),
-		index.Fields("status", "next_poll_at"),
-		index.Fields("lease_expires_at"),
-		index.Fields("provider", "account_id", "upstream_task_id"),
-		index.Fields("user_id", "api_key_id", "created_at"),
 	}
 }

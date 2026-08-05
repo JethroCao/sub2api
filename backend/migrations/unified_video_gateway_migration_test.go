@@ -32,4 +32,10 @@ func TestUnifiedVideoMigrationsDefineTasks(t *testing.T) {
 	require.Contains(t, sql, "CREATE INDEX IF NOT EXISTS idx_video_tasks_upstream_identity")
 	require.Contains(t, sql, "CREATE INDEX IF NOT EXISTS idx_video_tasks_owner")
 	require.Contains(t, sql, "video task events are append-only")
+	require.Contains(t, sql, "CONSTRAINT video_tasks_upstream_payload_cleared")
+	require.Contains(t, sql, "upstream_task_id IS NULL OR request_payload IS NULL")
+	require.Contains(t, sql, "CONSTRAINT video_tasks_finite_amounts")
+	require.Contains(t, sql, "unit_price < 'Infinity'::numeric")
+	require.Contains(t, sql, "CONSTRAINT video_tasks_settlement_status")
+	require.Contains(t, sql, "CONSTRAINT video_tasks_settlement_complete")
 }

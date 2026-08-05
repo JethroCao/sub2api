@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,20 +35,83 @@ func TestVideoTaskRepositoryCreateIdempotencyConflict(t *testing.T) {
 	repoA := NewVideoTaskRepository(integrationDB)
 	repoB := NewVideoTaskRepository(integrationDB)
 	params := videoTaskCreateParams(t, "idempotency", videoTaskHash("same-key"+t.Name()))
-
-	first, created, err := repoA.CreateOrGet(context.Background(), params)
-	require.NoError(t, err)
-	require.True(t, created)
-	cleanupVideoTask(t, first.RequestID)
-
-	replayed, created, err := repoB.CreateOrGet(context.Background(), params)
-	require.NoError(t, err)
-	require.False(t, created)
-	require.Equal(t, first.RequestID, replayed.RequestID)
+	params.ExternalModel = "idempotency-overlap-test"
+	installVideoTaskCreateOverlapTrigger(t)
+	type result struct {
+		task    *service.VideoTask
+		created bool
+		err     error
+	}
+	results := make([]result, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, repo := range []service.VideoTaskRepository{repoA, repoB} {
+		wg.Add(1)
+		go func(i int, repo service.VideoTaskRepository) {
+			defer wg.Done()
+			<-start
+			results[i].task, results[i].created, results[i].err = repo.CreateOrGet(context.Background(), params)
+		}(i, repo)
+	}
+	close(start)
+	requireVideoTaskConcurrentInserts(t, 2)
+	wg.Wait()
+	for _, result := range results {
+		require.NoError(t, result.err)
+		require.NotNil(t, result.task)
+	}
+	require.NotEqual(t, results[0].created, results[1].created)
+	require.Equal(t, results[0].task.RequestID, results[1].task.RequestID)
+	cleanupVideoTask(t, results[0].task.RequestID)
 
 	params.RequestHash = videoTaskHash("different-request")
-	_, _, err = repoB.CreateOrGet(context.Background(), params)
+	_, _, err := repoB.CreateOrGet(context.Background(), params)
 	require.ErrorIs(t, err, service.ErrVideoIdempotencyConflict)
+}
+
+func installVideoTaskCreateOverlapTrigger(t *testing.T) {
+	t.Helper()
+	_, err := integrationDB.ExecContext(context.Background(), `
+		CREATE OR REPLACE FUNCTION video_task_test_hold_create()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.external_model = 'idempotency-overlap-test' THEN
+				PERFORM pg_sleep(1);
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER trg_video_task_test_hold_create
+		BEFORE INSERT ON video_tasks
+		FOR EACH ROW EXECUTE FUNCTION video_task_test_hold_create();
+	`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS trg_video_task_test_hold_create ON video_tasks`)
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP FUNCTION IF EXISTS video_task_test_hold_create()`)
+	})
+}
+
+func requireVideoTaskConcurrentInserts(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		var active int
+		err := integrationDB.QueryRowContext(context.Background(), `
+			SELECT COUNT(*)
+			FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND pid <> pg_backend_pid()
+			  AND state = 'active'
+			  AND position('INSERT INTO video_tasks (' in query) > 0
+		`).Scan(&active)
+		require.NoError(t, err)
+		if active >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected %d concurrent video task inserts", want)
 }
 
 func TestVideoTaskRepositoryMinimizedPayloadRejectsCredentialsAndOversizeValues(t *testing.T) {
@@ -125,6 +190,162 @@ func TestVideoTaskRepositoryApplyPollResultUsesOptimisticVersion(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrVideoTaskVersionConflict)
 }
 
+func TestVideoTaskRepositoryApplyPollResultRejectsExpiredOwnedLease(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	task := createDueVideoTask(t, repo, "expired-poll")
+	leased, err := repo.LeaseDue(ctx, "expired-worker", 1, time.Minute, time.Now().UTC())
+	require.NoError(t, err)
+	leasedTask := findLeasedVideoTask(t, leased, task.RequestID)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE video_tasks
+		SET lease_expires_at = clock_timestamp() - INTERVAL '1 second'
+		WHERE request_id = $1`, task.RequestID)
+	require.NoError(t, err)
+
+	err = repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
+		RequestID:       task.RequestID,
+		ExpectedVersion: leasedTask.Version,
+		LeaseOwner:      "expired-worker",
+		Status:          service.VideoTaskRunning,
+		UpstreamStatus:  "processing",
+	})
+	require.ErrorIs(t, err, service.ErrVideoTaskLeaseConflict)
+}
+
+func TestVideoTaskRepositoryRejectsMalformedRequestIDsAtEveryEntryPoint(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	taskError := service.NewVideoTaskError("UPSTREAM_ERROR", "safe message", true)
+	eventPayload, err := service.NewMinimizedVideoPayload(map[string]any{"status": "created"})
+	require.NoError(t, err)
+	malformed := "vid_not-canonical"
+	tests := map[string]func() error{
+		"get owned":         func() error { _, err := repo.GetOwned(ctx, malformed, 1, 1); return err },
+		"get by request id": func() error { _, err := repo.GetByRequestID(ctx, malformed); return err },
+		"mark submitting":   func() error { return repo.MarkSubmitting(ctx, malformed, 0, "submit-token") },
+		"mark submitted": func() error {
+			return repo.MarkSubmitted(ctx, service.MarkVideoSubmittedParams{RequestID: malformed, ExpectedVersion: 0, UpstreamTaskID: "upstream"})
+		},
+		"mark submission unknown": func() error { return repo.MarkSubmissionUnknown(ctx, malformed, 0, taskError) },
+		"apply poll result": func() error {
+			return repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{RequestID: malformed, LeaseOwner: "worker", Status: service.VideoTaskRunning})
+		},
+		"mark settled": func() error {
+			return repo.MarkSettled(ctx, service.MarkVideoSettledParams{RequestID: malformed, BillingStatus: "settled"})
+		},
+		"release lease": func() error { return repo.ReleaseLease(ctx, malformed, "worker", time.Now()) },
+		"append event": func() error {
+			return repo.AppendEvent(ctx, service.VideoTaskEvent{RequestID: malformed, EventType: "created", Payload: eventPayload})
+		},
+		"list admin": func() error {
+			_, _, err := repo.ListAdmin(ctx, service.VideoTaskListQuery{RequestID: malformed})
+			return err
+		},
+	}
+	for name, run := range tests {
+		t.Run(name, func(t *testing.T) {
+			require.ErrorIs(t, run(), service.ErrVideoTaskInvalidRequest)
+		})
+	}
+}
+
+func TestVideoTaskRepositoryDatabaseEnforcesPayloadAndNumericInvariants(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	task, _, err := repo.CreateOrGet(ctx, videoTaskCreateParams(t, "database-invariants", ""))
+	require.NoError(t, err)
+	cleanupVideoTask(t, task.RequestID)
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET upstream_task_id = 'direct-upstream' WHERE request_id = $1`, task.RequestID)
+	require.ErrorContains(t, err, "video_tasks_upstream_payload_cleared")
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET frozen_amount = 'NaN'::numeric WHERE request_id = $1`, task.RequestID)
+	require.ErrorContains(t, err, "video_tasks_finite_amounts")
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET settled_amount = 0.1, settled_at = clock_timestamp() WHERE request_id = $1`, task.RequestID)
+	require.ErrorContains(t, err, "video_tasks_settlement_status")
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET status = 'succeeded', settled_amount = 0.1 WHERE request_id = $1`, task.RequestID)
+	require.ErrorContains(t, err, "video_tasks_settlement_complete")
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET settled_at = clock_timestamp() WHERE request_id = $1`, task.RequestID)
+	require.ErrorContains(t, err, "video_tasks_settlement_complete")
+}
+
+func TestVideoTaskRepositoryRejectsNonFiniteAmountsAndPrematureSettlement(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	for name, mutate := range map[string]func(*service.CreateVideoTaskParams){
+		"nan frozen amount":   func(params *service.CreateVideoTaskParams) { params.FrozenAmount = math.NaN() },
+		"infinite unit price": func(params *service.CreateVideoTaskParams) { params.UnitPrice = math.Inf(1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			params := videoTaskCreateParams(t, name, "")
+			mutate(&params)
+			_, _, err := repo.CreateOrGet(ctx, params)
+			require.ErrorIs(t, err, service.ErrVideoTaskInvalidRequest)
+		})
+	}
+
+	task, _, err := repo.CreateOrGet(ctx, videoTaskCreateParams(t, "premature-settle", ""))
+	require.NoError(t, err)
+	cleanupVideoTask(t, task.RequestID)
+	err = repo.MarkSettled(ctx, service.MarkVideoSettledParams{
+		RequestID:       task.RequestID,
+		ExpectedVersion: task.Version,
+		SettledAmount:   0.1,
+		BillingStatus:   "settled",
+	})
+	require.ErrorIs(t, err, service.ErrVideoTaskInvalidTransition)
+
+	terminal := createDueVideoTask(t, repo, "terminal-settle")
+	leased, err := repo.LeaseDue(ctx, "settlement-worker", 1, time.Minute, time.Now().UTC())
+	require.NoError(t, err)
+	leasedTask := findLeasedVideoTask(t, leased, terminal.RequestID)
+	require.NoError(t, repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
+		RequestID:       terminal.RequestID,
+		ExpectedVersion: leasedTask.Version,
+		LeaseOwner:      "settlement-worker",
+		Status:          service.VideoTaskSucceeded,
+		UpstreamStatus:  "completed",
+	}))
+	terminal, err = repo.GetByRequestID(ctx, terminal.RequestID)
+	require.NoError(t, err)
+	require.NoError(t, repo.MarkSettled(ctx, service.MarkVideoSettledParams{
+		RequestID:       terminal.RequestID,
+		ExpectedVersion: terminal.Version,
+		SettledAmount:   0.5,
+		BillingStatus:   "settled",
+	}))
+	terminal, err = repo.GetByRequestID(ctx, terminal.RequestID)
+	require.NoError(t, err)
+	err = repo.MarkSettled(ctx, service.MarkVideoSettledParams{
+		RequestID:       terminal.RequestID,
+		ExpectedVersion: terminal.Version,
+		SettledAmount:   0.4,
+		BillingStatus:   "settled",
+	})
+	require.ErrorIs(t, err, service.ErrVideoTaskInvalidTransition)
+}
+
+func TestVideoTaskRepositoryPersistsOnlyRedactedBoundedErrors(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	task, _, err := repo.CreateOrGet(ctx, videoTaskCreateParams(t, "safe-errors", ""))
+	require.NoError(t, err)
+	cleanupVideoTask(t, task.RequestID)
+	require.NoError(t, repo.MarkSubmitting(ctx, task.RequestID, task.Version, "submit-token"))
+	taskError := service.NewVideoTaskError(
+		"UPSTREAM_AUTH_FAILED",
+		`{"x-api-key":"top-secret-key","authorization":"Bearer top-secret-token","message":"denied"}`,
+		false,
+	)
+	require.NoError(t, repo.MarkSubmissionUnknown(ctx, task.RequestID, task.Version+1, taskError))
+
+	stored, err := repo.GetByRequestID(ctx, task.RequestID)
+	require.NoError(t, err)
+	require.NotNil(t, stored.LastErrorMessage)
+	require.NotContains(t, *stored.LastErrorMessage, "top-secret")
+	require.LessOrEqual(t, len(*stored.LastErrorMessage), service.MaxVideoTaskErrorMessageBytes)
+}
+
 func TestVideoTaskRepositoryAppendEventIsAppendOnly(t *testing.T) {
 	ctx := context.Background()
 	repo := NewVideoTaskRepository(integrationDB)
@@ -162,15 +383,58 @@ func TestVideoTaskRepositoryLeaseDueTasksSkipsLockedRows(t *testing.T) {
 	repoB := NewVideoTaskRepository(integrationDB)
 	first := createDueVideoTask(t, repoA, "lease-a")
 	second := createDueVideoTask(t, repoA, "lease-b")
-
-	a, err := repoA.LeaseDue(ctx, "worker-a", 1, time.Minute, time.Now().UTC())
-	require.NoError(t, err)
-	b, err := repoB.LeaseDue(ctx, "worker-b", 2, time.Minute, time.Now().UTC())
-	require.NoError(t, err)
+	installVideoTaskLeaseOverlapTrigger(t)
+	type leaseResult struct {
+		tasks []service.VideoTask
+		err   error
+	}
+	results := make([]leaseResult, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, item := range []struct {
+		repo  service.VideoTaskRepository
+		owner string
+	}{{repoA, "overlap-worker-a"}, {repoB, "overlap-worker-b"}} {
+		wg.Add(1)
+		go func(i int, repo service.VideoTaskRepository, owner string) {
+			defer wg.Done()
+			<-start
+			results[i].tasks, results[i].err = repo.LeaseDue(ctx, owner, 1, time.Minute, time.Now().UTC())
+		}(i, item.repo, item.owner)
+	}
+	close(start)
+	wg.Wait()
+	require.NoError(t, results[0].err)
+	require.NoError(t, results[1].err)
+	a := results[0].tasks
+	b := results[1].tasks
 	require.Len(t, a, 1)
 	require.Len(t, b, 1)
 	require.NotEqual(t, a[0].RequestID, b[0].RequestID)
 	require.ElementsMatch(t, []string{first.RequestID, second.RequestID}, []string{a[0].RequestID, b[0].RequestID})
+}
+
+func installVideoTaskLeaseOverlapTrigger(t *testing.T) {
+	t.Helper()
+	_, err := integrationDB.ExecContext(context.Background(), `
+		CREATE OR REPLACE FUNCTION video_task_test_hold_lease()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.lease_owner LIKE 'overlap-worker-%' AND OLD.lease_owner IS NULL THEN
+				PERFORM pg_sleep(0.2);
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER trg_video_task_test_hold_lease
+		BEFORE UPDATE ON video_tasks
+		FOR EACH ROW EXECUTE FUNCTION video_task_test_hold_lease();
+	`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS trg_video_task_test_hold_lease ON video_tasks`)
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP FUNCTION IF EXISTS video_task_test_hold_lease()`)
+	})
 }
 
 func TestVideoTaskRepositoryLeaseDueReclaimsExpiredLease(t *testing.T) {
