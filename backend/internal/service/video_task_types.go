@@ -357,7 +357,7 @@ func isUnsafeVideoPayloadString(field, value string) bool {
 		(field == "worker_id" && videoTaskWorkerIDPattern.MatchString(value)) {
 		return false
 	}
-	return isEncodedVideoUpload(value)
+	return isEncodedVideoUpload(field, value)
 }
 
 func containsVideoCredential(value string) bool {
@@ -376,6 +376,9 @@ func containsVideoCredential(value string) bool {
 			if isSafeVideoCredentialProseAssignment(name, assignment) {
 				offset += match[3]
 				continue
+			}
+			if isAuthorizationShapedVideoName(name) {
+				return true
 			}
 			if strings.HasPrefix(strings.ToLower(candidate), "bearer ") {
 				candidate = strings.TrimSpace(candidate[len("bearer "):])
@@ -453,33 +456,74 @@ func isSafeVideoCredentialProseAssignment(name, assignment string) bool {
 
 func isCredentialShapedVideoName(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
-	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+	parts := strings.FieldsFunc(value, func(r rune) bool {
 		return r == '_' || r == '-' || r == '.'
-	}) {
-		switch part {
-		case "password", "passwd", "secret", "token", "cookie", "credential", "credentials":
+	})
+	for index, part := range parts {
+		if hasVideoCredentialNameSuffix(part) {
 			return true
+		}
+		if index+1 < len(parts) && parts[index+1] == "key" {
+			switch part {
+			case "api", "access", "secret", "private":
+				return true
+			}
 		}
 	}
 	normalized := strings.NewReplacer("_", "", "-", "", ".", "").Replace(value)
-	if normalized == "authorization" || normalized == "proxyauthorization" ||
-		normalized == "apikey" || normalized == "accesskey" ||
-		normalized == "secretkey" || normalized == "privatekey" {
-		return true
-	}
-	for _, suffix := range []string{"password", "secret", "token", "cookie", "credential", "credentials", "apikey"} {
-		if strings.HasSuffix(normalized, suffix) {
+	return hasVideoCredentialNameSuffix(normalized)
+}
+
+func hasVideoCredentialNameSuffix(value string) bool {
+	value = trimVideoCredentialNameQualifiers(value)
+	for _, suffix := range []string{
+		"authorization", "password", "passwd", "secret", "token", "cookie", "credential", "credentials",
+		"apikey", "accesskey", "secretkey", "privatekey",
+	} {
+		if strings.HasSuffix(value, suffix) {
 			return true
 		}
 	}
 	return false
 }
 
-func isEncodedVideoUpload(value string) bool {
+func trimVideoCredentialNameQualifiers(value string) string {
+	for {
+		trimmed := value
+		for _, qualifier := range []string{
+			"bytes", "data", "file", "hash", "header", "id", "name", "path", "pem",
+			"ref", "reference", "value", "version",
+		} {
+			if len(value) > len(qualifier) && strings.HasSuffix(value, qualifier) {
+				value = strings.TrimSuffix(value, qualifier)
+				break
+			}
+		}
+		if value == trimmed {
+			return value
+		}
+	}
+}
+
+func isAuthorizationShapedVideoName(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.'
+	}) {
+		if strings.HasSuffix(trimVideoCredentialNameQualifiers(part), "authorization") {
+			return true
+		}
+	}
+	normalized := strings.NewReplacer("_", "", "-", "", ".", "").Replace(value)
+	return strings.HasSuffix(trimVideoCredentialNameQualifiers(normalized), "authorization")
+}
+
+func isEncodedVideoUpload(field, value string) bool {
 	value = strings.TrimSpace(value)
 	if strings.HasPrefix(strings.ToLower(value), "data:") {
 		return true
 	}
+	allowSnakeCaseText := (field == "prompt" || field == "negative_prompt") && isASCIISnakeCase(value)
 	encodings := []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding}
 	for _, encoding := range encodings {
 		decoded, err := encoding.DecodeString(value)
@@ -502,7 +546,8 @@ func isEncodedVideoUpload(value string) bool {
 			return true
 		}
 		if isBinaryVideoContent(decoded) &&
-			(hasExplicitVideoBase64Marker(value) || len(decoded) >= 16 && !isASCIIAlphabetic(value)) {
+			(hasExplicitVideoBase64Marker(value) ||
+				len(decoded) >= 16 && !isASCIIAlphabetic(value) && !allowSnakeCaseText) {
 			return true
 		}
 	}
@@ -574,6 +619,19 @@ func isASCIIAlphabetic(value string) bool {
 	}
 	for _, b := range []byte(value) {
 		if b < 'A' || b > 'Z' && b < 'a' || b > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIISnakeCase(value string) bool {
+	parts := strings.Split(value, "_")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if !isASCIIAlphabetic(part) {
 			return false
 		}
 	}
