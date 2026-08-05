@@ -1,4 +1,5 @@
-export type PromptAuditMode = 'off' | 'async_audit' | 'blocking'
+export type PromptAuditMode = 'off' | 'capture_only' | 'async_audit' | 'blocking'
+export type PromptProcessingMode = PromptAuditMode
 export type PromptDecision = 'pass' | 'flag' | 'critical'
 export type PromptRiskLevel = 'low' | 'medium' | 'high' | 'critical'
 
@@ -22,6 +23,7 @@ export interface PromptAuditEndpointDraft extends PromptAuditEndpoint {
 
 export interface PromptAuditConfig {
   enabled: boolean
+  capture_only?: boolean
   blocking_enabled: boolean
   blocking_latest_turn_only: boolean
   store_pass_events: boolean
@@ -39,13 +41,15 @@ export interface PromptAuditConfig {
   change_summary: string
 }
 
-export interface PromptAuditDraft extends Omit<PromptAuditConfig, 'endpoints'> {
+export interface PromptAuditDraft extends Omit<PromptAuditConfig, 'endpoints' | 'capture_only'> {
+  capture_only: boolean
   endpoints: PromptAuditEndpointDraft[]
 }
 
 export interface PromptAuditUpdateRequest {
   expected_config_version: number
   enabled: boolean
+  capture_only: boolean
   blocking_enabled: boolean
   blocking_latest_turn_only: boolean
   store_pass_events: boolean
@@ -124,6 +128,7 @@ export interface PromptAuditRuntime {
   processed_total: number
   failed_total: number
   enqueued_total: number
+  captured_total: number
   dropped_total: number
   last_processed_at?: string
   last_error_code?: string
@@ -149,7 +154,7 @@ export interface PromptSnapshot {
   model: string
   prompt_hash: string
   redacted_preview: string
-  full_prompt: string
+  full_prompt?: string
   prompt_length: number
   message_count: number
   stage: string

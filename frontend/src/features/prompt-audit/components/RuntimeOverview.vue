@@ -49,7 +49,7 @@
               failed: runtime.queue.failed,
             }) }}
             <span class="mx-1.5 text-gray-300 dark:text-dark-600">·</span>
-            {{ t('admin.promptAudit.runtime.deliveryTotals', { enqueued: runtime.enqueued_total, dropped: runtime.dropped_total, processed: runtime.processed_total, failed: runtime.failed_total }) }}
+            {{ t('admin.promptAudit.runtime.deliveryTotals', { enqueued: runtime.enqueued_total, captured: runtime.captured_total, dropped: runtime.dropped_total, processed: runtime.processed_total, failed: runtime.failed_total }) }}
           </p>
         </div>
         <div class="rounded-xl border border-gray-100 px-4 py-3 dark:border-dark-700/60 dark:bg-dark-900/20">

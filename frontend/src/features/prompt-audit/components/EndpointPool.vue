@@ -5,7 +5,7 @@
         <h2 id="prompt-pool-title" class="text-base font-semibold text-gray-950 dark:text-white">{{ t('admin.promptAudit.pool.title') }}</h2>
         <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">{{ t('admin.promptAudit.pool.description') }}</p>
       </div>
-      <button type="button" class="btn btn-primary btn-sm" data-test="add-endpoint" @click="openCreate">
+      <button type="button" class="btn btn-primary btn-sm" data-test="add-endpoint" :disabled="disabled" @click="openCreate">
         {{ t('admin.promptAudit.pool.add') }}
       </button>
     </div>
@@ -35,6 +35,7 @@
               role="switch"
               :aria-checked="endpoint.enabled"
               :aria-label="t('admin.promptAudit.pool.toggleNode', { name: endpoint.name })"
+              :disabled="disabled"
               class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2"
               :class="endpoint.enabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'"
               @click="toggleEndpoint(endpoint.id)"
@@ -82,11 +83,11 @@
           </div>
 
           <div class="flex flex-wrap items-center justify-end gap-1 border-t border-gray-100 pt-3 dark:border-dark-800 xl:flex-nowrap xl:border-0 xl:pt-0">
-            <button type="button" class="btn btn-secondary btn-sm" :disabled="probingIds.includes(endpoint.id)" @click="$emit('probe', endpoint)">
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="disabled || probingIds.includes(endpoint.id)" @click="$emit('probe', endpoint)">
               {{ probingIds.includes(endpoint.id) ? t('admin.promptAudit.pool.probing') : t('admin.promptAudit.pool.probe') }}
             </button>
-            <button type="button" class="btn btn-ghost btn-sm" @click="openEdit(endpoint)">{{ t('common.edit') }}</button>
-            <button type="button" class="btn btn-ghost btn-sm text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/30" @click="removeEndpoint(endpoint)">{{ t('common.delete') }}</button>
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="disabled" @click="openEdit(endpoint)">{{ t('common.edit') }}</button>
+            <button type="button" class="btn btn-ghost btn-sm text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/30" :disabled="disabled" @click="removeEndpoint(endpoint)">{{ t('common.delete') }}</button>
           </div>
         </article>
       </div>
@@ -149,6 +150,7 @@ const props = defineProps<{
   endpoints: PromptAuditEndpointDraft[]
   probeResults: Record<string, PromptProbeResult>
   probingIds: string[]
+  disabled?: boolean
 }>()
 const emit = defineEmits<{
   (event: 'update:endpoints', value: PromptAuditEndpointDraft[]): void
@@ -159,10 +161,12 @@ const editing = ref<PromptAuditEndpointDraft | null>(null)
 const editingIndex = ref(-1)
 
 function openCreate() {
+  if (props.disabled) return
   editingIndex.value = -1
   editing.value = createDefaultEndpoint(props.endpoints.length + 1)
 }
 function openEdit(endpoint: PromptAuditEndpointDraft) {
+  if (props.disabled) return
   editingIndex.value = props.endpoints.findIndex((item) => item.id === endpoint.id)
   editing.value = cloneData(endpoint)
 }
@@ -181,9 +185,11 @@ function saveEditor() {
   closeEditor()
 }
 function toggleEndpoint(id: string) {
+  if (props.disabled) return
   emit('update:endpoints', props.endpoints.map((item) => item.id === id ? { ...item, enabled: !item.enabled } : cloneData(item)))
 }
 function removeEndpoint(endpoint: PromptAuditEndpointDraft) {
+  if (props.disabled) return
   if (!window.confirm(t('admin.promptAudit.pool.deleteConfirm', { name: endpoint.name }))) return
   emit('update:endpoints', props.endpoints.filter((item) => item.id !== endpoint.id).map((item) => cloneData(item)))
 }

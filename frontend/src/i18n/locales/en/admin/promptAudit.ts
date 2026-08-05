@@ -1,12 +1,12 @@
 export default {
   promptAudit: {
     title: 'Prompt Audit',
-    description: 'Review user input asynchronously or block it synchronously through OpenAI-compatible Qwen3Guard nodes. Full prompts are stored with events for admin review.',
+    description: 'Retain user input without scanning, or review it asynchronously or synchronously through OpenAI-compatible Qwen3Guard nodes. Full prompts are for admin review only.',
     configVersion: 'Config version v{version}',
     tabs: { config: 'Configuration', events: 'Events' },
     actions: { refresh: 'Refresh runtime', retry: 'Retry', Allow: 'Allow', Warn: 'Warn', Block: 'Block' },
     common: { actions: 'Actions', never: 'Never' },
-    mode: { off: 'Off', async_audit: 'Async audit only', blocking: 'Synchronous audit and block' },
+    mode: { off: 'Off', capture_only: 'Capture only (no audit API)', async_audit: 'Async audit only', blocking: 'Synchronous audit and block' },
     status: { disabled: 'Disabled', running: 'Running', degraded: 'Degraded', error: 'Error', healthy: 'Healthy', failed: 'Failed', stale: 'Stale heartbeat' },
     decisions: { pass: 'Pass', flag: 'Flag', critical: 'Critical' },
     riskLevels: { low: 'Low', medium: 'Medium', high: 'High', critical: 'Critical' },
@@ -38,7 +38,7 @@ export default {
       process: 'Process status', mode: 'Effective mode', version: 'Active / expected version', workers: 'Active / total workers',
       queue: 'Active jobs / capacity', dependencies: 'Dependencies', guardMetrics: 'Synchronous Guard metrics', latest: 'Latest processing and error',
       queueBreakdown: 'queued {queued} · processing {processing} · retry {retry} · done {done} · failed {failed}',
-      deliveryTotals: 'Total enqueued {enqueued} · dropped {dropped} · processed {processed} · failed {failed}',
+      deliveryTotals: 'Total enqueued {enqueued} · captured {captured} · dropped {dropped} · processed {processed} · failed {failed}',
     },
     metrics: { total: 'Total', allowed: 'Allowed', flagged: 'Flagged', blocked: 'Blocked', unavailable: 'Unavailable', timeouts: 'Timeouts', failovers: 'Failovers' },
     pool: {
@@ -55,7 +55,7 @@ export default {
       searchGroups: 'Search groups', noGroups: 'No matching groups', missingGroups: 'Configured IDs for groups that no longer exist', selectedCount: '{count} groups selected',
       scanners: 'Qwen3Guard input-risk categories', workerCount: 'Worker count', queueCapacity: 'Persistent queue capacity', strategy: 'Node strategy', strategyHint: 'Try nodes in configuration order and fail over when allowed.',
     },
-    saveBar: { enabled: 'Enable prompt audit', blocking: 'Synchronous blocking', blockingLatestTurnOnly: 'Only latest input and prior output', storePass: 'Store safe events', dirty: 'Unsaved changes', synced: 'Configuration synced' },
+    saveBar: { processingMode: 'Processing mode', enabled: 'Enable prompt audit', blocking: 'Synchronous blocking', blockingLatestTurnOnly: 'Only latest input and prior output', storePass: 'Store safe events', dirty: 'Unsaved changes', synced: 'Configuration synced' },
     blockingConfirm: {
       title: 'Enable synchronous blocking?',
       message: 'Applicable requests wait for Guard before account selection, billing, or upstream access. Block, unavailable Guard, and invalid responses all prevent upstream access.',

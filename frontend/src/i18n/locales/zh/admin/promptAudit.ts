@@ -1,12 +1,12 @@
 export default {
   promptAudit: {
     title: '提示词审计',
-    description: '通过 OpenAI 兼容 Qwen3Guard 节点异步复核或同步阻止用户输入；事件的完整提示词会入库保存，仅供管理员复核。',
+    description: '可仅留存用户输入，或通过 OpenAI 兼容 Qwen3Guard 节点异步复核、同步阻止；完整提示词仅供管理员复核。',
     configVersion: '配置版本 v{version}',
     tabs: { config: '配置', events: '事件' },
     actions: { refresh: '刷新运行态', retry: '重试', Allow: '放行', Warn: '警告', Block: '阻止' },
     common: { actions: '操作', never: '从未' },
-    mode: { off: '已关闭', async_audit: '异步只审计', blocking: '同步审计并阻止' },
+    mode: { off: '已关闭', capture_only: '仅留存（不调用审计 API）', async_audit: '异步只审计', blocking: '同步审计并阻止' },
     status: { disabled: '未启用', running: '运行中', degraded: '降级', error: '错误', healthy: '健康', failed: '失败', stale: '心跳过期' },
     decisions: { pass: '通过', flag: '标记', critical: '严重' },
     riskLevels: { low: '低', medium: '中', high: '高', critical: '严重' },
@@ -38,7 +38,7 @@ export default {
       process: '进程状态', mode: '生效模式', version: '生效 / 期望版本', workers: '活动 / 总 Worker',
       queue: '活动任务 / 容量', dependencies: '依赖', guardMetrics: '同步 Guard 指标', latest: '最近处理与错误',
       queueBreakdown: 'queued {queued} · processing {processing} · retry {retry} · done {done} · failed {failed}',
-      deliveryTotals: '累计入队 {enqueued} · 丢弃 {dropped} · 处理 {processed} · 失败 {failed}',
+      deliveryTotals: '累计入队 {enqueued} · 留存 {captured} · 丢弃 {dropped} · 处理 {processed} · 失败 {failed}',
     },
     metrics: { total: '总计', allowed: '放行', flagged: '标记', blocked: '阻止', unavailable: '不可用', timeouts: '超时', failovers: '故障切换' },
     pool: {
@@ -55,7 +55,7 @@ export default {
       searchGroups: '搜索分组', noGroups: '没有匹配分组', missingGroups: '配置中包含已删除的分组 ID', selectedCount: '已选择 {count} 个分组',
       scanners: 'Qwen3Guard 输入风险分类', workerCount: 'Worker 数量', queueCapacity: '持久队列容量', strategy: '节点策略', strategyHint: '按配置顺序优先尝试，必要时故障切换。',
     },
-    saveBar: { enabled: '启用提示词审计', blocking: '同步阻止', blockingLatestTurnOnly: '仅审最新输入和上一轮输出', storePass: '保存安全事件', dirty: '有未保存的更改', synced: '配置已同步' },
+    saveBar: { processingMode: '处理模式', enabled: '启用提示词审计', blocking: '同步阻止', blockingLatestTurnOnly: '仅审最新输入和上一轮输出', storePass: '保存安全事件', dirty: '有未保存的更改', synced: '配置已同步' },
     blockingConfirm: {
       title: '开启同步阻止？',
       message: '适用请求会在账号选择、计费和访问上游之前等待 Guard。命中 Block、Guard 不可用或响应非法时，请求都不会访问上游。',
