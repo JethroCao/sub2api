@@ -5,11 +5,14 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/lib/pq"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -177,10 +180,16 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 }
 
 func TestMigrationsUpgradeFromOriginal198AppliesForward199(t *testing.T) {
+	const (
+		balancePreflightError = "migration 199 preflight failed: users.balance contains value(s) whose rounded scale-8 amount is outside DECIMAL(20,8); remediate users.balance so ROUND(value, 8) is between -999999999999.99999999 and 999999999999.99999999, then retry migration 199"
+		frozenPreflightError  = "migration 199 preflight failed: users.frozen_balance contains value(s) whose rounded scale-8 amount is outside DECIMAL(20,8); remediate users.frozen_balance so ROUND(value, 8) is between -999999999999.99999999 and 999999999999.99999999, then retry migration 199"
+	)
+
 	ctx := context.Background()
 	client := testEntClient(t)
 	taskRepo := NewVideoTaskRepository(integrationDB)
-	task, _, user := createVideoBillingTask(t, client, taskRepo, "migration-198-upgrade", "balance", nil, 1, 1, nil, 0)
+	task, _, upperUser := createVideoBillingTask(t, client, taskRepo, "migration-198-upgrade-upper", "balance", nil, 1, 1, nil, 0)
+	videoBoundaryTask, _, lowerUser := createVideoBillingTask(t, client, taskRepo, "migration-198-upgrade-lower", "balance", nil, 1, 1, nil, 0)
 
 	_, err := integrationDB.ExecContext(ctx, `
 		ALTER TABLE video_tasks
@@ -198,7 +207,19 @@ func TestMigrationsUpgradeFromOriginal198AppliesForward199(t *testing.T) {
 	require.Equal(t, "72cce8db8f5371c4e52c8650ac1e06379446d1e70f65782be2d6a18b73383413", migrationChecksum(originalVideoBillingPrecisionMigration198))
 	require.NoError(t, applyMigrationsFS(ctx, integrationDB, originalFS))
 
-	_, err = integrationDB.ExecContext(ctx, `UPDATE users SET balance = 0.0000000050, frozen_balance = 1.2345678950 WHERE id = $1`, user.ID)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE users
+		SET balance = 999999999999.9999999949,
+			frozen_balance = 0.0000000050
+		WHERE id = $1
+	`, upperUser.ID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE users
+		SET balance = -999999999999.9999999949,
+			frozen_balance = 0.0000000050
+		WHERE id = $1
+	`, lowerUser.ID)
 	require.NoError(t, err)
 	_, err = integrationDB.ExecContext(ctx, `
 		UPDATE video_tasks
@@ -208,25 +229,141 @@ func TestMigrationsUpgradeFromOriginal198AppliesForward199(t *testing.T) {
 		WHERE request_id = $1
 	`, task.RequestID)
 	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE video_tasks
+		SET status = 'succeeded', estimated_amount = 9999999999.9999999999,
+			frozen_amount = 9999999999.9999999999,
+			settled_amount = 9999999999.9999999999,
+			settled_at = NOW()
+		WHERE request_id = $1
+	`, videoBoundaryTask.RequestID)
+	require.NoError(t, err)
 
-	require.NoError(t, ApplyMigrations(ctx, integrationDB))
-	requireNumericColumn(t, testTx(t), "users", "balance", 20, 8)
-	requireNumericColumn(t, testTx(t), "users", "frozen_balance", 20, 8)
-	requireNumericColumn(t, testTx(t), "video_tasks", "estimated_amount", 20, 8)
-	requireNumericColumn(t, testTx(t), "video_tasks", "frozen_amount", 20, 8)
-	requireNumericColumn(t, testTx(t), "video_tasks", "settled_amount", 20, 8)
+	blockerTx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	blockerDone := false
+	t.Cleanup(func() {
+		if !blockerDone {
+			_ = blockerTx.Rollback()
+		}
+	})
+	_, err = blockerTx.ExecContext(ctx, `UPDATE users SET balance = balance WHERE id = $1`, upperUser.ID)
+	require.NoError(t, err)
+
+	upperBalanceMigrationResult := make(chan error, 1)
+	go func() {
+		upperBalanceMigrationResult <- ApplyMigrations(ctx, integrationDB)
+	}()
+	require.Eventually(t, func() bool {
+		var waiting bool
+		queryErr := integrationDB.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_locks
+				WHERE relation = 'users'::regclass
+				  AND mode = 'AccessExclusiveLock'
+				  AND NOT granted
+			)
+		`).Scan(&waiting)
+		return queryErr == nil && waiting
+	}, 5*time.Second, 10*time.Millisecond, "migration 199 did not reach the users table lock")
+
+	_, err = blockerTx.ExecContext(ctx, `UPDATE users SET balance = 999999999999.9999999950 WHERE id = $1`, upperUser.ID)
+	require.NoError(t, err)
+	require.NoError(t, blockerTx.Commit())
+	blockerDone = true
+
+	var upperBalanceMigrationErr error
+	select {
+	case upperBalanceMigrationErr = <-upperBalanceMigrationResult:
+	case <-time.After(10 * time.Second):
+		t.Fatal("migration 199 did not return after the concurrent users.balance write committed")
+	}
+	assertMigration199PreflightError(t, upperBalanceMigrationErr, balancePreflightError)
+	requireMigration199UnappliedAtOriginal198State(t)
 
 	var valuesMatch bool
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		SELECT u.balance = 0.00000001
-		   AND u.frozen_balance = 1.23456790
+		SELECT upper_user.balance = 999999999999.9999999950
+		   AND upper_user.frozen_balance = 0.0000000050
+		   AND lower_user.balance = -999999999999.9999999949
+		   AND lower_user.frozen_balance = 0.0000000050
+		   AND vt.estimated_amount = 0.1234567850
+		   AND vt.frozen_amount = 1.0000000050
+		   AND vt.settled_amount = 0.3000000050
+		   AND boundary_vt.estimated_amount = 9999999999.9999999999
+		   AND boundary_vt.frozen_amount = 9999999999.9999999999
+		   AND boundary_vt.settled_amount = 9999999999.9999999999
+		FROM users AS upper_user
+		JOIN users AS lower_user ON lower_user.id = $2
+		JOIN video_tasks AS vt ON vt.request_id = $3
+		JOIN video_tasks AS boundary_vt ON boundary_vt.request_id = $4
+		WHERE upper_user.id = $1
+	`, upperUser.ID, lowerUser.ID, task.RequestID, videoBoundaryTask.RequestID).Scan(&valuesMatch))
+	require.True(t, valuesMatch, "failed migration must preserve every source value")
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE users SET balance = 999999999999.9999999949 WHERE id = $1`, upperUser.ID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE users SET balance = -999999999999.9999999950 WHERE id = $1`, lowerUser.ID)
+	require.NoError(t, err)
+
+	lowerBalanceMigrationErr := ApplyMigrations(ctx, integrationDB)
+	assertMigration199PreflightError(t, lowerBalanceMigrationErr, balancePreflightError)
+	requireMigration199UnappliedAtOriginal198State(t)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT upper_user.balance = 999999999999.9999999949
+		   AND upper_user.frozen_balance = 0.0000000050
+		   AND lower_user.balance = -999999999999.9999999950
+		FROM users AS upper_user
+		JOIN users AS lower_user ON lower_user.id = $2
+		WHERE upper_user.id = $1
+	`, upperUser.ID, lowerUser.ID).Scan(&valuesMatch))
+	require.True(t, valuesMatch, "lower balance preflight must not mutate the repaired upper balance")
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE users SET balance = -999999999999.9999999949 WHERE id = $1`, lowerUser.ID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE users SET frozen_balance = 999999999999.9999999950 WHERE id = $1`, upperUser.ID)
+	require.NoError(t, err)
+
+	frozenBalanceMigrationErr := ApplyMigrations(ctx, integrationDB)
+	assertMigration199PreflightError(t, frozenBalanceMigrationErr, frozenPreflightError)
+	requireMigration199UnappliedAtOriginal198State(t)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT upper_user.balance = 999999999999.9999999949
+		   AND upper_user.frozen_balance = 999999999999.9999999950
+		   AND lower_user.balance = -999999999999.9999999949
+		FROM users AS upper_user
+		JOIN users AS lower_user ON lower_user.id = $2
+		WHERE upper_user.id = $1
+	`, upperUser.ID, lowerUser.ID).Scan(&valuesMatch))
+	require.True(t, valuesMatch, "frozen-balance preflight must not mutate corrected balances")
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE users SET frozen_balance = 999999999999.9999999949 WHERE id = $1`, upperUser.ID)
+	require.NoError(t, err)
+	require.NoError(t, ApplyMigrations(ctx, integrationDB))
+	requireNumericColumnOnDB(t, "users", "balance", 20, 8)
+	requireNumericColumnOnDB(t, "users", "frozen_balance", 20, 8)
+	requireNumericColumnOnDB(t, "video_tasks", "estimated_amount", 20, 8)
+	requireNumericColumnOnDB(t, "video_tasks", "frozen_amount", 20, 8)
+	requireNumericColumnOnDB(t, "video_tasks", "settled_amount", 20, 8)
+
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT upper_user.balance = 999999999999.99999999
+		   AND upper_user.frozen_balance = 999999999999.99999999
+		   AND lower_user.balance = -999999999999.99999999
+		   AND lower_user.frozen_balance = 0.00000001
 		   AND vt.estimated_amount = 0.12345679
 		   AND vt.frozen_amount = 1.00000001
 		   AND vt.settled_amount = 0.30000001
-		FROM users AS u
-		JOIN video_tasks AS vt ON vt.user_id = u.id
-		WHERE u.id = $1 AND vt.request_id = $2
-	`, user.ID, task.RequestID).Scan(&valuesMatch))
+		   AND boundary_vt.estimated_amount = 10000000000.00000000
+		   AND boundary_vt.frozen_amount = 10000000000.00000000
+		   AND boundary_vt.settled_amount = 10000000000.00000000
+		FROM users AS upper_user
+		JOIN users AS lower_user ON lower_user.id = $2
+		JOIN video_tasks AS vt ON vt.request_id = $3
+		JOIN video_tasks AS boundary_vt ON boundary_vt.request_id = $4
+		WHERE upper_user.id = $1
+	`, upperUser.ID, lowerUser.ID, task.RequestID, videoBoundaryTask.RequestID).Scan(&valuesMatch))
 	require.True(t, valuesMatch)
 
 	var originalChecksum, forwardChecksum string
@@ -234,6 +371,64 @@ func TestMigrationsUpgradeFromOriginal198AppliesForward199(t *testing.T) {
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE filename = '199_restore_video_billing_ledger_scale.sql'`).Scan(&forwardChecksum))
 	require.Equal(t, "72cce8db8f5371c4e52c8650ac1e06379446d1e70f65782be2d6a18b73383413", originalChecksum)
 	require.NotEmpty(t, forwardChecksum)
+}
+
+func assertMigration199PreflightError(t *testing.T, err error, message string) {
+	t.Helper()
+
+	if !assert.Error(t, err) {
+		return
+	}
+	var pqErr *pq.Error
+	if !assert.True(t, errors.As(err, &pqErr), "expected wrapped PostgreSQL error, got %T: %v", err, err) {
+		return
+	}
+	assert.Equal(t, pq.ErrorCode("22003"), pqErr.Code)
+	assert.Equal(t, message, pqErr.Message)
+	assert.Empty(t, pqErr.Detail, "preflight must not expose source row data")
+	assert.Empty(t, pqErr.Hint, "preflight remediation belongs in the stable message")
+}
+
+func requireMigration199UnappliedAtOriginal198State(t *testing.T) {
+	t.Helper()
+
+	var applied int
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE filename = '199_restore_video_billing_ledger_scale.sql'
+	`).Scan(&applied))
+	require.Zero(t, applied, "migration 199 must remain unapplied after a failed preflight")
+
+	var originalChecksum string
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT checksum
+		FROM schema_migrations
+		WHERE filename = '198_unified_video_billing_precision.sql'
+	`).Scan(&originalChecksum))
+	require.Equal(t, "72cce8db8f5371c4e52c8650ac1e06379446d1e70f65782be2d6a18b73383413", originalChecksum)
+
+	requireNumericColumnOnDB(t, "users", "balance", 22, 10)
+	requireNumericColumnOnDB(t, "users", "frozen_balance", 22, 10)
+	requireNumericColumnOnDB(t, "video_tasks", "estimated_amount", 20, 10)
+	requireNumericColumnOnDB(t, "video_tasks", "frozen_amount", 20, 10)
+	requireNumericColumnOnDB(t, "video_tasks", "settled_amount", 20, 10)
+}
+
+func requireNumericColumnOnDB(t *testing.T, table, column string, precision, scale int) {
+	t.Helper()
+
+	var actualType string
+	var actualPrecision, actualScale sql.NullInt64
+	err := integrationDB.QueryRowContext(context.Background(), `
+		SELECT data_type, numeric_precision, numeric_scale
+		FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+	`, table, column).Scan(&actualType, &actualPrecision, &actualScale)
+	require.NoError(t, err)
+	require.Equal(t, "numeric", actualType)
+	require.Equal(t, int64(precision), actualPrecision.Int64)
+	require.Equal(t, int64(scale), actualScale.Int64)
 }
 
 func TestMigrationsRunner_AuthIdentityAndPaymentSchemaStayAligned(t *testing.T) {
