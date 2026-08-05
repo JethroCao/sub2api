@@ -31,8 +31,21 @@ type VideoProviderCapabilities map[VideoOperation]VideoCapability
 
 type VideoCapabilityCatalog map[string]VideoProviderCapabilities
 
+const videoModelCapabilityKeySeparator = "\x00"
+
+// VideoModelCapabilityKey creates an explicit provider/model override key for
+// VideoCapabilityCatalog. A plain provider key remains the default for models
+// without an override, preserving the original provider-to-operation catalog.
+func VideoModelCapabilityKey(provider, model string) string {
+	return strings.TrimSpace(provider) + videoModelCapabilityKeySeparator + strings.TrimSpace(model)
+}
+
 func (catalog VideoCapabilityCatalog) Validate(provider string, request CanonicalVideoRequest) error {
-	providerCapabilities, ok := catalog[strings.TrimSpace(provider)]
+	provider = strings.TrimSpace(provider)
+	providerCapabilities, ok := catalog[VideoModelCapabilityKey(provider, request.Model)]
+	if !ok {
+		providerCapabilities, ok = catalog[provider]
+	}
 	if !ok {
 		return ErrVideoUnsupportedCapability
 	}

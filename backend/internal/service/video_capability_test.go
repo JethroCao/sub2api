@@ -198,3 +198,32 @@ func TestValidateVideoCapabilityHonorsDisabledEditAndExtensionFlags(t *testing.T
 		}), ErrVideoUnsupportedCapability)
 	}
 }
+
+func TestValidateVideoCapabilityUsesModelOverridesWithinProvider(t *testing.T) {
+	audio := true
+	catalog := VideoCapabilityCatalog{
+		VideoProviderSeedance: {
+			VideoOperationGeneration: {Text: true, Audio: true},
+		},
+		VideoModelCapabilityKey(VideoProviderSeedance, "seedance-audio"): {
+			VideoOperationGeneration: {Text: true, Audio: true},
+		},
+		VideoModelCapabilityKey(VideoProviderSeedance, "seedance-silent"): {
+			VideoOperationGeneration: {Text: true, Audio: false},
+		},
+	}
+
+	request := CanonicalVideoRequest{
+		Operation: VideoOperationGeneration,
+		Model:     "seedance-audio",
+		Prompt:    "animate",
+		Audio:     &audio,
+	}
+	require.NoError(t, catalog.Validate(VideoProviderSeedance, request))
+
+	request.Model = "seedance-silent"
+	require.ErrorIs(t, catalog.Validate(VideoProviderSeedance, request), ErrVideoUnsupportedCapability)
+
+	request.Model = "seedance-unlisted"
+	require.NoError(t, catalog.Validate(VideoProviderSeedance, request), "models without an override keep the provider default")
+}

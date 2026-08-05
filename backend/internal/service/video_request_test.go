@@ -106,6 +106,64 @@ func TestNormalizeVideoRequestMapsMultipartFrameFilesAndIgnoresUnknownUploads(t 
 	require.Empty(t, req.ReferenceImages)
 }
 
+func TestNormalizeVideoRequestMultipartSourcePrecedesReferencesRegardlessFieldOrder(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields [][2]string
+	}{
+		{
+			name: "reference before source",
+			fields: [][2]string{
+				{"reference_videos[]", "https://example.com/reference-a.mp4"},
+				{"video", "https://example.com/source.mp4"},
+				{"reference_videos[]", "https://example.com/reference-b.mp4"},
+			},
+		},
+		{
+			name: "source before references",
+			fields: [][2]string{
+				{"video", "https://example.com/source.mp4"},
+				{"reference_videos[]", "https://example.com/reference-a.mp4"},
+				{"reference_videos[]", "https://example.com/reference-b.mp4"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			require.NoError(t, writer.WriteField("model", "video-model"))
+			for _, field := range tt.fields {
+				require.NoError(t, writer.WriteField(field[0], field[1]))
+			}
+			require.NoError(t, writer.Close())
+
+			req, err := NormalizeVideoRequest(VideoOperationEdit, writer.FormDataContentType(), body.Bytes())
+			require.NoError(t, err)
+			require.Equal(t, []VideoAsset{
+				{URL: "https://example.com/source.mp4"},
+				{URL: "https://example.com/reference-a.mp4"},
+				{URL: "https://example.com/reference-b.mp4"},
+			}, req.ReferenceVideos)
+		})
+	}
+}
+
+func TestNormalizeVideoRequestMultipartRejectsAmbiguousSourceVideos(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "video-model"))
+	require.NoError(t, writer.WriteField("video", "https://example.com/source-a.mp4"))
+	require.NoError(t, writer.WriteField("video_url", "https://example.com/source-b.mp4"))
+	require.NoError(t, writer.Close())
+
+	req, err := NormalizeVideoRequest(VideoOperationExtension, writer.FormDataContentType(), body.Bytes())
+	require.ErrorIs(t, err, ErrVideoInvalidRequest)
+	require.Empty(t, req.ReferenceVideos)
+	require.NotContains(t, err.Error(), "source-a.mp4")
+	require.NotContains(t, err.Error(), "source-b.mp4")
+}
+
 func TestNormalizeVideoRequestRejectsInvalidScalarValues(t *testing.T) {
 	tests := []struct {
 		name string
@@ -241,4 +299,77 @@ func TestNormalizeVideoRequestEnforcesExplicitLimits(t *testing.T) {
 	require.NoError(t, err)
 	_, err = NormalizeVideoRequest(VideoOperationGeneration, "application/json", body)
 	require.ErrorIs(t, err, ErrVideoTooManyAssets)
+}
+
+func TestNormalizeVideoRequestAcceptsAllowlistedProviderOptionTypes(t *testing.T) {
+	body := []byte(`{
+		"model":"seedance-2.0",
+		"prompt":"animate",
+		"provider_options":{"seedance":{
+			"seed":42,
+			"watermark":true,
+			"return_last_frame":false,
+			"service_tier":"priority"
+		}}
+	}`)
+	req, err := NormalizeVideoRequest(VideoOperationGeneration, "application/json", body)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"seed":42,"watermark":true,"return_last_frame":false,"service_tier":"priority"}`, string(req.ProviderOptions[VideoProviderSeedance]))
+}
+
+func TestNormalizeVideoRequestRejectsInvalidProviderOptionsWithoutEcho(t *testing.T) {
+	jwt := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+		"eyJzdWIiOiIxMjM0NTY3ODkwIn0." +
+		"SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+	tests := []struct {
+		name    string
+		options string
+		secret  string
+	}{
+		{name: "unknown namespace", options: `{"other":{"seed":42}}`},
+		{name: "provider without schema", options: `{"kling":{"seed":42}}`},
+		{name: "unknown key", options: `{"seedance":{"unknown":true}}`},
+		{name: "credential key", options: `{"seedance":{"api_key":"sk-provider-secret"}}`, secret: "sk-provider-secret"},
+		{name: "seed type", options: `{"seedance":{"seed":"42"}}`},
+		{name: "seed null", options: `{"seedance":{"seed":null}}`},
+		{name: "watermark type", options: `{"seedance":{"watermark":"true"}}`},
+		{name: "watermark null", options: `{"seedance":{"watermark":null}}`},
+		{name: "return last frame type", options: `{"seedance":{"return_last_frame":1}}`},
+		{name: "service tier type", options: `{"seedance":{"service_tier":true}}`},
+		{name: "service tier null", options: `{"seedance":{"service_tier":null}}`},
+		{name: "duplicate key", options: `{"seedance":{"service_tier":"api_key=sk-provider-secret","service_tier":"priority"}}`, secret: "sk-provider-secret"},
+		{name: "duplicate namespace", options: `{"seedance":{"service_tier":"api_key=sk-provider-secret"},"seedance":{"seed":42}}`, secret: "sk-provider-secret"},
+		{name: "authorization value", options: `{"seedance":{"service_tier":"Authorization: Bearer abcdefghijklmnopqrstuvwxyz"}}`, secret: "abcdefghijklmnopqrstuvwxyz"},
+		{name: "api key value", options: `{"seedance":{"service_tier":"api_key=sk-provider-secret"}}`, secret: "sk-provider-secret"},
+		{name: "jwt value", options: `{"seedance":{"service_tier":"` + jwt + `"}}`, secret: jwt},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(`{"model":"seedance-2.0","prompt":"animate","provider_options":` + tt.options + `}`)
+			req, err := NormalizeVideoRequest(VideoOperationGeneration, "application/json", body)
+			require.ErrorIs(t, err, ErrVideoInvalidRequest)
+			require.Empty(t, req.ProviderOptions)
+			if tt.secret != "" {
+				require.NotContains(t, err.Error(), tt.secret)
+			}
+			require.Equal(t, ErrVideoInvalidRequest.Error(), err.Error())
+		})
+	}
+}
+
+func TestNormalizeVideoRequestRejectsDuplicateTopLevelProviderOptionsWithoutEcho(t *testing.T) {
+	secret := "sk-provider-secret"
+	body := []byte(`{
+		"model":"seedance-2.0",
+		"prompt":"animate",
+		"provider_options":{"seedance":{"service_tier":"api_key=sk-provider-secret"}},
+		"provider_options":{"seedance":{"seed":42}}
+	}`)
+
+	req, err := NormalizeVideoRequest(VideoOperationGeneration, "application/json", body)
+	require.ErrorIs(t, err, ErrVideoInvalidRequest)
+	require.Empty(t, req.ProviderOptions)
+	require.NotContains(t, err.Error(), secret)
+	require.Equal(t, ErrVideoInvalidRequest.Error(), err.Error())
 }

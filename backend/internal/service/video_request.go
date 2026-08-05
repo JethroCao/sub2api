@@ -122,8 +122,8 @@ func NormalizeVideoRequest(operation VideoOperation, contentType string, body []
 }
 
 func normalizeVideoJSONRequest(body []byte, request *CanonicalVideoRequest) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil || fields == nil {
+	fields, ok := decodeUniqueVideoJSONObject(body)
+	if !ok {
 		return ErrVideoInvalidRequest
 	}
 	var err error
@@ -225,6 +225,7 @@ func normalizeVideoMultipartRequest(contentType string, body []byte, request *Ca
 		return ErrVideoInvalidRequest
 	}
 	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	state := videoMultipartRequestState{}
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
@@ -253,14 +254,23 @@ func normalizeVideoMultipartRequest(contentType string, body []byte, request *Ca
 			request.addMultipartImage(name, asset)
 			continue
 		}
-		if err := addVideoMultipartField(request, name, strings.TrimSpace(string(data))); err != nil {
+		if err := addVideoMultipartField(request, &state, name, strings.TrimSpace(string(data))); err != nil {
 			return err
 		}
 	}
+	if state.sourceVideo != nil {
+		request.ReferenceVideos = append(request.ReferenceVideos, *state.sourceVideo)
+	}
+	request.ReferenceVideos = append(request.ReferenceVideos, state.referenceVideos...)
 	return nil
 }
 
-func addVideoMultipartField(request *CanonicalVideoRequest, name, value string) error {
+type videoMultipartRequestState struct {
+	sourceVideo     *VideoAsset
+	referenceVideos []VideoAsset
+}
+
+func addVideoMultipartField(request *CanonicalVideoRequest, state *videoMultipartRequestState, name, value string) error {
 	switch {
 	case name == "model":
 		request.Model = value
@@ -297,10 +307,16 @@ func addVideoMultipartField(request *CanonicalVideoRequest, name, value string) 
 		if value != "" {
 			request.ReferenceImages = append(request.ReferenceImages, VideoAsset{URL: value})
 		}
-	case name == "video", name == "video_url", name == "reference_videos", name == "reference_videos[]",
-		strings.HasPrefix(name, "reference_videos["):
+	case name == "video", name == "video_url":
 		if value != "" {
-			request.ReferenceVideos = append(request.ReferenceVideos, VideoAsset{URL: value})
+			if state.sourceVideo != nil {
+				return ErrVideoInvalidRequest
+			}
+			state.sourceVideo = &VideoAsset{URL: value}
+		}
+	case name == "reference_videos", name == "reference_videos[]", strings.HasPrefix(name, "reference_videos["):
+		if value != "" {
+			state.referenceVideos = append(state.referenceVideos, VideoAsset{URL: value})
 		}
 	}
 	return nil
@@ -370,8 +386,8 @@ func videoJSONString(fields map[string]json.RawMessage, name string) (string, er
 }
 
 func parseVideoProviderOptions(raw json.RawMessage, request *CanonicalVideoRequest) error {
-	var options map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &options); err != nil || options == nil {
+	options, ok := decodeUniqueVideoJSONObject(raw)
+	if !ok {
 		return ErrVideoInvalidRequest
 	}
 	request.ProviderOptions = make(map[string]json.RawMessage, len(options))
@@ -379,13 +395,100 @@ func parseVideoProviderOptions(raw json.RawMessage, request *CanonicalVideoReque
 		if !videoProviderNamePattern.MatchString(provider) {
 			return ErrVideoInvalidRequest
 		}
-		var object map[string]json.RawMessage
-		if err := json.Unmarshal(value, &object); err != nil || object == nil {
+		schema, ok := videoProviderOptionSchema(provider)
+		if !ok {
 			return ErrVideoInvalidRequest
+		}
+		object, unique := decodeUniqueVideoJSONObject(value)
+		if !unique {
+			return ErrVideoInvalidRequest
+		}
+		for name, option := range object {
+			kind, allowed := schema[name]
+			if !allowed || !isValidVideoProviderOption(kind, option) {
+				return ErrVideoInvalidRequest
+			}
 		}
 		request.ProviderOptions[provider] = append(json.RawMessage(nil), value...)
 	}
 	return nil
+}
+
+func decodeUniqueVideoJSONObject(raw json.RawMessage) (map[string]json.RawMessage, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return nil, false
+	}
+
+	object := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, false
+		}
+		name, ok := token.(string)
+		if !ok {
+			return nil, false
+		}
+		if _, duplicate := object[name]; duplicate {
+			return nil, false
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, false
+		}
+		object[name] = append(json.RawMessage(nil), value...)
+	}
+
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return nil, false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, false
+	}
+	return object, true
+}
+
+type videoProviderOptionKind uint8
+
+const (
+	videoProviderOptionInteger videoProviderOptionKind = iota + 1
+	videoProviderOptionBoolean
+	videoProviderOptionString
+)
+
+func videoProviderOptionSchema(provider string) (map[string]videoProviderOptionKind, bool) {
+	switch provider {
+	case VideoProviderSeedance:
+		return map[string]videoProviderOptionKind{
+			"seed":              videoProviderOptionInteger,
+			"watermark":         videoProviderOptionBoolean,
+			"return_last_frame": videoProviderOptionBoolean,
+			"service_tier":      videoProviderOptionString,
+		}, true
+	default:
+		// New namespaces and keys must be added here only after their adapter
+		// contract has an explicit provider-side allowlist.
+		return nil, false
+	}
+}
+
+func isValidVideoProviderOption(kind videoProviderOptionKind, raw json.RawMessage) bool {
+	switch kind {
+	case videoProviderOptionInteger:
+		var value *int64
+		return json.Unmarshal(raw, &value) == nil && value != nil
+	case videoProviderOptionBoolean:
+		var value *bool
+		return json.Unmarshal(raw, &value) == nil && value != nil
+	case videoProviderOptionString:
+		var value *string
+		return json.Unmarshal(raw, &value) == nil && value != nil && !containsVideoCredential(*value)
+	default:
+		return false
+	}
 }
 
 func decodeVideoAssets(raw json.RawMessage) ([]VideoAsset, error) {
