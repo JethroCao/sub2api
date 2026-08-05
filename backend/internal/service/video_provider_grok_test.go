@@ -24,6 +24,16 @@ type recordingHTTPUpstream struct {
 	err       error
 }
 
+type grokVideoCloseTrackingBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *grokVideoCloseTrackingBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func (u *recordingHTTPUpstream) Do(req *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
 	u.requests = append(u.requests, req)
 	u.proxyURL = proxyURL
@@ -234,6 +244,26 @@ func TestGrokVideoProviderPollMapsUpstreamStatus(t *testing.T) {
 	}
 }
 
+func TestGrokVideoProviderPollRejectsRedirectStatusResponse(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	body := &grokVideoCloseTrackingBody{Reader: strings.NewReader(`{"status":"completed"}`)}
+	upstream := &recordingHTTPUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusFound,
+		Header:     http.Header{"Location": []string{"https://unexpected.example/videos/up_123"}},
+		Body:       body,
+	}}}
+	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
+
+	_, err := provider.Poll(context.Background(), grokAPIKeyAccount(), "up_123")
+
+	var providerErr VideoProviderError
+	require.ErrorAs(t, err, &providerErr)
+	require.Equal(t, "upstream_error", providerErr.Code)
+	require.False(t, providerErr.Retryable)
+	require.True(t, body.closed)
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[0].Context()))
+}
+
 func TestGrokVideoProviderClassifiesFailoverAndDoesNotRecoverAmbiguousSubmission(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusTooManyRequests, `{"error":{"message":"limited"}}`)}}
@@ -292,6 +322,34 @@ func TestGrokVideoProviderOpenContentPreservesRangeAndTemporaryVidgenURL(t *test
 	require.Equal(t, "https://vidgen.x.ai/signed-token/xai-video-task.mp4", upstream.requests[1].URL.String())
 	require.Empty(t, upstream.requests[1].Header.Get("Authorization"))
 	require.Equal(t, "bytes=0-12", upstream.requests[1].Header.Get("Range"))
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[1].Context()))
+}
+
+func TestGrokVideoProviderOpenContentRejectsRedirectContentResponse(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	redirectBody := &grokVideoCloseTrackingBody{Reader: strings.NewReader("redirect")}
+	upstream := &recordingHTTPUpstream{responses: []*http.Response{
+		grokVideoTestResponse(http.StatusOK, `{"status":"completed","video":{"url":"https://vidgen.x.ai/signed-token/xai-video-task.mp4"}}`),
+		{
+			StatusCode: http.StatusFound,
+			Header:     http.Header{"Location": []string{"https://unexpected.example/video.mp4"}},
+			Body:       redirectBody,
+		},
+	}}
+	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
+	upstreamID := "up_123"
+
+	body, headers, length, err := provider.OpenContent(context.Background(), grokAPIKeyAccount(), VideoTask{UpstreamTaskID: &upstreamID})
+
+	var providerErr VideoProviderError
+	require.ErrorAs(t, err, &providerErr)
+	require.Equal(t, "upstream_error", providerErr.Code)
+	require.False(t, providerErr.Retryable)
+	require.Nil(t, body)
+	require.Nil(t, headers)
+	require.Zero(t, length)
+	require.True(t, redirectBody.closed)
+	require.Len(t, upstream.requests, 2)
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[1].Context()))
 }
 

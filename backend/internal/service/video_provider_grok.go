@@ -86,7 +86,7 @@ func (p *GrokVideoProvider) Poll(ctx context.Context, account *Account, upstream
 	if upstreamTaskID == "" {
 		return VideoPollResult{}, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, errors.New("grok video task ID is required"))
 	}
-	body, _, err := p.doJSON(ctx, account, GrokMediaEndpointVideoStatus, upstreamTaskID, http.MethodGet, nil)
+	body, _, err := p.doJSON(WithHTTPUpstreamRedirectsDisabled(ctx), account, GrokMediaEndpointVideoStatus, upstreamTaskID, http.MethodGet, nil)
 	if err != nil {
 		return VideoPollResult{}, grokVideoProviderPollError(err)
 	}
@@ -173,7 +173,7 @@ func (p *GrokVideoProvider) OpenContent(ctx context.Context, account *Account, t
 	if err != nil {
 		return nil, nil, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_timeout", true, false, err)
 	}
-	if response.StatusCode >= http.StatusBadRequest && response.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+	if response.StatusCode >= http.StatusMultipleChoices && response.StatusCode != http.StatusRequestedRangeNotSatisfiable {
 		body := readGrokVideoResponse(response)
 		return nil, nil, 0, grokVideoProviderHTTPError(response.StatusCode, body, false)
 	}
@@ -303,7 +303,7 @@ func (p *GrokVideoProvider) doJSONWithToken(ctx context.Context, account *Accoun
 		return nil, nil, err
 	}
 	responseBody := readGrokVideoResponse(response)
-	if response.StatusCode >= http.StatusBadRequest {
+	if response.StatusCode >= http.StatusMultipleChoices {
 		return nil, nil, grokVideoProviderHTTPError(response.StatusCode, responseBody, false)
 	}
 	return responseBody, response.Header.Clone(), nil
