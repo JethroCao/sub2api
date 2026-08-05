@@ -20,19 +20,40 @@ func TestUsageBillingRepositoryVideoHoldPrecisionBoundaryLifecycle(t *testing.T)
 	billing := NewUsageBillingRepository(client, integrationDB)
 	taskRepo := NewVideoTaskRepository(integrationDB)
 
-	t.Run("half of legacy balance unit is quantized once", func(t *testing.T) {
-		task, _, user := createVideoBillingTask(t, client, taskRepo, "precision-half-unit", "balance", nil, 0.000000005, 0.00000001, nil, 0)
-		_, err := integrationDB.ExecContext(ctx, `UPDATE users SET balance = 0.00000001, frozen_balance = 0 WHERE id = $1`, user.ID)
+	t.Run("below half quantum becomes a zero hold", func(t *testing.T) {
+		task, _, user := createVideoBillingTask(t, client, taskRepo, "precision-below-half", "balance", nil, 0.000000004, 0.00000001, nil, 0)
+		var storedIsZero bool
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT frozen_amount = 0 FROM video_tasks WHERE request_id = $1`, task.RequestID).Scan(&storedIsZero))
+		require.True(t, storedIsZero)
+		_, err := billing.ReserveVideo(ctx, videoHoldCommand(task, service.VideoHoldRequestID(task.RequestID), 0))
 		require.NoError(t, err)
-		_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET frozen_amount = 0.0000000050 WHERE request_id = $1`, task.RequestID)
-		require.NoError(t, err)
+		assertVideoBalanceExact(t, user.ID, "0.00000001", "0")
+	})
 
-		_, err = billing.ReserveVideo(ctx, videoHoldCommand(task, service.VideoHoldRequestID(task.RequestID), 0))
+	t.Run("half quantum is stored and moved as one exact ledger unit", func(t *testing.T) {
+		task, _, user := createVideoBillingTask(t, client, taskRepo, "precision-half-unit", "balance", nil, 0.000000005, 0.00000001, nil, 0)
+		var storedIsOneUnit bool
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT frozen_amount = 0.00000001 FROM video_tasks WHERE request_id = $1`, task.RequestID).Scan(&storedIsOneUnit))
+		require.True(t, storedIsOneUnit)
+		_, err := billing.ReserveVideo(ctx, videoHoldCommand(task, service.VideoHoldRequestID(task.RequestID), 0))
 		require.NoError(t, err)
-		assertVideoBalanceExact(t, user.ID, "0.000000005", "0.000000005")
+		assertVideoBalanceExact(t, user.ID, "0", "0.00000001")
 		_, err = billing.ReleaseVideo(ctx, videoHoldCommand(task, service.VideoReleaseRequestID(task.RequestID), 0))
 		require.NoError(t, err)
 		assertVideoBalanceExact(t, user.ID, "0.00000001", "0")
+	})
+
+	t.Run("capture rounds actual once and enforces the canonical cap", func(t *testing.T) {
+		task, _, user := createVideoBillingTask(t, client, taskRepo, "precision-capture", "balance", nil, 0.000000005, 0.00000002, nil, 0)
+		require.NoError(t, reserveVideoTask(t, billing, task))
+		_, err := billing.CaptureVideo(ctx, videoHoldCommand(task, service.VideoCaptureRequestID(task.RequestID), 0.000000005))
+		require.NoError(t, err)
+		assertVideoBalanceExact(t, user.ID, "0.00000001", "0")
+
+		over, _, _ := createVideoBillingTask(t, client, taskRepo, "precision-capture-over", "balance", nil, 0.000000005, 0.00000002, nil, 0)
+		require.NoError(t, reserveVideoTask(t, billing, over))
+		_, err = billing.CaptureVideo(ctx, videoHoldCommand(over, service.VideoCaptureRequestID(over.RequestID), 0.000000015))
+		require.ErrorIs(t, err, service.ErrVideoFinalCostExceedsHold)
 	})
 
 	t.Run("large exact numeric never round trips through float", func(t *testing.T) {
@@ -49,6 +70,45 @@ func TestUsageBillingRepositoryVideoHoldPrecisionBoundaryLifecycle(t *testing.T)
 		_, err = billing.ReleaseVideo(ctx, videoHoldCommand(task, service.VideoReleaseRequestID(task.RequestID), 0))
 		require.NoError(t, err)
 		assertVideoBalanceExact(t, user.ID, exact, "0")
+	})
+}
+
+func TestUsageBillingRepositoryBatchImageRetainsScaleEightPrecisionBehavior(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("batch-precision-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash"})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-batch-precision-" + uuid.NewString(), Name: "batch-precision"})
+
+	t.Run("subquantum balance remains insufficient", func(t *testing.T) {
+		_, err := integrationDB.ExecContext(ctx, `UPDATE users SET balance = 0.000000004, frozen_balance = 0 WHERE id = $1`, user.ID)
+		require.NoError(t, err)
+		batchID := "imgbatch_precision_insufficient_" + uuid.NewString()
+		_, err = billing.ReserveBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID,
+			UserID: user.ID, BatchID: batchID, HoldAmount: 0.000000004,
+		})
+		require.ErrorIs(t, err, service.ErrBatchImageInsufficientBalance)
+		assertVideoBalanceExact(t, user.ID, "0", "0")
+	})
+
+	t.Run("half quantum lifecycle keeps legacy rounding", func(t *testing.T) {
+		_, err := integrationDB.ExecContext(ctx, `UPDATE users SET balance = 0.00000001, frozen_balance = 0 WHERE id = $1`, user.ID)
+		require.NoError(t, err)
+		batchID := "imgbatch_precision_release_" + uuid.NewString()
+		reserve := &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageHoldRequestID(batchID), APIKeyID: apiKey.ID,
+			UserID: user.ID, BatchID: batchID, HoldAmount: 0.000000005,
+		}
+		_, err = billing.ReserveBatchImageBalance(ctx, reserve)
+		require.NoError(t, err)
+		assertVideoBalanceExact(t, user.ID, "0.00000001", "0.00000001")
+		_, err = billing.ReleaseBatchImageBalance(ctx, &service.BatchImageBalanceHoldCommand{
+			RequestID: service.BatchImageReleaseRequestID(batchID), APIKeyID: apiKey.ID,
+			UserID: user.ID, BatchID: batchID, HoldAmount: 0.000000005,
+		})
+		require.NoError(t, err)
+		assertVideoBalanceExact(t, user.ID, "0.00000002", "0.00000001")
 	})
 }
 
@@ -225,6 +285,90 @@ func TestCreateVideoTaskAndReserveConcurrentReplayOfUnheldTaskDoesNotDeadlock(t 
 		require.Equal(t, preexisting.RequestID, result.task.RequestID)
 	}
 	assertVideoBalanceExact(t, user.ID, "8", "2")
+}
+
+func TestStandaloneReserveAndAtomicReplayUseOneTaskBeforeClaimLockOrder(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := testEntClient(t)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("video-cross-entry-lock-%d@example.com", time.Now().UnixNano()), PasswordHash: "hash", Balance: 10})
+	group := mustCreateGroup(t, client, &service.Group{Name: "video-cross-entry-lock-" + uuid.NewString(), Platform: service.PlatformVideo, SubscriptionType: service.SubscriptionTypeStandard, AllowVideoGeneration: true})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, GroupID: &group.ID, Key: "sk-video-cross-entry-lock-" + uuid.NewString(), Name: "video-cross-entry-lock"})
+	account := mustCreateAccount(t, client, &service.Account{Name: "video-cross-entry-lock-" + uuid.NewString(), Platform: service.PlatformVideo})
+	params := videoTaskCreateParams(t, "cross-entry-unheld-replay", videoTaskHash("cross-entry-unheld-replay-"+t.Name()))
+	params.UserID, params.APIKeyID, params.GroupID, params.AccountID = user.ID, apiKey.ID, group.ID, account.ID
+	params.FrozenAmount, params.EstimatedAmount = 2, 2
+	preexisting, created, err := NewVideoTaskRepository(integrationDB).CreateOrGet(ctx, params)
+	require.NoError(t, err)
+	require.True(t, created)
+	cleanupVideoTask(t, preexisting.RequestID)
+	installVideoHoldClaimAdvisoryPauseTrigger(t, apiKey.ID)
+
+	standaloneErr := make(chan error, 1)
+	go func() {
+		_, reserveErr := billing.ReserveVideo(ctx, videoHoldCommand(preexisting, service.VideoHoldRequestID(preexisting.RequestID), 0))
+		standaloneErr <- reserveErr
+	}()
+	waitForVideoHoldClaimAdvisoryLock(t, ctx)
+
+	atomicErr := make(chan error, 1)
+	go func() {
+		_, _, reserveErr := NewVideoTaskRepository(integrationDB).CreateTaskAndReserve(ctx, params)
+		atomicErr <- reserveErr
+	}()
+	require.NoError(t, <-standaloneErr)
+	require.NoError(t, <-atomicErr)
+	assertVideoBalanceExact(t, user.ID, "8", "2")
+}
+
+const (
+	videoHoldTestAdvisoryClass = 42
+	videoHoldTestAdvisoryKey   = 610062
+)
+
+func installVideoHoldClaimAdvisoryPauseTrigger(t *testing.T, apiKeyID int64) {
+	t.Helper()
+	_, err := integrationDB.ExecContext(context.Background(), fmt.Sprintf(`
+		CREATE OR REPLACE FUNCTION video_hold_claim_advisory_pause_test()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.api_key_id = %d AND NEW.request_id LIKE 'video_hold:%%' THEN
+				PERFORM pg_advisory_xact_lock(%d, %d);
+				PERFORM pg_sleep(1.25);
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER trg_video_hold_claim_advisory_pause_test
+		BEFORE INSERT ON usage_billing_dedup
+		FOR EACH ROW EXECUTE FUNCTION video_hold_claim_advisory_pause_test();
+	`, apiKeyID, videoHoldTestAdvisoryClass, videoHoldTestAdvisoryKey))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS trg_video_hold_claim_advisory_pause_test ON usage_billing_dedup`)
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP FUNCTION IF EXISTS video_hold_claim_advisory_pause_test()`)
+	})
+}
+
+func waitForVideoHoldClaimAdvisoryLock(t *testing.T, ctx context.Context) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var held bool
+		err := integrationDB.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_locks
+				WHERE locktype = 'advisory' AND classid = $1 AND objid = $2 AND granted
+			)
+		`, videoHoldTestAdvisoryClass, videoHoldTestAdvisoryKey).Scan(&held)
+		require.NoError(t, err)
+		if held {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("standalone reserve did not enter the billing-claim trigger")
 }
 
 func installVideoHoldClaimOverlapTrigger(t *testing.T, apiKeyID int64) {

@@ -103,7 +103,7 @@ INSERT INTO video_tasks (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11,
     $12, $13, $14,
-    $15, $16, $17, $18, $19,
+    $15, $16, $17, ROUND($18::numeric, 8), ROUND($19::numeric, 8),
     $20, $21, $22
 )
 ON CONFLICT (user_id, api_key_id, operation, idempotency_key_hash)
@@ -387,7 +387,7 @@ func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.Ma
 	}
 	_, err = tx.ExecContext(ctx, `
 UPDATE video_tasks
-SET settled_amount = $3, billing_status = $4, billing_reference = $5,
+SET settled_amount = ROUND($3::numeric, 8), billing_status = $4, billing_reference = $5,
     settlement_attempts = settlement_attempts + 1, settled_at = COALESCE(settled_at, $6),
     version = version + 1, updated_at = $6
 WHERE request_id = $1 AND version = $2 AND status IN ('succeeded', 'failed', 'cancelled')

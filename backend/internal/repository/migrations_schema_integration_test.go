@@ -45,8 +45,11 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	// users: columns required by repository queries
 	requireColumn(t, tx, "users", "username", "character varying", 100, false)
 	requireColumn(t, tx, "users", "notes", "text", 0, false)
-	requireNumericColumn(t, tx, "users", "balance", 22, 10)
-	requireNumericColumn(t, tx, "users", "frozen_balance", 22, 10)
+	requireNumericColumn(t, tx, "users", "balance", 20, 8)
+	requireNumericColumn(t, tx, "users", "frozen_balance", 20, 8)
+	requireNumericColumn(t, tx, "video_tasks", "estimated_amount", 20, 8)
+	requireNumericColumn(t, tx, "video_tasks", "frozen_amount", 20, 8)
+	requireNumericColumn(t, tx, "video_tasks", "settled_amount", 20, 8)
 
 	// accounts: schedulable and rate-limit fields
 	requireColumn(t, tx, "accounts", "notes", "text", 0, true)

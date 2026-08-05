@@ -242,17 +242,16 @@ func applyVideoHoldInTx(
 		return nil, err
 	}
 	cmd.Normalize()
+	hold, err := lockStoredVideoHold(ctx, tx, cmd)
+	if err != nil {
+		return nil, err
+	}
 	applied, err := claimUsageBillingRequest(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
 	if err != nil {
 		return nil, err
 	}
 	if !applied {
 		return &service.VideoHoldResult{Applied: false}, nil
-	}
-
-	hold, err := lockStoredVideoHold(ctx, tx, cmd)
-	if err != nil {
-		return nil, err
 	}
 	if mutation != reserveVideoHold {
 		held, err := usageBillingClaimExists(ctx, tx, service.VideoHoldRequestID(cmd.VideoRequestID), cmd.APIKeyID)
@@ -330,7 +329,7 @@ func lockStoredVideoHold(ctx context.Context, tx *sql.Tx, cmd *service.VideoHold
 	var subscriptionID sql.NullInt64
 	err := tx.QueryRowContext(ctx, `
 		SELECT request_id, user_id, api_key_id, subscription_id, group_id, billing_mode,
-		       $2::numeric <= frozen_amount
+		       ROUND($2::numeric, 8) <= frozen_amount
 		FROM video_tasks
 		WHERE request_id = $1
 		FOR UPDATE
@@ -384,14 +383,14 @@ func mutateVideoBalanceHold(
 	case captureVideoHold:
 		err = tx.QueryRowContext(ctx, `
 			UPDATE users AS u
-			SET balance = u.balance + vt.frozen_amount - $2::numeric,
+			SET balance = u.balance + vt.frozen_amount - ROUND($2::numeric, 8),
 				frozen_balance = COALESCE(u.frozen_balance, 0) - vt.frozen_amount,
 				updated_at = NOW()
 			FROM video_tasks AS vt
 			WHERE vt.request_id = $1 AND u.id = $3 AND u.id = vt.user_id
 			  AND u.deleted_at IS NULL
 			  AND COALESCE(u.frozen_balance, 0) >= vt.frozen_amount
-			  AND $2::numeric <= vt.frozen_amount
+			  AND ROUND($2::numeric, 8) <= vt.frozen_amount
 			RETURNING u.balance, u.frozen_balance
 		`, hold.RequestID, actualAmount, hold.UserID).Scan(&balance, &frozen)
 	case releaseVideoHold:
@@ -458,14 +457,14 @@ func mutateVideoSubscriptionHold(
 		err = tx.QueryRowContext(ctx, `
 			UPDATE user_subscriptions AS us
 			SET frozen_quota = us.frozen_quota - vt.frozen_amount,
-				daily_usage_usd = daily_usage_usd + $2,
-				weekly_usage_usd = weekly_usage_usd + $2,
-				monthly_usage_usd = monthly_usage_usd + $2,
+				daily_usage_usd = daily_usage_usd + ROUND($2::numeric, 8),
+				weekly_usage_usd = weekly_usage_usd + ROUND($2::numeric, 8),
+				monthly_usage_usd = monthly_usage_usd + ROUND($2::numeric, 8),
 				updated_at = NOW()
 			FROM video_tasks AS vt
 			WHERE vt.request_id = $1 AND us.id = $3 AND us.user_id = $4
 			  AND us.frozen_quota >= vt.frozen_amount
-			  AND $2::numeric <= vt.frozen_amount
+			  AND ROUND($2::numeric, 8) <= vt.frozen_amount
 			RETURNING us.frozen_quota
 		`, hold.RequestID, actualAmount, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
 	} else {

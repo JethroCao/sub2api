@@ -1,6 +1,7 @@
--- Align the balance ledger with the ten-decimal video/subscription ledger.
--- Precision 22 preserves the legacy twelve-digit integer range of DECIMAL(20,8).
+-- Canonicalize video charges to the existing user-ledger quantum without
+-- changing batch-image balance behavior on the shared DECIMAL(20,8) ledger.
 
-ALTER TABLE users
-    ALTER COLUMN balance TYPE DECIMAL(22,10) USING balance::DECIMAL(22,10),
-    ALTER COLUMN frozen_balance TYPE DECIMAL(22,10) USING frozen_balance::DECIMAL(22,10);
+ALTER TABLE video_tasks
+    ALTER COLUMN estimated_amount TYPE DECIMAL(20,8) USING ROUND(estimated_amount, 8),
+    ALTER COLUMN frozen_amount TYPE DECIMAL(20,8) USING ROUND(frozen_amount, 8),
+    ALTER COLUMN settled_amount TYPE DECIMAL(20,8) USING ROUND(settled_amount, 8);
