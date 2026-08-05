@@ -38,7 +38,7 @@ func (r *videoTaskRepository) CreateOrGet(ctx context.Context, params service.Cr
 		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	task, created, err := createOrGetVideoTask(ctx, tx, params, requestID)
+	task, created, err := createOrGetVideoTask(ctx, tx, params, requestID, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -62,7 +62,7 @@ func (r *videoTaskRepository) CreateTaskAndReserve(ctx context.Context, params s
 		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	task, created, err := createOrGetVideoTask(ctx, tx, params, requestID)
+	task, created, err := createOrGetVideoTask(ctx, tx, params, requestID, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -90,6 +90,7 @@ func createOrGetVideoTask(
 	tx *sql.Tx,
 	params service.CreateVideoTaskParams,
 	requestID string,
+	lockReplayForUpdate bool,
 ) (*service.VideoTask, bool, error) {
 	task, err := scanVideoTask(tx.QueryRowContext(ctx, `
 INSERT INTO video_tasks (
@@ -115,11 +116,20 @@ RETURNING `+videoTaskColumns, requestID, params.UserID, params.APIKeyID, params.
 		params.EstimatedUnits, params.EstimatedAmount, params.FrozenAmount, params.Currency,
 		params.BillingMode, params.BillingStatus))
 	created := err == nil
+	if created {
+		if err := validateVideoTaskBillingOwnership(ctx, tx, params); err != nil {
+			return nil, false, err
+		}
+	}
 	if errors.Is(err, sql.ErrNoRows) && params.IdempotencyKeyHash != "" {
+		lockClause := "FOR SHARE"
+		if lockReplayForUpdate {
+			lockClause = "FOR UPDATE"
+		}
 		task, err = scanVideoTask(tx.QueryRowContext(ctx, `SELECT `+videoTaskColumns+`
 FROM video_tasks
 WHERE user_id = $1 AND api_key_id = $2 AND operation = $3 AND idempotency_key_hash = $4
-FOR SHARE`, params.UserID, params.APIKeyID, params.Operation, params.IdempotencyKeyHash))
+`+lockClause, params.UserID, params.APIKeyID, params.Operation, params.IdempotencyKeyHash))
 		if err == nil && task.RequestHash != params.RequestHash {
 			return nil, false, service.ErrVideoIdempotencyConflict
 		}
@@ -536,6 +546,7 @@ func checkVideoMutationResult(ctx context.Context, sqlq interface {
 
 func normalizeCreateVideoTaskParams(params service.CreateVideoTaskParams) (service.CreateVideoTaskParams, error) {
 	params.Currency = strings.TrimSpace(params.Currency)
+	params.BillingMode = strings.ToLower(strings.TrimSpace(params.BillingMode))
 	if params.Currency == "" {
 		params.Currency = "USD"
 	}
@@ -555,11 +566,30 @@ func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
 		(params.IdempotencyKeyHash != "" && !videoTaskSHA256Pattern.MatchString(params.IdempotencyKeyHash)) ||
 		!isFiniteNonNegativeVideoAmount(params.UnitPrice) || !isFiniteNonNegativeVideoAmount(params.EstimatedUnits) ||
 		!isFiniteNonNegativeVideoAmount(params.EstimatedAmount) || !isFiniteNonNegativeVideoAmount(params.FrozenAmount) ||
-		strings.TrimSpace(params.PricingUnit) == "" || strings.TrimSpace(params.Currency) == "" || strings.TrimSpace(params.BillingMode) == "" ||
+		strings.TrimSpace(params.PricingUnit) == "" || strings.TrimSpace(params.Currency) == "" ||
+		(params.BillingMode != "balance" && params.BillingMode != "subscription") ||
+		(params.BillingMode == "balance" && params.SubscriptionID != nil) ||
+		(params.BillingMode == "subscription" && (params.SubscriptionID == nil || *params.SubscriptionID <= 0)) ||
 		strings.TrimSpace(params.BillingStatus) == "" {
 		return service.ErrVideoTaskInvalidRequest
 	}
 	return nil
+}
+
+func validateVideoTaskBillingOwnership(ctx context.Context, tx *sql.Tx, params service.CreateVideoTaskParams) error {
+	if params.BillingMode != "subscription" {
+		return nil
+	}
+	var exists int
+	err := tx.QueryRowContext(ctx, `
+		SELECT 1
+		FROM user_subscriptions
+		WHERE id = $1 AND user_id = $2 AND group_id = $3 AND deleted_at IS NULL
+	`, *params.SubscriptionID, params.UserID, params.GroupID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	return err
 }
 
 func validateVideoRequestID(requestID string) error {

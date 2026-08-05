@@ -38,6 +38,12 @@ func ProvidePricingRemoteClient(cfg *config.Config) service.PricingRemoteClient 
 	return NewPricingRemoteClient(cfg.Update.ProxyURL, cfg.Security.ProxyFallback.AllowDirectOnError)
 }
 
+// ProvideVideoSubmissionRepository exposes the deliberately narrow submission
+// contract without requiring Wire consumers to depend on the full task store.
+func ProvideVideoSubmissionRepository(repo service.VideoTaskRepository) service.VideoSubmissionRepository {
+	return repo
+}
+
 // ProvideSessionLimitCache 创建会话限制缓存
 // 用于 Anthropic OAuth/SetupToken 账号的并发会话数量控制
 func ProvideSessionLimitCache(rdb *redis.Client, cfg *config.Config) service.SessionLimitCache {
@@ -83,6 +89,7 @@ var ProviderSet = wire.NewSet(
 	NewUsageBillingRepository,
 	NewBatchImageRepository,
 	NewVideoTaskRepository,
+	ProvideVideoSubmissionRepository,
 	NewVideoPricingRepository,
 	NewIdempotencyRepository,
 	NewUsageCleanupRepository,

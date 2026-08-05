@@ -180,12 +180,13 @@ const (
 )
 
 type storedVideoHold struct {
-	UserID         int64
-	APIKeyID       int64
-	SubscriptionID *int64
-	GroupID        int64
-	BillingMode    string
-	Amount         float64
+	RequestID        string
+	UserID           int64
+	APIKeyID         int64
+	SubscriptionID   *int64
+	GroupID          int64
+	BillingMode      string
+	ActualWithinHold bool
 }
 
 func (r *usageBillingRepository) ReserveVideo(ctx context.Context, cmd *service.VideoHoldCommand) (*service.VideoHoldResult, error) {
@@ -237,7 +238,7 @@ func applyVideoHoldInTx(
 	cmd *service.VideoHoldCommand,
 	mutation videoHoldMutation,
 ) (*service.VideoHoldResult, error) {
-	if err := validateVideoHoldCommand(cmd); err != nil {
+	if err := validateVideoHoldCommand(cmd, mutation); err != nil {
 		return nil, err
 	}
 	cmd.Normalize()
@@ -273,7 +274,7 @@ func applyVideoHoldInTx(
 			return nil, service.ErrVideoBillingAlreadyFinalized
 		}
 	}
-	if mutation == captureVideoHold && cmd.ActualAmount > hold.Amount {
+	if mutation == captureVideoHold && !hold.ActualWithinHold {
 		return nil, service.ErrVideoFinalCostExceedsHold
 	}
 
@@ -296,13 +297,23 @@ func applyVideoHoldInTx(
 	return result, nil
 }
 
-func validateVideoHoldCommand(cmd *service.VideoHoldCommand) error {
+func validateVideoHoldCommand(cmd *service.VideoHoldCommand, mutation videoHoldMutation) error {
 	if cmd == nil {
 		return service.ErrVideoTaskInvalidRequest
 	}
 	cmd.Normalize()
 	if cmd.RequestID == "" {
 		return service.ErrUsageBillingRequestIDRequired
+	}
+	expectedRequestID := service.VideoHoldRequestID(cmd.VideoRequestID)
+	switch mutation {
+	case captureVideoHold:
+		expectedRequestID = service.VideoCaptureRequestID(cmd.VideoRequestID)
+	case releaseVideoHold:
+		expectedRequestID = service.VideoReleaseRequestID(cmd.VideoRequestID)
+	}
+	if cmd.RequestID != expectedRequestID {
+		return service.ErrVideoTaskInvalidRequest
 	}
 	if cmd.UserID <= 0 || cmd.APIKeyID <= 0 || !service.IsVideoRequestID(cmd.VideoRequestID) ||
 		cmd.HoldAmount < 0 || math.IsNaN(cmd.HoldAmount) || math.IsInf(cmd.HoldAmount, 0) ||
@@ -318,17 +329,19 @@ func lockStoredVideoHold(ctx context.Context, tx *sql.Tx, cmd *service.VideoHold
 	var hold storedVideoHold
 	var subscriptionID sql.NullInt64
 	err := tx.QueryRowContext(ctx, `
-		SELECT user_id, api_key_id, subscription_id, group_id, billing_mode, frozen_amount
+		SELECT request_id, user_id, api_key_id, subscription_id, group_id, billing_mode,
+		       $2::numeric <= frozen_amount
 		FROM video_tasks
 		WHERE request_id = $1
 		FOR UPDATE
-	`, cmd.VideoRequestID).Scan(
+	`, cmd.VideoRequestID, cmd.ActualAmount).Scan(
+		&hold.RequestID,
 		&hold.UserID,
 		&hold.APIKeyID,
 		&subscriptionID,
 		&hold.GroupID,
 		&hold.BillingMode,
-		&hold.Amount,
+		&hold.ActualWithinHold,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrVideoTaskNotFound
@@ -355,53 +368,57 @@ func mutateVideoBalanceHold(
 	mutation videoHoldMutation,
 ) (*service.VideoHoldResult, error) {
 	var balance, frozen float64
-	err := tx.QueryRowContext(ctx, `
-		SELECT balance, COALESCE(frozen_balance, 0)
-		FROM users
-		WHERE id = $1 AND deleted_at IS NULL
-		FOR UPDATE
-	`, hold.UserID).Scan(&balance, &frozen)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrUserNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	switch mutation {
 	case reserveVideoHold:
-		if balance < hold.Amount {
-			return nil, service.ErrVideoInsufficientBalance
-		}
 		err = tx.QueryRowContext(ctx, `
-			UPDATE users
-			SET balance = balance - $1,
-				frozen_balance = COALESCE(frozen_balance, 0) + $1,
+			UPDATE users AS u
+			SET balance = u.balance - vt.frozen_amount,
+				frozen_balance = COALESCE(u.frozen_balance, 0) + vt.frozen_amount,
 				updated_at = NOW()
-			WHERE id = $2 AND deleted_at IS NULL
-			RETURNING balance, frozen_balance
-		`, hold.Amount, hold.UserID).Scan(&balance, &frozen)
+			FROM video_tasks AS vt
+			WHERE vt.request_id = $1 AND u.id = $2 AND u.id = vt.user_id
+			  AND u.deleted_at IS NULL AND u.balance >= vt.frozen_amount
+			RETURNING u.balance, u.frozen_balance
+		`, hold.RequestID, hold.UserID).Scan(&balance, &frozen)
 	case captureVideoHold:
 		err = tx.QueryRowContext(ctx, `
-			UPDATE users
-			SET balance = balance + $1 - $2,
-				frozen_balance = COALESCE(frozen_balance, 0) - $1,
+			UPDATE users AS u
+			SET balance = u.balance + vt.frozen_amount - $2::numeric,
+				frozen_balance = COALESCE(u.frozen_balance, 0) - vt.frozen_amount,
 				updated_at = NOW()
-			WHERE id = $3 AND deleted_at IS NULL
-			  AND COALESCE(frozen_balance, 0) >= $1
-			RETURNING balance, frozen_balance
-		`, hold.Amount, actualAmount, hold.UserID).Scan(&balance, &frozen)
+			FROM video_tasks AS vt
+			WHERE vt.request_id = $1 AND u.id = $3 AND u.id = vt.user_id
+			  AND u.deleted_at IS NULL
+			  AND COALESCE(u.frozen_balance, 0) >= vt.frozen_amount
+			  AND $2::numeric <= vt.frozen_amount
+			RETURNING u.balance, u.frozen_balance
+		`, hold.RequestID, actualAmount, hold.UserID).Scan(&balance, &frozen)
 	case releaseVideoHold:
 		err = tx.QueryRowContext(ctx, `
-			UPDATE users
-			SET balance = balance + $1,
-				frozen_balance = COALESCE(frozen_balance, 0) - $1,
+			UPDATE users AS u
+			SET balance = u.balance + vt.frozen_amount,
+				frozen_balance = COALESCE(u.frozen_balance, 0) - vt.frozen_amount,
 				updated_at = NOW()
-			WHERE id = $2 AND deleted_at IS NULL
-			  AND COALESCE(frozen_balance, 0) >= $1
-			RETURNING balance, frozen_balance
-		`, hold.Amount, hold.UserID).Scan(&balance, &frozen)
+			FROM video_tasks AS vt
+			WHERE vt.request_id = $1 AND u.id = $2 AND u.id = vt.user_id
+			  AND u.deleted_at IS NULL
+			  AND COALESCE(u.frozen_balance, 0) >= vt.frozen_amount
+			RETURNING u.balance, u.frozen_balance
+		`, hold.RequestID, hold.UserID).Scan(&balance, &frozen)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
+		if mutation == reserveVideoHold {
+			var exists int
+			existsErr := tx.QueryRowContext(ctx, `SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL`, hold.UserID).Scan(&exists)
+			if errors.Is(existsErr, sql.ErrNoRows) {
+				return nil, service.ErrUserNotFound
+			}
+			if existsErr != nil {
+				return nil, existsErr
+			}
+			return nil, service.ErrVideoInsufficientBalance
+		}
 		return nil, errors.New("video frozen balance is insufficient")
 	}
 	if err != nil {
@@ -424,12 +441,13 @@ func mutateVideoSubscriptionHold(
 		return reserveVideoSubscriptionHold(ctx, tx, hold)
 	}
 	var frozen float64
+	var exists int
 	err := tx.QueryRowContext(ctx, `
-		SELECT frozen_quota
+		SELECT 1
 		FROM user_subscriptions
 		WHERE id = $1 AND user_id = $2
 		FOR UPDATE
-	`, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
+	`, *hold.SubscriptionID, hold.UserID).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrSubscriptionNotFound
 	}
@@ -438,22 +456,27 @@ func mutateVideoSubscriptionHold(
 	}
 	if mutation == captureVideoHold {
 		err = tx.QueryRowContext(ctx, `
-			UPDATE user_subscriptions
-			SET frozen_quota = frozen_quota - $1,
+			UPDATE user_subscriptions AS us
+			SET frozen_quota = us.frozen_quota - vt.frozen_amount,
 				daily_usage_usd = daily_usage_usd + $2,
 				weekly_usage_usd = weekly_usage_usd + $2,
 				monthly_usage_usd = monthly_usage_usd + $2,
 				updated_at = NOW()
-			WHERE id = $3 AND user_id = $4 AND frozen_quota >= $1
-			RETURNING frozen_quota
-		`, hold.Amount, actualAmount, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
+			FROM video_tasks AS vt
+			WHERE vt.request_id = $1 AND us.id = $3 AND us.user_id = $4
+			  AND us.frozen_quota >= vt.frozen_amount
+			  AND $2::numeric <= vt.frozen_amount
+			RETURNING us.frozen_quota
+		`, hold.RequestID, actualAmount, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
 	} else {
 		err = tx.QueryRowContext(ctx, `
-			UPDATE user_subscriptions
-			SET frozen_quota = frozen_quota - $1, updated_at = NOW()
-			WHERE id = $2 AND user_id = $3 AND frozen_quota >= $1
-			RETURNING frozen_quota
-		`, hold.Amount, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
+			UPDATE user_subscriptions AS us
+			SET frozen_quota = us.frozen_quota - vt.frozen_amount, updated_at = NOW()
+			FROM video_tasks AS vt
+			WHERE vt.request_id = $1 AND us.id = $2 AND us.user_id = $3
+			  AND us.frozen_quota >= vt.frozen_amount
+			RETURNING us.frozen_quota
+		`, hold.RequestID, *hold.SubscriptionID, hold.UserID).Scan(&frozen)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errors.New("video subscription frozen quota is insufficient")
@@ -470,18 +493,19 @@ func reserveVideoSubscriptionHold(ctx context.Context, tx *sql.Tx, hold *storedV
 	err := tx.QueryRowContext(ctx, `
 		SELECT us.frozen_quota,
 		       (g.daily_limit_usd IS NULL OR g.daily_limit_usd <= 0
-		        OR us.daily_usage_usd + us.frozen_quota + $5 <= g.daily_limit_usd)
+		        OR us.daily_usage_usd + us.frozen_quota + vt.frozen_amount <= g.daily_limit_usd)
 		       AND (g.weekly_limit_usd IS NULL OR g.weekly_limit_usd <= 0
-		        OR us.weekly_usage_usd + us.frozen_quota + $5 <= g.weekly_limit_usd)
+		        OR us.weekly_usage_usd + us.frozen_quota + vt.frozen_amount <= g.weekly_limit_usd)
 		       AND (g.monthly_limit_usd IS NULL OR g.monthly_limit_usd <= 0
-		        OR us.monthly_usage_usd + us.frozen_quota + $5 <= g.monthly_limit_usd)
+		        OR us.monthly_usage_usd + us.frozen_quota + vt.frozen_amount <= g.monthly_limit_usd)
 		FROM user_subscriptions AS us
 		JOIN groups AS g ON g.id = us.group_id
+		JOIN video_tasks AS vt ON vt.request_id = $5 AND vt.subscription_id = us.id
 		WHERE us.id = $1 AND us.user_id = $2 AND us.group_id = $3
 		  AND us.deleted_at IS NULL AND us.status = $4 AND us.expires_at > NOW()
 		  AND g.deleted_at IS NULL
 		FOR UPDATE OF us, g
-	`, *hold.SubscriptionID, hold.UserID, hold.GroupID, service.SubscriptionStatusActive, hold.Amount).Scan(&frozen, &sufficient)
+	`, *hold.SubscriptionID, hold.UserID, hold.GroupID, service.SubscriptionStatusActive, hold.RequestID).Scan(&frozen, &sufficient)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrSubscriptionNotFound
 	}
@@ -492,11 +516,12 @@ func reserveVideoSubscriptionHold(ctx context.Context, tx *sql.Tx, hold *storedV
 		return nil, service.ErrVideoSubscriptionQuotaExceeded
 	}
 	if err := tx.QueryRowContext(ctx, `
-		UPDATE user_subscriptions
-		SET frozen_quota = frozen_quota + $1, updated_at = NOW()
-		WHERE id = $2 AND user_id = $3
-		RETURNING frozen_quota
-	`, hold.Amount, *hold.SubscriptionID, hold.UserID).Scan(&frozen); err != nil {
+		UPDATE user_subscriptions AS us
+		SET frozen_quota = us.frozen_quota + vt.frozen_amount, updated_at = NOW()
+		FROM video_tasks AS vt
+		WHERE vt.request_id = $1 AND us.id = $2 AND us.user_id = $3
+		RETURNING us.frozen_quota
+	`, hold.RequestID, *hold.SubscriptionID, hold.UserID).Scan(&frozen); err != nil {
 		return nil, err
 	}
 	return &service.VideoHoldResult{FrozenQuota: &frozen}, nil

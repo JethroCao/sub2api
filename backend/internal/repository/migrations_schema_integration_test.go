@@ -45,6 +45,8 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	// users: columns required by repository queries
 	requireColumn(t, tx, "users", "username", "character varying", 100, false)
 	requireColumn(t, tx, "users", "notes", "text", 0, false)
+	requireNumericColumn(t, tx, "users", "balance", 22, 10)
+	requireNumericColumn(t, tx, "users", "frozen_balance", 22, 10)
 
 	// accounts: schedulable and rate-limit fields
 	requireColumn(t, tx, "accounts", "notes", "text", 0, true)
@@ -352,4 +354,19 @@ WHERE table_schema = 'public'
 	} else {
 		require.Equal(t, "NO", row.Nullable, "nullable mismatch for %s.%s", table, column)
 	}
+}
+
+func requireNumericColumn(t *testing.T, tx *sql.Tx, table, column string, precision, scale int) {
+	t.Helper()
+	var actualType string
+	var actualPrecision, actualScale sql.NullInt64
+	err := tx.QueryRowContext(context.Background(), `
+		SELECT data_type, numeric_precision, numeric_scale
+		FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+	`, table, column).Scan(&actualType, &actualPrecision, &actualScale)
+	require.NoError(t, err)
+	require.Equal(t, "numeric", actualType)
+	require.Equal(t, int64(precision), actualPrecision.Int64)
+	require.Equal(t, int64(scale), actualScale.Int64)
 }

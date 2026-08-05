@@ -47,3 +47,12 @@ func TestUnifiedVideoSubscriptionHoldMigration(t *testing.T) {
 	require.Contains(t, sql, "frozen_quota DECIMAL(20,10) NOT NULL DEFAULT 0")
 	require.Contains(t, sql, "CHECK (frozen_quota >= 0)")
 }
+
+func TestUnifiedVideoBillingAmountsUseOneExactScale(t *testing.T) {
+	precision, err := FS.ReadFile("198_unified_video_billing_precision.sql")
+	require.NoError(t, err)
+	sql := string(precision)
+	require.Contains(t, sql, "ALTER COLUMN balance TYPE DECIMAL(22,10)")
+	require.Contains(t, sql, "ALTER COLUMN frozen_balance TYPE DECIMAL(22,10)")
+	require.Contains(t, sql, "preserves the legacy twelve-digit integer range")
+}
