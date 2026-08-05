@@ -199,7 +199,12 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	}
 
 	// 执行请求
-	client := httpClientForUpstreamRequest(entry.client, req)
+	client, err := httpClientForUpstreamRequest(entry.client, req)
+	if err != nil {
+		atomic.AddInt64(&entry.inFlight, -1)
+		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
+		return nil, err
+	}
 	client = httpClientWithGrokAccessDeniedFallback(client)
 	resp, err := servertiming.Do(client, req)
 	if err != nil {
@@ -263,7 +268,12 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 		return nil, err
 	}
 
-	client := httpClientForUpstreamRequest(entry.client, req)
+	client, err := httpClientForUpstreamRequest(entry.client, req)
+	if err != nil {
+		atomic.AddInt64(&entry.inFlight, -1)
+		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
+		return nil, err
+	}
 	client = httpClientWithGrokAccessDeniedFallback(client)
 	resp, err := servertiming.Do(client, req)
 	if err != nil {
@@ -283,15 +293,34 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	return resp, nil
 }
 
-func httpClientForUpstreamRequest(client *http.Client, req *http.Request) *http.Client {
-	if client == nil || req == nil || !service.HTTPUpstreamRedirectsDisabled(req.Context()) {
-		return client
+func httpClientForUpstreamRequest(client *http.Client, req *http.Request) (*http.Client, error) {
+	if client == nil || req == nil {
+		return client, nil
+	}
+	dial, requireBoundDial := service.HTTPUpstreamValidatedDialContextFromContext(req.Context())
+	if !service.HTTPUpstreamRedirectsDisabled(req.Context()) && !requireBoundDial {
+		return client, nil
 	}
 	clone := *client
-	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
+	if service.HTTPUpstreamRedirectsDisabled(req.Context()) {
+		clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
 	}
-	return &clone
+	if !requireBoundDial {
+		return &clone, nil
+	}
+	transport, ok := clone.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		return nil, errors.New("validated destination dial requires an HTTP transport")
+	}
+	if transport.Proxy != nil || transport.DialContext != nil || transport.DialTLSContext != nil {
+		return nil, errors.New("validated destination dial cannot use a proxy or custom dialer")
+	}
+	transport = transport.Clone()
+	transport.DialContext = dial
+	clone.Transport = transport
+	return &clone, nil
 }
 
 // grokAccessDeniedFallbackTransport preserves the subscription CLI proxy as
@@ -568,15 +597,24 @@ func (s *httpUpstreamService) shouldValidateResolvedIP() bool {
 }
 
 func (s *httpUpstreamService) validateRequestHost(req *http.Request) error {
-	if !s.shouldValidateResolvedIP() {
+	if req == nil || req.URL == nil {
+		if s.shouldValidateResolvedIP() {
+			return errors.New("request url is nil")
+		}
 		return nil
 	}
-	if req == nil || req.URL == nil {
-		return errors.New("request url is nil")
+	if !s.shouldValidateResolvedIP() && !service.HTTPUpstreamResolvedIPValidationRequired(req.Context()) {
+		return nil
 	}
 	host := strings.TrimSpace(req.URL.Hostname())
 	if host == "" {
 		return errors.New("request host is empty")
+	}
+	// A marked request with a bound dial context resolves, validates, and dials
+	// one IP in the same operation. A separate preflight lookup here would be
+	// stale by construction and can also fail before that secure dial executes.
+	if _, bound := service.HTTPUpstreamValidatedDialContextFromContext(req.Context()); bound {
+		return nil
 	}
 	if err := urlvalidator.ValidateResolvedIP(host); err != nil {
 		return err

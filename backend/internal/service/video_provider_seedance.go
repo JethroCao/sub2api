@@ -27,27 +27,29 @@ const (
 // contract. It purposefully exposes only generation until verified task API
 // fixtures exist for edit and extension operations.
 type SeedanceVideoProvider struct {
-	upstream HTTPUpstream
+	upstream           HTTPUpstream
+	validateResolvedIP SeedanceResolvedIPValidator
+	dialContext        HTTPUpstreamDialContext
 }
 
-func NewSeedanceVideoProvider(upstream HTTPUpstream) *SeedanceVideoProvider {
-	return &SeedanceVideoProvider{upstream: upstream}
+// SeedanceResolvedIPValidator validates a hostname at the adapter boundary.
+// The shared HTTP upstream repeats the same check before its real request.
+type SeedanceResolvedIPValidator func(context.Context, string) error
+
+func NewSeedanceVideoProvider(upstream HTTPUpstream, validators ...SeedanceResolvedIPValidator) *SeedanceVideoProvider {
+	validator := defaultSeedanceResolvedIPValidator
+	if len(validators) > 0 && validators[0] != nil {
+		validator = validators[0]
+	}
+	return &SeedanceVideoProvider{upstream: upstream, validateResolvedIP: validator, dialContext: urlvalidator.ValidatedDialContext}
 }
 
 func (p *SeedanceVideoProvider) Name() string { return VideoProviderSeedance }
 
 func (p *SeedanceVideoProvider) Capabilities() VideoProviderCapabilities {
-	return VideoProviderCapabilities{
-		VideoOperationGeneration: {
-			Text:              true,
-			FirstFrame:        true,
-			LastFrame:         true,
-			FirstAndLastFrame: true,
-			ReferenceImages:   true,
-			ReferenceVideos:   true,
-			Audio:             true,
-		},
-	}
+	// Model capabilities are configured through VideoCapabilityCatalog keys.
+	// No provider-wide fallback is safe because upstream Seedance models differ.
+	return VideoProviderCapabilities{}
 }
 
 func (p *SeedanceVideoProvider) Submit(ctx context.Context, account *Account, request CanonicalVideoRequest, _ string) (VideoSubmitResult, error) {
@@ -124,11 +126,16 @@ func (p *SeedanceVideoProvider) OpenContent(ctx context.Context, _ *Account, tas
 	if err != nil {
 		return nil, nil, 0, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, err)
 	}
-	request, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(nonNilVideoContext(ctx)), http.MethodGet, targetURL, nil)
+	requestContext := WithHTTPUpstreamResolvedIPValidation(WithHTTPUpstreamRedirectsDisabled(nonNilVideoContext(ctx)))
+	requestContext = WithHTTPUpstreamValidatedDialContext(requestContext, p.requestDialContext())
+	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return nil, nil, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_error", true, false, err)
 	}
 	request.Header.Set("Accept", "*/*")
+	if err := p.validateRequestDestination(request); err != nil {
+		return nil, nil, 0, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, err)
+	}
 	response, err := p.upstream.Do(request, "", 0, 0)
 	if err != nil {
 		return nil, nil, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_timeout", true, false, err)
@@ -301,7 +308,9 @@ func (p *SeedanceVideoProvider) doJSON(ctx context.Context, account *Account, me
 	if len(body) > 0 {
 		reader = bytes.NewReader(body)
 	}
-	request, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(nonNilVideoContext(ctx)), method, targetURL, reader)
+	requestContext := WithHTTPUpstreamResolvedIPValidation(WithHTTPUpstreamRedirectsDisabled(nonNilVideoContext(ctx)))
+	requestContext = WithHTTPUpstreamValidatedDialContext(requestContext, p.requestDialContext())
+	request, err := http.NewRequestWithContext(requestContext, method, targetURL, reader)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -309,6 +318,9 @@ func (p *SeedanceVideoProvider) doJSON(ctx context.Context, account *Account, me
 	request.Header.Set("Accept", "application/json")
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	if err := p.validateRequestDestination(request); err != nil {
+		return nil, 0, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, err)
 	}
 	account.ApplyHeaderOverrides(request.Header)
 	proxyURL := ""
@@ -354,7 +366,6 @@ func seedancePollError(err error) error {
 }
 
 func seedanceSubmissionHTTPError(statusCode int, body []byte) VideoProviderError {
-	hasTaskID := strings.TrimSpace(seedanceJSONText(body, "id")) != ""
 	if statusCode == http.StatusBadRequest {
 		if seedanceSensitiveContentError(body) {
 			return NewVideoProviderError(statusCode, "content_rejected", false, false, errors.New("seedance content rejected"))
@@ -365,12 +376,30 @@ func seedanceSubmissionHTTPError(statusCode int, body []byte) VideoProviderError
 	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden || statusCode == http.StatusPaymentRequired:
 		return NewVideoProviderError(statusCode, "upstream_authentication", false, false, errors.New("seedance authentication rejected"))
 	case statusCode == http.StatusTooManyRequests:
-		return NewVideoProviderError(statusCode, "upstream_rate_limit", !hasTaskID, hasTaskID, errors.New("seedance rate limited"))
+		if seedanceSubmissionProvesRejection(body) {
+			return NewVideoProviderError(statusCode, "upstream_rate_limit", true, false, errors.New("seedance rate limited"))
+		}
+		return NewVideoProviderError(statusCode, "upstream_rate_limit", false, true, errors.New("seedance rate limited"))
 	case statusCode >= http.StatusInternalServerError:
-		return NewVideoProviderError(statusCode, "upstream_unavailable", !hasTaskID, hasTaskID, errors.New("seedance upstream unavailable"))
+		return NewVideoProviderError(statusCode, "upstream_unavailable", false, true, errors.New("seedance upstream unavailable"))
 	default:
-		return NewVideoProviderError(statusCode, "upstream_error", false, hasTaskID, errors.New("seedance upstream error"))
+		return NewVideoProviderError(statusCode, "upstream_error", false, true, errors.New("seedance upstream error"))
 	}
+}
+
+func seedanceSubmissionProvesRejection(body []byte) bool {
+	var response struct {
+		ID    string `json:"id"`
+		Error *struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &response) != nil || strings.TrimSpace(response.ID) != "" || response.Error == nil {
+		return false
+	}
+	// QuotaExceeded is the documented Ark 429 task-creation rejection. Other
+	// proxy or malformed 429/5xx bodies cannot prove no task was accepted.
+	return strings.EqualFold(strings.TrimSpace(response.Error.Code), "QuotaExceeded")
 }
 
 func seedancePollHTTPError(statusCode int, body []byte) VideoProviderError {
@@ -464,4 +493,26 @@ func nonNilVideoContext(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return ctx
+}
+
+func defaultSeedanceResolvedIPValidator(_ context.Context, host string) error {
+	return urlvalidator.ValidateResolvedIP(host)
+}
+
+func (p *SeedanceVideoProvider) validateRequestDestination(request *http.Request) error {
+	if request == nil || request.URL == nil || strings.TrimSpace(request.URL.Hostname()) == "" {
+		return errors.New("seedance request URL is invalid")
+	}
+	validator := defaultSeedanceResolvedIPValidator
+	if p != nil && p.validateResolvedIP != nil {
+		validator = p.validateResolvedIP
+	}
+	return validator(request.Context(), request.URL.Hostname())
+}
+
+func (p *SeedanceVideoProvider) requestDialContext() HTTPUpstreamDialContext {
+	if p != nil && p.dialContext != nil {
+		return p.dialContext
+	}
+	return urlvalidator.ValidatedDialContext
 }

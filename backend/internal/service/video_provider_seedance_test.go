@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,6 +29,26 @@ type seedanceFixtureUpstream struct {
 type seedanceCloseTrackingBody struct {
 	io.Reader
 	closed bool
+}
+
+type seedanceDialBoundaryUpstream struct {
+	request   *http.Request
+	dialCalls int
+}
+
+func (u *seedanceDialBoundaryUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	u.request = req
+	dial, ok := HTTPUpstreamValidatedDialContextFromContext(req.Context())
+	if !ok {
+		return nil, errors.New("validated dial context missing")
+	}
+	u.dialCalls++
+	_, err := dial(req.Context(), "tcp", net.JoinHostPort(req.URL.Hostname(), "443"))
+	return nil, err
+}
+
+func (u *seedanceDialBoundaryUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
 func (b *seedanceCloseTrackingBody) Close() error {
@@ -78,6 +100,16 @@ func seedanceAccount() *Account {
 
 func seedanceBoolPtr(value bool) *bool { return &value }
 
+func seedancePublicResolver(context.Context, string) error { return nil }
+
+func newSeedanceProvider(upstream HTTPUpstream) *SeedanceVideoProvider {
+	return NewSeedanceVideoProvider(upstream, seedancePublicResolver)
+}
+
+func newSeedanceProviderWithResolver(upstream HTTPUpstream, resolver SeedanceResolvedIPValidator) *SeedanceVideoProvider {
+	return NewSeedanceVideoProvider(upstream, resolver)
+}
+
 func seedanceResponse(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,
@@ -90,7 +122,7 @@ func seedanceResponse(status int, body string) *http.Response {
 // or a payload that drifts from the documented task API contract.
 func TestSeedanceProviderSubmitUsesArkTaskAPI(t *testing.T) {
 	upstream := fixtureHTTPUpstream(t, "testdata/video/seedance/create_success.json")
-	p := NewSeedanceVideoProvider(upstream)
+	p := newSeedanceProvider(upstream)
 	got, err := p.Submit(context.Background(), seedanceAccount(), CanonicalVideoRequest{
 		Operation:       VideoOperationGeneration,
 		Model:           "seedance-2.0",
@@ -110,7 +142,7 @@ func TestSeedanceProviderSubmitUsesArkTaskAPI(t *testing.T) {
 // Catches status or result-field parsing that disagrees with the Ark task
 // response shape.
 func TestSeedanceProviderPollMapsSucceeded(t *testing.T) {
-	p := NewSeedanceVideoProvider(fixtureHTTPUpstream(t, "testdata/video/seedance/get_succeeded.json"))
+	p := newSeedanceProvider(fixtureHTTPUpstream(t, "testdata/video/seedance/get_succeeded.json"))
 	got, err := p.Poll(context.Background(), seedanceAccount(), "cgt-2026-example")
 	require.NoError(t, err)
 	require.Equal(t, VideoTaskSucceeded, got.Status)
@@ -125,7 +157,7 @@ func TestSeedanceProviderSubmitUsesStableContentOrderAndOptionAllowlist(t *testi
 	upstream := fixtureHTTPUpstream(t, "testdata/video/seedance/create_success.json")
 	account := seedanceAccount()
 	account.Credentials["model_mapping"] = map[string]any{"seedance-2.0": "ep-ordered"}
-	p := NewSeedanceVideoProvider(upstream)
+	p := newSeedanceProvider(upstream)
 	_, err := p.Submit(context.Background(), account, CanonicalVideoRequest{
 		Operation:  VideoOperationGeneration,
 		Model:      "seedance-2.0",
@@ -193,7 +225,7 @@ func TestSeedanceProviderRejectsUnsafeAccountBaseURL(t *testing.T) {
 	upstream := fixtureHTTPUpstream(t, "testdata/video/seedance/create_success.json")
 	account := seedanceAccount()
 	account.Credentials["base_url"] = "http://127.0.0.1:8080"
-	_, err := NewSeedanceVideoProvider(upstream).Submit(context.Background(), account, CanonicalVideoRequest{
+	_, err := newSeedanceProvider(upstream).Submit(context.Background(), account, CanonicalVideoRequest{
 		Operation: VideoOperationGeneration, Model: "seedance-2.0", Prompt: "safe request",
 	}, "submit-token")
 	var providerErr VideoProviderError
@@ -227,7 +259,7 @@ func TestSeedanceProviderPollMapsOfficialStatuses(t *testing.T) {
 			} else {
 				upstream = &seedanceFixtureUpstream{response: seedanceResponse(http.StatusOK, tt.body)}
 			}
-			p := NewSeedanceVideoProvider(upstream)
+			p := newSeedanceProvider(upstream)
 			got, err := p.Poll(context.Background(), seedanceAccount(), "cgt-2026-example")
 			require.NoError(t, err)
 			require.Equal(t, tt.want, got.Status)
@@ -260,7 +292,7 @@ func TestSeedanceProviderRejectsMalformedResponsesAndClosesBodies(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			body := &seedanceCloseTrackingBody{Reader: strings.NewReader(`{"content":{}}`)}
 			upstream := &seedanceFixtureUpstream{response: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: body}}
-			err := tt.call(NewSeedanceVideoProvider(upstream))
+			err := tt.call(newSeedanceProvider(upstream))
 			var providerErr VideoProviderError
 			require.ErrorAs(t, err, &providerErr)
 			require.Equal(t, "provider_contract_error", providerErr.Code)
@@ -284,15 +316,18 @@ func TestSeedanceProviderClassifiesSubmissionFailures(t *testing.T) {
 	}{
 		{name: "validation 400", response: seedanceResponse(http.StatusBadRequest, `{"error":{"code":"InvalidParameter"}}`), code: "invalid_request"},
 		{name: "sensitive 400", response: seedanceResponse(http.StatusBadRequest, `{"error":{"code":"InputTextSensitiveContentDetected"}}`), code: "content_rejected"},
-		{name: "rate limit without id", response: seedanceResponse(http.StatusTooManyRequests, `{"error":{"code":"QuotaExceeded"}}`), code: "upstream_rate_limit", retryable: true},
-		{name: "server error without id", response: seedanceResponse(http.StatusBadGateway, `{"error":{"code":"InternalError"}}`), code: "upstream_unavailable", retryable: true},
-		{name: "rate limit with id", response: seedanceResponse(http.StatusTooManyRequests, `{"id":"cgt-accepted"}`), code: "upstream_rate_limit", ambiguous: true},
+		{name: "official quota rejection", response: seedanceResponse(http.StatusTooManyRequests, `{"error":{"code":"QuotaExceeded"}}`), code: "upstream_rate_limit", retryable: true},
+		{name: "empty rate limit", response: seedanceResponse(http.StatusTooManyRequests, ``), code: "upstream_rate_limit", ambiguous: true},
+		{name: "malformed rate limit", response: seedanceResponse(http.StatusTooManyRequests, `{`), code: "upstream_rate_limit", ambiguous: true},
+		{name: "generic proxy rate limit", response: seedanceResponse(http.StatusTooManyRequests, `proxy overloaded`), code: "upstream_rate_limit", ambiguous: true},
+		{name: "server error without id", response: seedanceResponse(http.StatusBadGateway, `{"error":{"code":"InternalError"}}`), code: "upstream_unavailable", ambiguous: true},
+		{name: "rate limit accepted id error shape", response: seedanceResponse(http.StatusTooManyRequests, `{"id":"cgt-accepted","error":{"code":"QuotaExceeded"}}`), code: "upstream_rate_limit", ambiguous: true},
 		{name: "timeout after body sent", err: context.DeadlineExceeded, code: "upstream_timeout", retryable: true, ambiguous: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			upstream := &seedanceFixtureUpstream{response: tt.response, err: tt.err}
-			_, err := NewSeedanceVideoProvider(upstream).Submit(context.Background(), seedanceAccount(), CanonicalVideoRequest{
+			_, err := newSeedanceProvider(upstream).Submit(context.Background(), seedanceAccount(), CanonicalVideoRequest{
 				Operation: VideoOperationGeneration, Model: "seedance-2.0", Prompt: "private prompt",
 			}, "submit-token")
 			var providerErr VideoProviderError
@@ -309,34 +344,38 @@ func TestSeedanceProviderClassifiesSubmissionFailures(t *testing.T) {
 // query without a verified Ark-side submission-token field.
 func TestSeedanceProviderDoesNotRecoverAmbiguousSubmission(t *testing.T) {
 	upstream := fixtureHTTPUpstream(t, "testdata/video/seedance/create_success.json")
-	got, found, err := NewSeedanceVideoProvider(upstream).RecoverSubmission(context.Background(), seedanceAccount(), CanonicalVideoRequest{}, "submit-token")
+	got, found, err := newSeedanceProvider(upstream).RecoverSubmission(context.Background(), seedanceAccount(), CanonicalVideoRequest{}, "submit-token")
 	require.NoError(t, err)
 	require.False(t, found)
 	require.Zero(t, got)
 	require.Nil(t, upstream.request)
 }
 
-// Catches a provider capability declaration that silently enables unverified
-// edit/extension behavior or disables documented generation inputs.
-func TestSeedanceProviderCapabilitiesAreGenerationOnly(t *testing.T) {
+// Catches a provider-wide default that lets unconfigured models inherit media
+// features instead of requiring a model-keyed VideoCapabilityCatalog entry.
+func TestSeedanceProviderCapabilitiesFailClosedWithoutModelConfiguration(t *testing.T) {
 	capabilities := NewSeedanceVideoProvider(nil).Capabilities()
-	generation, ok := capabilities[VideoOperationGeneration]
-	require.True(t, ok)
-	require.True(t, generation.Text)
-	require.True(t, generation.FirstFrame)
-	require.True(t, generation.LastFrame)
-	require.True(t, generation.FirstAndLastFrame)
-	require.True(t, generation.ReferenceImages)
-	require.True(t, generation.ReferenceVideos)
-	require.True(t, generation.Audio)
-	_, edit := capabilities[VideoOperationEdit]
-	_, extension := capabilities[VideoOperationExtension]
-	require.False(t, edit)
-	require.False(t, extension)
+	require.Empty(t, capabilities)
+}
+
+// Catches capability defaults that bypass configured per-model restrictions.
+func TestSeedanceModelCapabilityCatalogIsExplicitAndFailClosed(t *testing.T) {
+	catalog := VideoCapabilityCatalog{
+		VideoModelCapabilityKey(VideoProviderSeedance, "seedance-text-only"): {
+			VideoOperationGeneration: {Text: true},
+		},
+		VideoModelCapabilityKey(VideoProviderSeedance, "seedance-rich"): {
+			VideoOperationGeneration: {Text: true, FirstFrame: true, LastFrame: true, FirstAndLastFrame: true, ReferenceImages: true, ReferenceVideos: true, Audio: true},
+		},
+	}
+	require.NoError(t, catalog.Validate(VideoProviderSeedance, CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "seedance-text-only", Prompt: "text"}))
+	require.ErrorIs(t, catalog.Validate(VideoProviderSeedance, CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "seedance-text-only", Prompt: "text", Audio: seedanceBoolPtr(true)}), ErrVideoUnsupportedCapability)
+	require.NoError(t, catalog.Validate(VideoProviderSeedance, CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "seedance-rich", Prompt: "text", FirstFrame: []VideoAsset{{URL: "https://example.com/first.png"}}, LastFrame: []VideoAsset{{URL: "https://example.com/last.png"}}, ReferenceImages: []VideoAsset{{URL: "https://example.com/ref.png"}}, ReferenceVideos: []VideoAsset{{URL: "https://example.com/ref.mp4"}}, Audio: seedanceBoolPtr(true)}))
+	require.ErrorIs(t, catalog.Validate(VideoProviderSeedance, CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "seedance-unknown", Prompt: "text"}), ErrVideoUnsupportedCapability)
 }
 
 func TestSeedanceProviderPollRejectsEmptyTaskID(t *testing.T) {
-	_, err := NewSeedanceVideoProvider(fixtureHTTPUpstream(t, "testdata/video/seedance/get_queued.json")).Poll(context.Background(), seedanceAccount(), " ")
+	_, err := newSeedanceProvider(fixtureHTTPUpstream(t, "testdata/video/seedance/get_queued.json")).Poll(context.Background(), seedanceAccount(), " ")
 	var providerErr VideoProviderError
 	require.ErrorAs(t, err, &providerErr)
 	require.Equal(t, "invalid_request", providerErr.Code)
@@ -353,7 +392,7 @@ func TestSeedanceProviderOpenContentPreservesSignedResultURLWithoutAuth(t *testi
 		Body:          io.NopCloser(strings.NewReader("video")),
 	}}
 	resultURL := "https://example.volces.com/result.mp4?X-Expires=123&X-Signature=redacted"
-	body, headers, length, err := NewSeedanceVideoProvider(upstream).OpenContent(context.Background(), seedanceAccount(), VideoTask{ResultURL: &resultURL})
+	body, headers, length, err := newSeedanceProvider(upstream).OpenContent(context.Background(), seedanceAccount(), VideoTask{ResultURL: &resultURL})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, body.Close()) }()
 	content, err := io.ReadAll(body)
@@ -364,4 +403,74 @@ func TestSeedanceProviderOpenContentPreservesSignedResultURLWithoutAuth(t *testi
 	require.Equal(t, "X-Expires=123&X-Signature=redacted", upstream.request.URL.RawQuery)
 	require.Empty(t, upstream.request.Header.Get("Authorization"))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.request.Context()))
+	require.True(t, HTTPUpstreamResolvedIPValidationRequired(upstream.request.Context()))
+}
+
+// Catches a hostname that passes syntax checks but resolves to a protected
+// destination; the resolver must deny it before an upstream request is sent.
+func TestSeedanceProviderRejectsUnsafeResolvedDestinations(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ip   string
+	}{
+		{name: "loopback", ip: "127.0.0.1"},
+		{name: "private", ip: "10.0.0.8"},
+		{name: "link local", ip: "169.254.1.8"},
+		{name: "reserved", ip: "192.0.2.8"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := fixtureHTTPUpstream(t, "testdata/video/seedance/create_success.json")
+			resolver := func(_ context.Context, host string) error {
+				require.Equal(t, "ark-relay.example", host)
+				return urlvalidator.ValidateResolvedIPs([]net.IP{net.ParseIP(tt.ip)})
+			}
+			account := seedanceAccount()
+			account.Credentials["base_url"] = "https://ark-relay.example"
+			_, err := newSeedanceProviderWithResolver(upstream, resolver).Submit(context.Background(), account, CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "seedance-2.0", Prompt: "safe"}, "submission-token")
+			var providerErr VideoProviderError
+			require.ErrorAs(t, err, &providerErr)
+			require.Equal(t, "invalid_request", providerErr.Code)
+			require.Nil(t, upstream.request)
+		})
+	}
+}
+
+// Catches signed content URLs bypassing the same resolver-time protection as
+// custom Ark base URLs; no content request may be sent after a bad resolution.
+func TestSeedanceProviderRejectsUnsafeResolvedSignedContentURL(t *testing.T) {
+	upstream := &seedanceFixtureUpstream{response: seedanceResponse(http.StatusOK, "video")}
+	resolver := func(_ context.Context, host string) error {
+		require.Equal(t, "signed-relay.example", host)
+		return urlvalidator.ValidateResolvedIPs([]net.IP{net.ParseIP("127.0.0.1")})
+	}
+	resultURL := "https://signed-relay.example/result.mp4?X-Signature=redacted"
+	_, _, _, err := newSeedanceProviderWithResolver(upstream, resolver).OpenContent(context.Background(), seedanceAccount(), VideoTask{ResultURL: &resultURL})
+	var providerErr VideoProviderError
+	require.ErrorAs(t, err, &providerErr)
+	require.Equal(t, "invalid_request", providerErr.Code)
+	require.Nil(t, upstream.request)
+}
+
+// Catches DNS rebinding between adapter preflight and the real transport dial:
+// the dial boundary must validate and refuse its newly private resolution.
+func TestSeedanceProviderBindsValidatedIPAtDialTime(t *testing.T) {
+	upstream := &seedanceDialBoundaryUpstream{}
+	p := newSeedanceProviderWithResolver(upstream, func(_ context.Context, host string) error {
+		require.Equal(t, "ark-relay.example", host)
+		return nil // preflight saw a public address
+	})
+	p.dialContext = func(_ context.Context, network, address string) (net.Conn, error) {
+		require.Equal(t, "tcp", network)
+		require.Equal(t, "ark-relay.example:443", address)
+		return nil, urlvalidator.ValidateResolvedIPs([]net.IP{net.ParseIP("192.168.1.8")})
+	}
+	account := seedanceAccount()
+	account.Credentials["base_url"] = "https://ark-relay.example"
+	_, err := p.Submit(context.Background(), account, CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "seedance-2.0", Prompt: "safe"}, "submission-token")
+	var providerErr VideoProviderError
+	require.ErrorAs(t, err, &providerErr)
+	require.Equal(t, "upstream_timeout", providerErr.Code)
+	require.True(t, providerErr.Ambiguous)
+	require.True(t, providerErr.Retryable)
+	require.Equal(t, 1, upstream.dialCalls)
 }

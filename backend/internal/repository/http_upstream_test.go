@@ -2,6 +2,7 @@ package repository
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -48,6 +50,42 @@ func TestHTTPUpstreamDoCanDisableRedirectsPerRequest(t *testing.T) {
 	require.Equal(t, http.StatusFound, resp.StatusCode)
 	require.NoError(t, resp.Body.Close())
 	require.Zero(t, redirectedCalls.Load())
+}
+
+// Catches a security-marked request losing DNS/IP validation when the global
+// URL allowlist is disabled; provider adapters depend on this final boundary.
+func TestHTTPUpstreamValidatesResolvedIPWhenRequestRequiresIt(t *testing.T) {
+	svc := &httpUpstreamService{}
+	req, err := http.NewRequestWithContext(
+		service.WithHTTPUpstreamResolvedIPValidation(t.Context()),
+		http.MethodGet,
+		"https://127.0.0.1/private",
+		nil,
+	)
+	require.NoError(t, err)
+	require.Error(t, svc.validateRequestHost(req))
+}
+
+// Catches validation that occurs before RoundTrip but leaves the transport to
+// resolve the hostname again. A marked request must instead use its supplied
+// dial boundary, where a changed private resolution stops the connection.
+func TestHTTPUpstreamUsesBoundValidatedDialContext(t *testing.T) {
+	var dialCalls atomic.Int64
+	dial := func(_ context.Context, network, address string) (net.Conn, error) {
+		dialCalls.Add(1)
+		require.Equal(t, "tcp", network)
+		require.Equal(t, "public-origin.example:443", address)
+		return nil, fmt.Errorf("dial-time resolution blocked: %w", urlvalidator.ValidateResolvedIPs([]net.IP{net.ParseIP("10.0.0.8")}))
+	}
+	ctx := service.WithHTTPUpstreamResolvedIPValidation(t.Context())
+	ctx = service.WithHTTPUpstreamValidatedDialContext(ctx, dial)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://public-origin.example/resource", nil)
+	require.NoError(t, err)
+
+	_, err = NewHTTPUpstream(nil).Do(req, "", 98, 1)
+	require.Error(t, err)
+	require.Equal(t, int64(1), dialCalls.Load())
+	require.Contains(t, err.Error(), "dial-time resolution blocked")
 }
 
 func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredHTTPProxy(t *testing.T) {

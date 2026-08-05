@@ -1,6 +1,9 @@
 package urlvalidator
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
 
 func TestValidateURLFormat(t *testing.T) {
 	if _, err := ValidateURLFormat("", false); err == nil {
@@ -71,5 +74,18 @@ func TestValidateHTTPURL(t *testing.T) {
 	}
 	if _, err := ValidateHTTPURL("https://localhost", false, ValidationOptions{AllowPrivate: false}); err == nil {
 		t.Fatalf("expected localhost to be blocked when allow_private_hosts is false")
+	}
+}
+
+// Catches resolved private, link-local, and documentation-reserved addresses
+// being treated as safe merely because the original hostname was public.
+func TestValidateResolvedIPsRejectsUnsafeDestinations(t *testing.T) {
+	for _, raw := range []string{"127.0.0.1", "10.0.0.1", "169.254.1.1", "192.0.2.1", "::1", "fe80::1"} {
+		if err := ValidateResolvedIPs([]net.IP{net.ParseIP(raw)}); err == nil {
+			t.Fatalf("expected %s to be rejected", raw)
+		}
+	}
+	if err := ValidateResolvedIPs([]net.IP{net.ParseIP("8.8.8.8")}); err != nil {
+		t.Fatalf("expected public address to pass, got %v", err)
 	}
 }
