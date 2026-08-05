@@ -6,6 +6,9 @@ import (
 )
 
 func BuildIssueSummaries(result NormalizedResult) []IssueSummary {
+	if result.Decision == EventUnreviewed {
+		return []IssueSummary{}
+	}
 	resultCategories := result.Categories
 	if len(resultCategories) == 0 {
 		resultCategories = result.MatchedScanners

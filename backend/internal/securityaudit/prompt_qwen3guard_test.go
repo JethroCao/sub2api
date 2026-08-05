@@ -144,3 +144,11 @@ func TestIssueSummariesAreDeterministicRedactedDerivedDTOs(t *testing.T) {
 		require.NotEmpty(t, summary.EvidenceHash)
 	}
 }
+
+func TestUnreviewedCaptureHasNoRiskIssueSummaries(t *testing.T) {
+	result := NormalizedResult{
+		Decision: EventUnreviewed, RiskLevel: RiskUnknown, Action: ActionRecord,
+		Categories: []string{"pii"}, MatchedScanners: []string{"pii"},
+	}
+	require.Empty(t, BuildIssueSummaries(result))
+}

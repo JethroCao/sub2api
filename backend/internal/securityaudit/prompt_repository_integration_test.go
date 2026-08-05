@@ -88,6 +88,19 @@ func TestPromptAuditRecordCapturePersistsUnreviewedEventTransactionally(t *testi
 	var eventCount int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM prompt_audit_events WHERE job_id=$1`, event.JobID).Scan(&eventCount))
 	require.Equal(t, 1, eventCount)
+
+	page, err := repo.ListEvents(ctx, EventFilter{Decision: "unreviewed", RiskLevel: "unknown"}, 1, 20)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Empty(t, page.Items[0].Snapshot.FullPrompt)
+	detail, err := repo.GetEvent(ctx, event.ID)
+	require.NoError(t, err)
+	require.Contains(t, detail.Snapshot.FullPrompt, promptCanary)
+	require.Empty(t, detail.IssueSummaries)
+	deleted, err := repo.DeleteEvent(ctx, event.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted.DeletedEvents)
+	require.Equal(t, int64(1), deleted.DeletedJobs)
 }
 
 func resetPromptAuditIntegrationDB(t *testing.T, db *sql.DB) {

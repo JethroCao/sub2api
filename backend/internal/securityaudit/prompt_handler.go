@@ -101,7 +101,25 @@ func (h *PromptAdminHandler) ListEvents(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, result)
+	response.Success(c, eventPageWithoutFullPrompts(result))
+}
+
+func eventPageWithoutFullPrompts(page *EventPage) *EventPage {
+	if page == nil {
+		return nil
+	}
+	copyPage := *page
+	copyPage.Items = make([]*Event, 0, len(page.Items))
+	for _, event := range page.Items {
+		if event == nil {
+			copyPage.Items = append(copyPage.Items, nil)
+			continue
+		}
+		copyEvent := *event
+		copyEvent.Snapshot.FullPrompt = ""
+		copyPage.Items = append(copyPage.Items, &copyEvent)
+	}
+	return &copyPage
 }
 
 func (h *PromptAdminHandler) GetEvent(c *gin.Context) {
