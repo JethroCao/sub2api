@@ -178,6 +178,9 @@ func (r *fakeJobRepository) RecordBlocking(_ context.Context, snapshot PromptSna
 	r.recordBlockingSnapshot, r.recordBlockingResult = snapshot, result
 	return nil, r.recordBlockingErr
 }
+func (r *fakeJobRepository) RecordCapture(context.Context, PromptSnapshot, int64) (*Event, error) {
+	return nil, nil
+}
 
 type fakePayloadStore struct {
 	mu sync.Mutex

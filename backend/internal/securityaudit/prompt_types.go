@@ -45,9 +45,10 @@ const (
 type EventDecision string
 
 const (
-	EventPass     EventDecision = "pass"
-	EventFlag     EventDecision = "flag"
-	EventCritical EventDecision = "critical"
+	EventPass       EventDecision = "pass"
+	EventFlag       EventDecision = "flag"
+	EventCritical   EventDecision = "critical"
+	EventUnreviewed EventDecision = "unreviewed"
 )
 
 type RiskLevel string
@@ -57,14 +58,16 @@ const (
 	RiskMedium   RiskLevel = "medium"
 	RiskHigh     RiskLevel = "high"
 	RiskCritical RiskLevel = "critical"
+	RiskUnknown  RiskLevel = "unknown"
 )
 
 type Action string
 
 const (
-	ActionAllow Action = "Allow"
-	ActionWarn  Action = "Warn"
-	ActionBlock Action = "Block"
+	ActionAllow  Action = "Allow"
+	ActionWarn   Action = "Warn"
+	ActionBlock  Action = "Block"
+	ActionRecord Action = "Record"
 )
 
 type Request struct {
