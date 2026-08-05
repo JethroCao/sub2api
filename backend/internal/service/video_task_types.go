@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -23,9 +24,14 @@ const (
 )
 
 var (
-	videoRequestIDPattern         = regexp.MustCompile(`^vid_[0-9a-f]{32}$`)
-	videoTaskErrorCodePattern     = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_.-]{0,127}$`)
-	videoTaskSensitiveTextPattern = regexp.MustCompile(`(?i)(authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|credential|cookie|\bbearer\s+|\bsk-[a-z0-9_-]{12,})`)
+	videoRequestIDPattern           = regexp.MustCompile(`^vid_[0-9a-f]{32}$`)
+	videoTaskErrorCodePattern       = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_.-]{0,127}$`)
+	videoTaskSensitiveTextPattern   = regexp.MustCompile(`(?i)(authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|credential|cookie|\bbearer\s+|\bsk-[a-z0-9_-]{12,})`)
+	videoTaskCredentialValuePattern = regexp.MustCompile(`(?i)\b(?:authorization|x[-_.]?api[-_.]?key|api[-_.]?key|(?:access|refresh|id)[-_.]?token|token)["']?\s*[:=]\s*["']?((?:bearer\s+)?[a-z0-9][a-z0-9._~+/=-]{0,511})`)
+	videoTaskBearerValuePattern     = regexp.MustCompile(`(?i)\bbearer\s+([a-z0-9][a-z0-9._~+/=-]{0,511})`)
+	videoTaskKnownKeyPattern        = regexp.MustCompile(`(?i)\bsk-(?:proj-)?[a-z0-9_-]{12,}`)
+	videoTaskJWTValuePattern        = regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]{2,})\.([A-Za-z0-9_-]*)(?:$|[^A-Za-z0-9_-])`)
+	videoTaskWorkerIDPattern        = regexp.MustCompile(`^worker-[A-Za-z0-9][A-Za-z0-9_-]{0,120}$`)
 )
 
 type VideoTaskStatus string
@@ -311,18 +317,18 @@ func isAllowlistedVideoPayload(value any) bool {
 		switch key {
 		case "prompt", "negative_prompt":
 			text, ok := value.(string)
-			if !ok || len(text) > 20_000 || isEncodedVideoUpload(text) {
+			if !ok || len(text) > 20_000 || isUnsafeVideoPayloadString(key, text) {
 				return false
 			}
 		case "input_image_ref", "input_video_ref", "first_frame_ref", "last_frame_ref", "source_task_id":
 			ref, ok := value.(string)
-			if !ok || len(ref) == 0 || len(ref) > 512 || strings.ContainsAny(ref, "?&#") || isEncodedVideoUpload(ref) {
+			if !ok || len(ref) == 0 || len(ref) > 512 || strings.ContainsAny(ref, "?&#") || isUnsafeVideoPayloadString(key, ref) {
 				return false
 			}
 		case "resolution", "aspect_ratio", "audio_mode", "status", "from_status", "to_status",
 			"upstream_status", "error_code", "worker_id", "billing_status":
 			text, ok := value.(string)
-			if !ok || len(text) > 256 || isEncodedVideoUpload(text) {
+			if !ok || len(text) > 256 || isUnsafeVideoPayloadString(key, text) {
 				return false
 			}
 		case "duration_seconds", "seed", "attempt", "settled_amount":
@@ -341,22 +347,181 @@ func isAllowlistedVideoPayload(value any) bool {
 	return true
 }
 
+func isUnsafeVideoPayloadString(field, value string) bool {
+	if containsVideoCredential(value) {
+		return true
+	}
+	if (field == "source_task_id" && IsVideoRequestID(value)) ||
+		(field == "worker_id" && videoTaskWorkerIDPattern.MatchString(value)) {
+		return false
+	}
+	return isEncodedVideoUpload(value)
+}
+
+func containsVideoCredential(value string) bool {
+	if videoTaskKnownKeyPattern.MatchString(value) || containsVideoJWT(value) {
+		return true
+	}
+	for _, match := range videoTaskCredentialValuePattern.FindAllStringSubmatch(value, -1) {
+		candidate := match[1]
+		if strings.HasPrefix(strings.ToLower(candidate), "bearer ") {
+			candidate = strings.TrimSpace(candidate[len("bearer "):])
+		}
+		if isAssignedVideoCredential(candidate) {
+			return true
+		}
+	}
+	for _, match := range videoTaskBearerValuePattern.FindAllStringSubmatch(value, -1) {
+		if isSecretLikeVideoValue(match[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsVideoJWT(value string) bool {
+	for _, match := range videoTaskJWTValuePattern.FindAllStringSubmatch(value, -1) {
+		headerJSON, headerErr := base64.RawURLEncoding.DecodeString(match[1])
+		claimsJSON, claimsErr := base64.RawURLEncoding.DecodeString(match[2])
+		if headerErr != nil || claimsErr != nil {
+			continue
+		}
+		var header, claims map[string]any
+		if json.Unmarshal(headerJSON, &header) != nil || json.Unmarshal(claimsJSON, &claims) != nil {
+			continue
+		}
+		if header == nil || claims == nil {
+			continue
+		}
+		if alg, ok := header["alg"].(string); ok && strings.TrimSpace(alg) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func isSecretLikeVideoValue(value string) bool {
+	value = strings.Trim(value, " \t\r\n\"'.,;)}]")
+	if videoTaskKnownKeyPattern.MatchString(value) || containsVideoJWT(value) {
+		return true
+	}
+	if len(value) < 12 {
+		return false
+	}
+	var hasLetter, hasDigit bool
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z':
+			hasLetter = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		}
+	}
+	return hasLetter && hasDigit
+}
+
+func isAssignedVideoCredential(value string) bool {
+	value = strings.Trim(value, " \t\r\n\"'.,;)}]")
+	return videoTaskKnownKeyPattern.MatchString(value) || containsVideoJWT(value) || len(value) >= 12
+}
+
 func isEncodedVideoUpload(value string) bool {
 	value = strings.TrimSpace(value)
 	if strings.HasPrefix(strings.ToLower(value), "data:") {
 		return true
 	}
-	if len(value) < 256 {
-		return false
-	}
 	encodings := []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding}
 	for _, encoding := range encodings {
 		decoded, err := encoding.DecodeString(value)
-		if err == nil && len(decoded) >= 128 {
+		if err != nil || len(decoded) == 0 {
+			continue
+		}
+		if isKnownVideoBinary(decoded) {
+			return true
+		}
+		if isTextualVideoMedia(decoded) {
+			return true
+		}
+		if utf8.Valid(decoded) && containsVideoCredential(string(decoded)) {
+			return true
+		}
+		if utf8.Valid(decoded) && containsForbiddenVideoControl(decoded) {
+			return true
+		}
+		if isControlHeavyVideoBinary(decoded) {
+			return true
+		}
+		if isBinaryVideoContent(decoded) &&
+			(strings.ContainsAny(value, "=+/") || len(decoded) >= 16 && !isASCIIAlphabetic(value)) {
 			return true
 		}
 	}
 	return false
+}
+
+func containsForbiddenVideoControl(value []byte) bool {
+	for _, b := range value {
+		if b == 0 || b < '\t' || b > '\r' && b < ' ' || b == '\x7f' {
+			return true
+		}
+	}
+	return false
+}
+
+func isTextualVideoMedia(value []byte) bool {
+	if !utf8.Valid(value) {
+		return false
+	}
+	trimmed := bytes.ToLower(bytes.TrimSpace(value))
+	return bytes.HasPrefix(trimmed, []byte("<svg")) ||
+		bytes.HasPrefix(trimmed, []byte("<?xml")) && bytes.Contains(trimmed, []byte("<svg"))
+}
+
+func isControlHeavyVideoBinary(value []byte) bool {
+	if len(value) == 0 {
+		return false
+	}
+	controls := 0
+	for _, b := range value {
+		if b == 0 || b < '\t' || b > '\r' && b < ' ' || b == '\x7f' {
+			controls++
+		}
+	}
+	return bytes.IndexByte(value, 0) >= 0 || len(value) >= 4 && controls*4 >= len(value)
+}
+
+func isKnownVideoBinary(value []byte) bool {
+	return bytes.HasPrefix(value, []byte{'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'}) ||
+		bytes.HasPrefix(value, []byte{'\xff', '\xd8', '\xff'}) ||
+		bytes.HasPrefix(value, []byte("GIF87a")) ||
+		bytes.HasPrefix(value, []byte("GIF89a")) ||
+		bytes.HasPrefix(value, []byte{'\x1a', '\x45', '\xdf', '\xa3'}) ||
+		(len(value) >= 12 && bytes.Equal(value[:4], []byte("RIFF")) && bytes.Equal(value[8:12], []byte("WEBP"))) ||
+		(len(value) >= 8 && bytes.Equal(value[4:8], []byte("ftyp")))
+}
+
+func isBinaryVideoContent(value []byte) bool {
+	if !utf8.Valid(value) {
+		return true
+	}
+	for _, b := range value {
+		if b == 0 || b < '\t' || b > '\r' && b < ' ' {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIAlphabetic(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, b := range []byte(value) {
+		if b < 'A' || b > 'Z' && b < 'a' || b > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 func truncateVideoText(value string, maxBytes int) string {
