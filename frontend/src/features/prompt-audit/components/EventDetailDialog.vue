@@ -33,7 +33,11 @@
               <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ t('admin.promptAudit.events.promptFullHint') }}</p>
               <pre class="mt-2 h-[min(46vh,26rem)] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-50 p-4 text-sm text-gray-700 dark:bg-dark-900 dark:text-dark-200" data-test="risk-prompt-full">{{ displayPrompt(event) }}</pre>
             </section>
-            <section data-test="risk-guard-return">
+            <section v-if="isCaptureOnly(event)" class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 dark:border-dark-700 dark:bg-dark-900/50 dark:text-dark-200" data-test="capture-only-notice">
+              <h4 class="font-medium">{{ t('admin.promptAudit.events.captureOnlyTitle') }}</h4>
+              <p class="mt-2 leading-6">{{ t('admin.promptAudit.events.captureOnlyNotice') }}</p>
+            </section>
+            <section v-else data-test="risk-guard-return">
               <h4 class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.promptAudit.events.guardReturn') }}</h4>
               <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ t('admin.promptAudit.events.guardReturnHint') }}</p>
               <pre class="mt-2 h-[min(46vh,26rem)] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-50 p-4 font-mono text-xs text-gray-700 dark:bg-dark-900 dark:text-dark-200">{{ formatGuardReturn(event) }}</pre>
@@ -89,9 +93,13 @@ const tabs = ['summary', 'risks', 'technical'] as const
 const activeTab = ref<(typeof tabs)[number]>('summary')
 watch(() => props.event?.id, () => { activeTab.value = 'summary' })
 
-const DECISIONS = new Set(['pass', 'flag', 'critical'])
-const ACTIONS = new Set(['Allow', 'Warn', 'Block'])
-const RISK_LEVELS = new Set(['low', 'medium', 'high', 'critical'])
+const DECISIONS = new Set(['unreviewed', 'pass', 'flag', 'critical'])
+const ACTIONS = new Set(['Record', 'Allow', 'Warn', 'Block'])
+const RISK_LEVELS = new Set(['unknown', 'low', 'medium', 'high', 'critical'])
+
+function isCaptureOnly(event: PromptAuditEvent): boolean {
+  return event.decision === 'unreviewed' || event.scanner_backend === 'capture-only'
+}
 
 function displayPrompt(event: PromptAuditEvent): string {
   return event.snapshot.full_prompt || event.snapshot.redacted_preview || '—'

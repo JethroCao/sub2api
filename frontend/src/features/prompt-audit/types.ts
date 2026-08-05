@@ -1,7 +1,7 @@
 export type PromptAuditMode = 'off' | 'capture_only' | 'async_audit' | 'blocking'
 export type PromptProcessingMode = PromptAuditMode
-export type PromptDecision = 'pass' | 'flag' | 'critical'
-export type PromptRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+export type PromptDecision = 'unreviewed' | 'pass' | 'flag' | 'critical'
+export type PromptRiskLevel = 'unknown' | 'low' | 'medium' | 'high' | 'critical'
 
 export interface PromptAuditEndpoint {
   id: string

@@ -245,6 +245,51 @@ describe('Prompt Audit components', () => {
     expect(wrapper.get('[data-test="risk-issue"]').text()).toContain('admin.promptAudit.scanners.sexual_content_or_sexual_acts')
   })
 
+  it('shows and filters capture-only events as unreviewed without Guard findings', async () => {
+    const event: PromptAuditEvent = {
+      id: 3, job_id: 3, decision: 'unreviewed', risk_level: 'unknown', action: 'Record',
+      categories: [], matched_scanners: [], scanner_scores: {}, scanner_evidence: {},
+      scanner_backend: 'capture-only', scanner_version: 'capture-only', guard_endpoint_id: '',
+      policy_id: 'capture-only', policy_version: 0, config_version: 2, chunk_total: 0, latency_ms: 0,
+      issue_summaries: [], created_at: '2026-07-17T00:00:00Z',
+      snapshot: {
+        request_id: 'capture-3', user_id: 3, username: 'carol', user_email: 'carol@example.test',
+        api_key_id: 4, api_key_name: 'capture-key', group_id: 5, group_name: 'Capture', provider: 'openai',
+        endpoint: '/v1/responses', protocol: 'openai_responses', model: 'gpt-test',
+        prompt_hash: 'c'.repeat(64), redacted_preview: 'redacted capture', full_prompt: 'capture-only full prompt',
+        prompt_length: 24, message_count: 1, stage: 'http',
+      },
+    }
+
+    const workspace = mount(EventWorkspace, {
+      props: { events: [event], total: 1, page: 1, pageSize: 20, filters: emptyEventFilters(), selectedIds: [], loading: false, error: '' },
+      global: { stubs: { Pagination: PaginationStub } },
+    })
+    expect(workspace.text()).toContain('admin.promptAudit.decisions.unreviewed · admin.promptAudit.riskLevels.unknown')
+    await workspace.get<HTMLSelectElement>('[aria-label="admin.promptAudit.events.decision"]').setValue('unreviewed')
+    await workspace.get<HTMLSelectElement>('[aria-label="admin.promptAudit.events.risk"]').setValue('unknown')
+    expect(workspace.emitted('filters-change')?.at(-1)?.[0]).toMatchObject({ decision: 'unreviewed', risk_level: 'unknown' })
+
+    const deletion = mount(FilterDeleteDialog, {
+      props: { show: true, initialFilters: emptyEventFilters(), preview: null, previewing: false, deleting: false },
+      global: { stubs: { BaseDialog: DialogStub } },
+    })
+    await deletion.get('[data-test="delete-decision"]').setValue('unreviewed')
+    await deletion.get('[data-test="delete-risk"]').setValue('unknown')
+    await deletion.get('[data-test="confirm-filter-delete"]').trigger('click')
+    expect(deletion.emitted('confirm')?.at(-1)?.[0]).toMatchObject({ decision: 'unreviewed', risk_level: 'unknown' })
+
+    const detail = mount(EventDetailDialog, {
+      props: { show: true, event, loading: false },
+      global: { stubs: { BaseDialog: DialogStub } },
+    })
+    expect(detail.get('[data-test="summary-prompt-full"]').text()).toContain('capture-only full prompt')
+    const riskTab = detail.findAll('[role="tab"]').find((tab) => tab.text().includes('admin.promptAudit.events.tabs.risks'))
+    await riskTab!.trigger('click')
+    expect(detail.get('[data-test="capture-only-notice"]').text()).toContain('admin.promptAudit.events.captureOnlyNotice')
+    expect(detail.find('[data-test="risk-guard-return"]').exists()).toBe(false)
+  })
+
   it('falls back to the redacted preview for events stored before full prompts were kept', async () => {
     const event: PromptAuditEvent = {
       id: 2, job_id: 2, decision: 'flag', risk_level: 'medium', action: 'Warn',

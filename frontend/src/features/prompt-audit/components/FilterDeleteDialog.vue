@@ -36,6 +36,7 @@
           <span>{{ t('admin.promptAudit.events.decision') }}</span>
           <select v-model="local.decision" class="input mt-1 w-full" :aria-label="t('admin.promptAudit.events.decision')" data-test="delete-decision" @change="criteriaChanged">
             <option value="">{{ t('common.all') }}</option>
+            <option value="unreviewed">{{ t('admin.promptAudit.decisions.unreviewed') }}</option>
             <option value="pass">{{ t('admin.promptAudit.decisions.pass') }}</option>
             <option value="flag">{{ t('admin.promptAudit.decisions.flag') }}</option>
             <option value="critical">{{ t('admin.promptAudit.decisions.critical') }}</option>
@@ -45,6 +46,7 @@
           <span>{{ t('admin.promptAudit.events.risk') }}</span>
           <select v-model="local.risk_level" class="input mt-1 w-full" :aria-label="t('admin.promptAudit.events.risk')" data-test="delete-risk" @change="criteriaChanged">
             <option value="">{{ t('common.all') }}</option>
+            <option value="unknown">{{ t('admin.promptAudit.riskLevels.unknown') }}</option>
             <option value="low">{{ t('admin.promptAudit.riskLevels.low') }}</option>
             <option value="medium">{{ t('admin.promptAudit.riskLevels.medium') }}</option>
             <option value="high">{{ t('admin.promptAudit.riskLevels.high') }}</option>
