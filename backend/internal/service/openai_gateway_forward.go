@@ -839,6 +839,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	httpInvalidEncryptedContentRetryTried := false
+	partialMissingRetryTried := false
 	agentTaskRecoveryTried := false
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	for {
@@ -932,6 +933,27 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				originalModel,
 				upstreamModel,
 			)
+			if !partialMissingRetryTried {
+				retryBody, changed, retryErr := normalizeOpenAIResponsesPartialMissingRetryBody(
+					account,
+					resp.StatusCode,
+					upstreamMsg,
+					body,
+					respBody,
+				)
+				if retryErr != nil {
+					return nil, fmt.Errorf("normalize Responses partial-missing retry body: %w", retryErr)
+				}
+				if changed {
+					partialMissingRetryTried = true
+					body = retryBody
+					requestView = newOpenAIRequestView(body)
+					reqBody = nil
+					rejectedFieldRetryState.remember(body)
+					logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying non-WSv2 request once after missing partial (account: %s)", account.Name)
+					continue
+				}
+			}
 			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
 				decoded, decodeErr := ensureReqBody()
 				if decodeErr != nil {
