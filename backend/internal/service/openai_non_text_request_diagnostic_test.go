@@ -125,3 +125,30 @@ func TestLogOpenAINonTextInputRequestBodiesIgnoresOtherErrors(t *testing.T) {
 
 	require.Empty(t, observed.All())
 }
+
+func TestOpenAIGatewayForwardLogsClientAndFailedUpstreamBodiesForNonTextInputError(t *testing.T) {
+	core, observed := observer.New(zap.WarnLevel)
+	ctx := logger.IntoContext(context.Background(), zap.New(core))
+	clientBody := []byte(`{"model":"gpt-5.5","stream":false,"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,abc"}]}]}`)
+	errorBody := `{"error":{"code":"InvalidParameter","message":"Model only support text input Request id: req-1","param":"","type":"BadRequest"}}`
+	upstream := &httpUpstreamRecorder{resp: newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, errorBody)}
+	account := newOpenAIRejectedFieldTestAccount()
+	account.ID = 12
+	account.Name = "火山引擎deepseek"
+	account.Credentials["model_mapping"] = map[string]any{"gpt-5.5": "ep-test"}
+	c := newOpenAIRejectedFieldTestContext(clientBody)
+	c.Set("api_key", &APIKey{ID: 125})
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(ctx, c, account, clientBody)
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Len(t, upstream.bodies, 1)
+
+	entries := observed.FilterMessage(openAINonTextInputRequestBodyLogMessage).All()
+	require.Len(t, entries, 2)
+	require.Equal(t, "client", entries[0].ContextMap()["body_kind"])
+	require.Equal(t, string(clientBody), entries[0].ContextMap()["request_body"])
+	require.Equal(t, "upstream", entries[1].ContextMap()["body_kind"])
+	require.Equal(t, string(upstream.bodies[0]), entries[1].ContextMap()["request_body"])
+}

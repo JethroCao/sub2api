@@ -933,6 +933,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				originalModel,
 				upstreamModel,
 			)
+			logOpenAINonTextInputRequestBodies(
+				ctx,
+				c,
+				account,
+				resp.StatusCode,
+				upstreamMsg,
+				respBody,
+				clientEntryBody,
+				body,
+				originalModel,
+				upstreamModel,
+			)
 			if !partialMissingRetryTried {
 				retryBody, changed, retryErr := normalizeOpenAIResponsesPartialMissingRetryBody(
 					account,
