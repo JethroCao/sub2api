@@ -116,7 +116,7 @@ func NormalizeVideoAccountAdminCreate(platform string, credentials, extra map[st
 	if platform != PlatformVideo {
 		return cloneVideoAdminMap(credentials), cloneVideoAdminMap(extra), nil
 	}
-	normalizedExtra, err := normalizeVideoAccountExtra(nil, extra)
+	normalizedExtra, err := normalizeVideoAccountExtra(nil, extra, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,6 +139,7 @@ func NormalizeVideoAccountAdminUpdate(account *Account, incomingCredentials, inc
 		return cloneVideoAdminMap(incomingCredentials), cloneVideoAdminMap(incomingExtra), nil
 	}
 
+	explicitDisable := isExplicitVideoAccountDisable(requestedStatus)
 	existingExtra := cloneVideoAdminMap(account.Extra)
 	if existingExtra == nil {
 		existingExtra = make(map[string]any)
@@ -148,7 +149,7 @@ func NormalizeVideoAccountAdminUpdate(account *Account, incomingCredentials, inc
 			existingExtra[VideoModelMappingExtraKey] = legacyMapping
 		}
 	}
-	normalizedExtra, err := normalizeVideoAccountExtra(existingExtra, incomingExtra)
+	normalizedExtra, err := normalizeVideoAccountExtra(existingExtra, incomingExtra, explicitDisable)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -158,7 +159,6 @@ func NormalizeVideoAccountAdminUpdate(account *Account, incomingCredentials, inc
 		return nil, nil, err
 	}
 
-	explicitDisable := isExplicitVideoAccountDisable(requestedStatus)
 	normalizedCredentials, err := normalizeVideoAccountCredentials(existingCredentials, incomingCredentials, explicitDisable, provider)
 	if err != nil {
 		return nil, nil, err
@@ -176,6 +176,10 @@ func NormalizeVideoAccountAdminUpdate(account *Account, incomingCredentials, inc
 // ValidateVideoAccountAdminFinalConfig validates the final merged state while
 // permitting an explicitly disabled account to have its secrets removed.
 func ValidateVideoAccountAdminFinalConfig(platform, accountType, status string, extra, credentials map[string]any) error {
+	return validateVideoAccountAdminFinalConfig(platform, accountType, status, extra, credentials, false)
+}
+
+func validateVideoAccountAdminFinalConfig(platform, accountType, status string, extra, credentials map[string]any, allowMissingMappingOnExplicitDisable bool) error {
 	if platform != PlatformVideo {
 		return nil
 	}
@@ -186,7 +190,17 @@ func ValidateVideoAccountAdminFinalConfig(platform, accountType, status string, 
 	if provider != VideoProviderSeedance && provider != VideoProviderKling {
 		return infraerrors.BadRequest("VIDEO_PROVIDER_INVALID", "video provider must be seedance or kling")
 	}
-	if err := validateVideoModelMappingRequired(extra); err != nil {
+	if allowMissingMappingOnExplicitDisable && isVideoAccountDisabledStatus(status) {
+		if rawMapping, exists := extra[VideoModelMappingExtraKey]; exists {
+			mapping, err := normalizeVideoModelMapping(rawMapping)
+			if err != nil {
+				return err
+			}
+			if len(mapping) == 0 {
+				return infraerrors.BadRequest("VIDEO_MODEL_MAPPING_REQUIRED", "empty video model mapping must be removed when disabling an account")
+			}
+		}
+	} else if err := validateVideoModelMappingRequired(extra); err != nil {
 		return err
 	}
 	if isVideoAccountDisabledStatus(status) {
@@ -431,7 +445,7 @@ func VideoAccountDisplayBaseURL(account *Account) (string, bool) {
 	return normalized, ok && normalized != ""
 }
 
-func normalizeVideoAccountExtra(existing, incoming map[string]any) (map[string]any, error) {
+func normalizeVideoAccountExtra(existing, incoming map[string]any, allowMissingOrInvalidStoredMapping bool) (map[string]any, error) {
 	result := make(map[string]any)
 	for key, value := range existing {
 		if _, ok := videoAccountExtraKeys[key]; ok {
@@ -456,17 +470,24 @@ func normalizeVideoAccountExtra(existing, incoming map[string]any) (map[string]a
 	}
 	result[VideoProviderExtraKey] = provider
 
+	_, mappingSubmitted := incoming[VideoModelMappingExtraKey]
 	if rawMapping, exists := result[VideoModelMappingExtraKey]; exists {
 		mapping, err := normalizeVideoModelMapping(rawMapping)
 		if err != nil {
-			return nil, err
-		}
-		if len(mapping) > 0 {
+			if mappingSubmitted || !allowMissingOrInvalidStoredMapping {
+				return nil, err
+			}
+			delete(result, VideoModelMappingExtraKey)
+		} else if len(mapping) == 0 {
+			delete(result, VideoModelMappingExtraKey)
+		} else {
 			result[VideoModelMappingExtraKey] = mapping
 		}
 	}
-	if err := validateVideoModelMappingRequired(result); err != nil {
-		return nil, err
+	if !allowMissingOrInvalidStoredMapping {
+		if err := validateVideoModelMappingRequired(result); err != nil {
+			return nil, err
+		}
 	}
 	if rawDisabled, exists := result[VideoDisabledCapabilitiesExtraKey]; exists {
 		disabled, err := normalizeVideoDisabledCapabilities(rawDisabled)

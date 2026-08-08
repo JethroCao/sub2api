@@ -764,7 +764,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Status != "" {
 		finalStatus = input.Status
 	}
-	if err := ValidateVideoAccountAdminFinalConfig(account.Platform, account.Type, finalStatus, account.Extra, account.Credentials); err != nil {
+	if err := validateVideoAccountAdminFinalConfig(
+		account.Platform,
+		account.Type,
+		finalStatus,
+		account.Extra,
+		account.Credentials,
+		videoAccountUpdate && isExplicitVideoAccountDisable(input.Status),
+	); err != nil {
 		return nil, err
 	}
 	if requestedRateSyncEnabledUpdate != nil && *requestedRateSyncEnabledUpdate {

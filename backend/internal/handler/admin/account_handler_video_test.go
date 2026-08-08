@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,24 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type videoDisableNormalizingAdminService struct {
+	*stubAdminService
+	account *service.Account
+}
+
+func (s *videoDisableNormalizingAdminService) UpdateAccount(_ context.Context, _ int64, input *service.UpdateAccountInput) (*service.Account, error) {
+	credentials, extra, err := service.NormalizeVideoAccountAdminUpdate(s.account, input.Credentials, input.Extra, input.Status)
+	if err != nil {
+		return nil, err
+	}
+	updated := *s.account
+	updated.Credentials = credentials
+	updated.Extra = extra
+	updated.Status = service.StatusDisabled
+	s.account = &updated
+	return &updated, nil
+}
 
 func TestVideoAccountHandlerReadResponseExposesMetadataWithoutSecrets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -173,4 +192,39 @@ func TestVideoAccountHandlerUpdateMapsExplicitDisableAndSecretClear(t *testing.T
 	require.Zero(t, *input.Concurrency)
 	require.NotNil(t, input.GroupIDs)
 	require.Empty(t, *input.GroupIDs)
+}
+
+func TestVideoAccountHandlerExplicitDisableClearsLegacyMissingMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	adminService := &videoDisableNormalizingAdminService{
+		stubAdminService: newStubAdminService(),
+		account: &service.Account{
+			ID:          44,
+			Platform:    service.PlatformVideo,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Credentials: map[string]any{"api_key": "legacy-secret"},
+			Extra:       map[string]any{service.VideoProviderExtraKey: service.VideoProviderSeedance},
+		},
+	}
+	handler := NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.PUT("/accounts/:id", handler.Update)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/accounts/44", bytes.NewBufferString(`{
+		"status":"inactive",
+		"credentials":{"api_key":null},
+		"extra":{"model_mapping":{}}
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, service.StatusDisabled, adminService.account.Status)
+	require.Empty(t, adminService.account.Credentials)
+	require.NotContains(t, adminService.account.Extra, service.VideoModelMappingExtraKey)
+	require.False(t, adminService.account.IsSchedulable())
+	require.NotContains(t, recorder.Body.String(), "legacy-secret")
 }

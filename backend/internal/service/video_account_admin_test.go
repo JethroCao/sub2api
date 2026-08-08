@@ -88,7 +88,7 @@ func TestNormalizeVideoAccountAdminRejectsMissingOrClearedModelMapping(t *testin
 		account,
 		nil,
 		map[string]any{"model_mapping": map[string]any{}},
-		StatusDisabled,
+		StatusActive,
 	)
 	require.Equal(t, "VIDEO_MODEL_MAPPING_REQUIRED", infraerrors.Reason(err))
 }

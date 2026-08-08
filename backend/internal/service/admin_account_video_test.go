@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -256,4 +257,194 @@ func TestUpdateAccountSecretClearPersistsOnlyWithExplicitInactive(t *testing.T) 
 	require.Equal(t, StatusDisabled, updated.Status)
 	require.NotContains(t, updated.Credentials, "access_key")
 	require.NotContains(t, updated.Credentials, "secret_key")
+}
+
+func TestUpdateAccountExplicitDisableClearsLegacyInvalidMappingAndSecrets(t *testing.T) {
+	const accountID int64 = 7
+	for _, tt := range []struct {
+		name        string
+		credentials map[string]any
+		extra       map[string]any
+	}{
+		{
+			name:        "missing legacy mapping explicitly cleared",
+			credentials: map[string]any{"api_key": "ark-key"},
+			extra:       map[string]any{VideoModelMappingExtraKey: map[string]any{}},
+		},
+		{name: "wildcard legacy mapping", credentials: map[string]any{
+			"api_key":       "ark-key",
+			"model_mapping": map[string]any{"seedance-*": "endpoint-id"},
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &upstreamBillingProbeAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+				accountID: {
+					ID:          accountID,
+					Platform:    PlatformVideo,
+					Type:        AccountTypeAPIKey,
+					Status:      StatusActive,
+					Schedulable: true,
+					Extra:       map[string]any{VideoProviderExtraKey: VideoProviderSeedance},
+					Credentials: tt.credentials,
+				},
+			}}}
+
+			updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+				Status:      "inactive",
+				Credentials: map[string]any{"api_key": nil},
+				Extra:       tt.extra,
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, StatusDisabled, updated.Status)
+			require.Equal(t, map[string]any{}, updated.Credentials)
+			require.Equal(t, map[string]any{VideoProviderExtraKey: VideoProviderSeedance}, updated.Extra)
+			require.False(t, updated.IsSchedulable())
+			require.Equal(t, StatusDisabled, repo.accounts[accountID].Status)
+			require.Equal(t, map[string]any{}, repo.accounts[accountID].Credentials)
+			require.NotContains(t, repo.accounts[accountID].Extra, VideoModelMappingExtraKey)
+		})
+	}
+}
+
+func TestUpdateAccountMappingExemptionRequiresExplicitDisable(t *testing.T) {
+	const accountID int64 = 8
+	repo := &upstreamBillingProbeAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+		accountID: {
+			ID:          accountID,
+			Platform:    PlatformVideo,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Extra:       map[string]any{VideoProviderExtraKey: VideoProviderSeedance},
+			Credentials: map[string]any{"api_key": "ark-key"},
+		},
+	}}}
+
+	_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Status: StatusActive,
+		Extra:  map[string]any{VideoModelMappingExtraKey: map[string]any{}},
+	})
+
+	require.Equal(t, "VIDEO_MODEL_MAPPING_REQUIRED", infraerrors.Reason(err))
+	require.Equal(t, StatusActive, repo.accounts[accountID].Status)
+	require.Equal(t, "ark-key", repo.accounts[accountID].Credentials["api_key"])
+}
+
+func TestUpdateAccountReactivationRequiresCredentialsAndExactMapping(t *testing.T) {
+	const accountID int64 = 11
+	for _, tt := range []struct {
+		name        string
+		credentials map[string]any
+		extra       map[string]any
+		wantReason  string
+	}{
+		{
+			name:        "missing mapping",
+			credentials: map[string]any{"api_key": "new-key"},
+			wantReason:  "VIDEO_MODEL_MAPPING_REQUIRED",
+		},
+		{
+			name:       "missing credentials",
+			extra:      map[string]any{VideoModelMappingExtraKey: map[string]any{"seedance-2.0": "endpoint-id"}},
+			wantReason: "VIDEO_SEEDANCE_API_KEY_REQUIRED",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &upstreamBillingProbeAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+				accountID: {
+					ID:          accountID,
+					Platform:    PlatformVideo,
+					Type:        AccountTypeAPIKey,
+					Status:      StatusDisabled,
+					Schedulable: true,
+					Extra:       map[string]any{VideoProviderExtraKey: VideoProviderSeedance},
+					Credentials: map[string]any{},
+				},
+			}}}
+
+			_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+				Status:      StatusActive,
+				Credentials: tt.credentials,
+				Extra:       tt.extra,
+			})
+
+			require.Equal(t, tt.wantReason, infraerrors.Reason(err))
+			require.Equal(t, StatusDisabled, repo.accounts[accountID].Status)
+			require.Empty(t, repo.accounts[accountID].Credentials)
+			require.NotContains(t, repo.accounts[accountID].Extra, VideoModelMappingExtraKey)
+		})
+	}
+}
+
+func TestUpdateAccountExplicitDisableRejectsNewInvalidMapping(t *testing.T) {
+	const accountID int64 = 9
+	for _, mapping := range []any{
+		map[string]any{"seedance-*": "endpoint-id"},
+		map[string]any{"seedance-2.0": 42},
+	} {
+		repo := &upstreamBillingProbeAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+			accountID: {
+				ID:          accountID,
+				Platform:    PlatformVideo,
+				Type:        AccountTypeAPIKey,
+				Status:      StatusActive,
+				Schedulable: true,
+				Extra:       map[string]any{VideoProviderExtraKey: VideoProviderSeedance},
+				Credentials: map[string]any{"api_key": "ark-key"},
+			},
+		}}}
+
+		_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+			Status:      StatusDisabled,
+			Credentials: map[string]any{"api_key": nil},
+			Extra:       map[string]any{VideoModelMappingExtraKey: mapping},
+		})
+
+		require.Equal(t, "VIDEO_MODEL_MAPPING_INVALID", infraerrors.Reason(err))
+		require.Equal(t, StatusActive, repo.accounts[accountID].Status)
+		require.Equal(t, "ark-key", repo.accounts[accountID].Credentials["api_key"])
+	}
+}
+
+func TestUpdateAccountExplicitDisableStillValidatesNonMappingConfiguration(t *testing.T) {
+	const accountID int64 = 10
+	tests := []struct {
+		name        string
+		credentials map[string]any
+		extra       map[string]any
+		wantReason  string
+	}{
+		{name: "provider", extra: map[string]any{VideoProviderExtraKey: "unknown"}, wantReason: "VIDEO_PROVIDER_INVALID"},
+		{name: "credential allowlist", credentials: map[string]any{"api_key": nil, "region": "cn"}, extra: map[string]any{VideoModelMappingExtraKey: map[string]any{}}, wantReason: "VIDEO_CREDENTIAL_KEY_INVALID"},
+		{name: "extra allowlist", credentials: map[string]any{"api_key": nil}, extra: map[string]any{VideoModelMappingExtraKey: map[string]any{}, "provider_state": true}, wantReason: "VIDEO_EXTRA_KEY_INVALID"},
+		{name: "base url", credentials: map[string]any{"api_key": nil, "base_url": "https://ark.example.com/unverified"}, extra: map[string]any{VideoModelMappingExtraKey: map[string]any{}}, wantReason: "VIDEO_BASE_URL_INVALID"},
+		{name: "disabled capability", credentials: map[string]any{"api_key": nil}, extra: map[string]any{VideoModelMappingExtraKey: map[string]any{}, VideoDisabledCapabilitiesExtraKey: []any{"telepathy"}}, wantReason: "VIDEO_CAPABILITY_INVALID"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &upstreamBillingProbeAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+				accountID: {
+					ID:          accountID,
+					Platform:    PlatformVideo,
+					Type:        AccountTypeAPIKey,
+					Status:      StatusActive,
+					Schedulable: true,
+					Extra:       map[string]any{VideoProviderExtraKey: VideoProviderSeedance},
+					Credentials: map[string]any{"api_key": "ark-key"},
+				},
+			}}}
+
+			_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+				Status:      StatusDisabled,
+				Credentials: tt.credentials,
+				Extra:       tt.extra,
+			})
+
+			require.Equal(t, tt.wantReason, infraerrors.Reason(err))
+			require.Equal(t, StatusActive, repo.accounts[accountID].Status)
+			require.Equal(t, "ark-key", repo.accounts[accountID].Credentials["api_key"])
+		})
+	}
 }
