@@ -69,6 +69,25 @@ func TestCompositeRouteResolverExplicitExactRouteRewritesModel(t *testing.T) {
 	require.Equal(t, int64(10), decision.Route.ID)
 }
 
+func TestCompositeRouteResolverCanRoutePlatformUsesEnabledGroupRoutes(t *testing.T) {
+	resolver := NewCompositeRouteResolver(compositeRouteRepoStub{routes: []CompositeModelRoute{
+		{ID: 1, GroupID: 7, TargetPlatform: PlatformGrok, Enabled: true},
+		{ID: 2, GroupID: 8, TargetPlatform: PlatformGrok, Enabled: true},
+		{ID: 3, GroupID: 7, TargetPlatform: PlatformVideo, Enabled: true},
+		{ID: 4, GroupID: 9, TargetPlatform: PlatformGrok, Enabled: false},
+	}})
+
+	canRoute, err := resolver.CanRoutePlatform(context.Background(), 7, PlatformGrok)
+	require.NoError(t, err)
+	require.True(t, canRoute)
+	canRoute, err = resolver.CanRoutePlatform(context.Background(), 7, PlatformGemini)
+	require.NoError(t, err)
+	require.False(t, canRoute)
+	canRoute, err = resolver.CanRoutePlatform(context.Background(), 9, PlatformGrok)
+	require.NoError(t, err)
+	require.False(t, canRoute)
+}
+
 func TestCompositeRouteResolverPrefersEndpointSpecificLongestPrefix(t *testing.T) {
 	resolver := NewCompositeRouteResolver(compositeRouteRepoStub{
 		routes: []CompositeModelRoute{

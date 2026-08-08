@@ -186,6 +186,7 @@ func ProvideHandlers(
 	modelPlazaHandler *ModelPlazaHandler,
 	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
+	videoHandler *VideoHandler,
 	feishuOrgHandler *FeishuOrgHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
@@ -211,6 +212,7 @@ func ProvideHandlers(
 		ModelPlaza:       modelPlazaHandler,
 		AsyncImage:       asyncImageHandler,
 		BatchImage:       batchImageHandler,
+		Video:            videoHandler,
 		FeishuOrg:        feishuOrgHandler,
 	}
 }
@@ -237,6 +239,7 @@ var ProviderSet = wire.NewSet(
 	NewModelPlazaHandler,
 	NewAsyncImageHandler,
 	ProvideBatchImageHandler,
+	NewVideoHandler,
 	NewFeishuOrgHandler,
 
 	// Admin handlers

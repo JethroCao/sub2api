@@ -167,8 +167,7 @@ func (r *videoTaskRepository) AssignAndMarkSubmitting(ctx context.Context, param
 	if err := validateVideoRequestID(params.RequestID); err != nil {
 		return err
 	}
-	if params.ExpectedVersion < 0 || params.AccountID <= 0 || params.Platform != service.PlatformVideo ||
-		(params.Provider != service.VideoProviderSeedance && params.Provider != service.VideoProviderKling) ||
+	if params.ExpectedVersion < 0 || params.AccountID <= 0 || !validDurableVideoRoute(params.Platform, params.Provider) ||
 		strings.TrimSpace(params.UpstreamModel) == "" || strings.TrimSpace(params.ProviderSubmissionToken) == "" ||
 		len(params.ProviderSubmissionToken) > 128 || params.NextPollAt.IsZero() {
 		return service.ErrVideoTaskInvalidRequest
@@ -932,8 +931,7 @@ func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
 	routePending := params.AccountID == 0 && strings.TrimSpace(params.UpstreamModel) == ""
 	if params.UserID <= 0 || params.APIKeyID <= 0 || params.GroupID <= 0 || (!routeAssigned && !routePending) ||
 		(routePending && (params.NextPollAt == nil || params.NextPollAt.IsZero())) ||
-		params.Platform != service.PlatformVideo ||
-		(params.Provider != service.VideoProviderSeedance && params.Provider != service.VideoProviderKling) ||
+		!validDurableVideoRoute(params.Platform, params.Provider) ||
 		(params.Operation != "generation" && params.Operation != "edit" && params.Operation != "extension") ||
 		strings.TrimSpace(params.ExternalModel) == "" ||
 		!videoTaskSHA256Pattern.MatchString(params.RequestHash) ||
@@ -948,6 +946,12 @@ func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
 		return service.ErrVideoTaskInvalidRequest
 	}
 	return nil
+}
+
+func validDurableVideoRoute(platform, provider string) bool {
+	return (platform == service.PlatformGrok && provider == service.PlatformGrok) ||
+		(platform == service.PlatformVideo &&
+			(provider == service.VideoProviderSeedance || provider == service.VideoProviderKling))
 }
 
 func validateVideoTaskBillingOwnership(ctx context.Context, tx *sql.Tx, params service.CreateVideoTaskParams) error {

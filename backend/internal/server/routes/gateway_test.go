@@ -38,6 +38,7 @@ func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string
 			Gateway:       &handler.GatewayHandler{},
 			OpenAIGateway: &handler.OpenAIGatewayHandler{},
 			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+			Video:         gatewayRoutesVideoStub{platform: groupPlatform},
 		},
 		servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
 			groupID := int64(1)
@@ -57,6 +58,88 @@ func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string
 
 	return router
 }
+
+type gatewayRoutesVideoStub struct{ platform string }
+
+func (s gatewayRoutesVideoStub) Generate(c *gin.Context) { s.submit(c) }
+func (s gatewayRoutesVideoStub) Edit(c *gin.Context)     { s.submit(c) }
+func (s gatewayRoutesVideoStub) Extend(c *gin.Context)   { s.submit(c) }
+func (s gatewayRoutesVideoStub) Status(c *gin.Context)   { s.lookup(c) }
+func (s gatewayRoutesVideoStub) Content(c *gin.Context)  { s.lookup(c) }
+
+func (s gatewayRoutesVideoStub) submit(c *gin.Context) {
+	if s.platform == service.PlatformGrok {
+		c.Status(http.StatusAccepted)
+		return
+	}
+	c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Videos API is not supported for this platform"}})
+}
+
+func (s gatewayRoutesVideoStub) lookup(c *gin.Context) {
+	if s.platform == service.PlatformGrok || s.platform == service.PlatformComposite {
+		c.Status(http.StatusOK)
+		return
+	}
+	c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Videos API is not supported for this platform"}})
+}
+
+func TestVideoRoutesDispatchGrokVideoToDedicatedHandler(t *testing.T) {
+	spy := &videoRouteSpy{}
+	router := newGatewayRoutesTestRouterWithVideoSpy(t, service.PlatformGrok, spy)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{"model":"grok-imagine-video","prompt":"waves"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusAccepted, w.Code)
+	require.Equal(t, 1, spy.generateCalls)
+}
+
+func TestVideoRoutesDispatchAllFivePublicPathsToDedicatedHandler(t *testing.T) {
+	spy := &videoRouteSpy{}
+	router := newGatewayRoutesTestRouterWithVideoSpy(t, service.PlatformVideo, spy)
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPost, "/v1/videos/generations"},
+		{http.MethodPost, "/v1/videos/edits"},
+		{http.MethodPost, "/v1/videos/extensions"},
+		{http.MethodGet, "/v1/videos/vid_0123456789abcdef0123456789abcdef"},
+		{http.MethodGet, "/v1/videos/vid_0123456789abcdef0123456789abcdef/content"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{"model":"seedance-2.0","prompt":"waves"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.NotEqual(t, http.StatusNotFound, w.Code, "method=%s path=%s", tc.method, tc.path)
+	}
+	require.Equal(t, []int{1, 1, 1, 1, 1}, []int{spy.generateCalls, spy.editCalls, spy.extendCalls, spy.statusCalls, spy.contentCalls})
+}
+
+func newGatewayRoutesTestRouterWithVideoSpy(t *testing.T, platform string, spy *videoRouteSpy) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	groupID := int64(1)
+	RegisterGatewayRoutes(router, &handler.Handlers{
+		Gateway: &handler.GatewayHandler{}, OpenAIGateway: &handler.OpenAIGatewayHandler{},
+		AsyncImage: handler.NewAsyncImageHandler(nil, nil), Video: spy,
+	}, servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+			ID: 20, UserID: 10, GroupID: &groupID,
+			Group: &service.Group{ID: groupID, Platform: platform, Status: service.StatusActive, Hydrated: true, AllowVideoGeneration: true},
+		})
+		c.Next()
+	}), nil, nil, nil, nil, nil, &config.Config{Gateway: config.GatewayConfig{MaxBodySize: 1024 * 1024}})
+	return router
+}
+
+type videoRouteSpy struct{ generateCalls, editCalls, extendCalls, statusCalls, contentCalls int }
+
+func (s *videoRouteSpy) Generate(c *gin.Context) { s.generateCalls++; c.Status(http.StatusAccepted) }
+func (s *videoRouteSpy) Edit(c *gin.Context)     { s.editCalls++; c.Status(http.StatusAccepted) }
+func (s *videoRouteSpy) Extend(c *gin.Context)   { s.extendCalls++; c.Status(http.StatusAccepted) }
+func (s *videoRouteSpy) Status(c *gin.Context)   { s.statusCalls++; c.Status(http.StatusOK) }
+func (s *videoRouteSpy) Content(c *gin.Context)  { s.contentCalls++; c.Status(http.StatusOK) }
 
 func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {
 	router := newGatewayRoutesTestRouter()

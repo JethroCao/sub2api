@@ -59,7 +59,7 @@ func TestVideoSubmitRejectsUnsupportedBeforeHold(t *testing.T) {
 	require.Equal(t, []string{"validate"}, deps.order)
 }
 
-func TestVideoSubmitRejectsGrokBeforeQuoteOrHold(t *testing.T) {
+func TestVideoSubmitAcceptsDurableGrokWhenEnabled(t *testing.T) {
 	deps := newVideoSubmitHarness(t)
 	deps.service.videoConfig.GrokEnabled = true
 	command := deps.command()
@@ -67,20 +67,33 @@ func TestVideoSubmitRejectsGrokBeforeQuoteOrHold(t *testing.T) {
 	command.Platform = PlatformGrok
 	command.Provider = PlatformGrok
 	command.Request.Model = "grok-imagine-video"
+	deps.pricing.quote.ExternalModel = command.Request.Model
+	deps.account.Platform = PlatformGrok
+	deps.account.Extra = nil
+	deps.account.Credentials = map[string]any{
+		"api_key":       "provider-secret-never-persisted",
+		"model_mapping": map[string]any{"grok-imagine-video": "grok-imagine-video"},
+	}
 	deps.capabilities.catalog[VideoModelCapabilityKey(PlatformGrok, command.Request.Model)] = VideoProviderCapabilities{
 		VideoOperationGeneration: {Text: true},
 	}
-	grokProvider := &videoSubmitProvider{harness: deps, name: PlatformGrok}
+	grokProvider := &videoSubmitProvider{harness: deps, name: PlatformGrok, submitResult: VideoSubmitResult{
+		UpstreamTaskID: "grok-upstream-task", Status: VideoTaskQueued, UpstreamStatus: "queued",
+	}}
 	registry, err := NewVideoProviderRegistry(deps.provider, grokProvider)
 	require.NoError(t, err)
 	deps.service.providers = registry
 
-	_, err = deps.service.Submit(context.Background(), command)
+	task, err := deps.service.Submit(context.Background(), command)
 
-	require.ErrorIs(t, err, ErrVideoUnsupportedCapability)
-	require.Zero(t, deps.pricing.calls)
-	require.Zero(t, deps.submissions.reserveCalls)
-	require.Zero(t, deps.scheduler.selectCalls)
+	require.NoError(t, err)
+	require.Equal(t, PlatformGrok, task.Platform)
+	require.Equal(t, PlatformGrok, task.Provider)
+	require.Equal(t, "grok-upstream-task", *task.UpstreamTaskID)
+	require.Equal(t, 1, deps.pricing.calls)
+	require.Equal(t, 1, deps.submissions.reserveCalls)
+	require.Equal(t, 1, deps.scheduler.selectCalls)
+	require.Equal(t, 1, grokProvider.submitCalls)
 	require.Zero(t, deps.provider.submitCalls)
 }
 

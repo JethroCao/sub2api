@@ -303,11 +303,25 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	batchImageDownloadService := service.NewBatchImageDownloadService(batchImageRepository, accountRepository, batchImageDownloadLimiter, configConfig)
 	batchImageCleanupService := service.ProvideBatchImageCleanupService(batchImageRepository, accountRepository, configConfig)
 	batchImageHandler := handler.ProvideBatchImageHandler(batchImagePublicService, batchImageDownloadService, batchImageCleanupService, openAIGatewayHandler)
+	videoTaskRepository := repository.NewVideoTaskRepository(db)
+	videoSubmissionRepository := repository.ProvideVideoSubmissionRepository(videoTaskRepository)
+	videoPricingRepository := repository.NewVideoPricingRepository(db)
+	videoPricingService := service.NewVideoPricingService(videoPricingRepository)
+	videoBillingService := service.NewVideoBillingService(usageBillingRepository)
+	videoProviderRegistry, err := service.ProvideDurableVideoProviderRegistry(openAIGatewayService, httpUpstream)
+	if err != nil {
+		return nil, err
+	}
+	videoCapabilityValidator := service.ProvideVideoCapabilityValidator(videoProviderRegistry)
+	openAIVideoAccountScheduler := service.NewOpenAIVideoAccountScheduler(openAIGatewayService)
+	videoTaskService := service.ProvideVideoTaskService(videoSubmissionRepository, videoTaskRepository, videoPricingService, videoBillingService, videoProviderRegistry, videoCapabilityValidator, openAIVideoAccountScheduler, subscriptionService, configConfig)
+	videoContentFetcher := service.NewVideoContentFetcher()
+	videoHandler := handler.NewVideoHandler(videoTaskService, billingCacheService, accountRepository, videoProviderRegistry, videoContentFetcher, openAIGatewayHandler, compositeRouteResolver)
 	feishuOrgPermissionService := service.ProvideFeishuOrgPermissionService(db, apiKeyAuthCacheInvalidator, leaderLockCache)
 	feishuOrgHandler := handler.NewFeishuOrgHandler(feishuOrgPermissionService, settingService, usageService)
 	idempotencyCoordinator := service.ProvideIdempotencyCoordinator(idempotencyRepository, configConfig)
 	idempotencyCleanupService := service.ProvideIdempotencyCleanupService(idempotencyRepository, configConfig)
-	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, channelMonitorUserHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, handlerSettingHandler, totpHandler, passkeyHandler, handlerPaymentHandler, paymentWebhookHandler, availableChannelHandler, modelPlazaHandler, asyncImageHandler, batchImageHandler, feishuOrgHandler, idempotencyCoordinator, idempotencyCleanupService)
+	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, channelMonitorUserHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, handlerSettingHandler, totpHandler, passkeyHandler, handlerPaymentHandler, paymentWebhookHandler, availableChannelHandler, modelPlazaHandler, asyncImageHandler, batchImageHandler, videoHandler, feishuOrgHandler, idempotencyCoordinator, idempotencyCleanupService)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService, settingService, auditLogService)
 	optionalJWTAuthMiddleware := middleware.NewOptionalJWTAuthMiddleware(authService, userService, settingService, auditLogService)
 	adminAuthMiddleware := middleware.NewAdminAuthMiddleware(authService, userService, settingService, auditLogService)
@@ -326,12 +340,6 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	proxyExpiryService := service.ProvideProxyExpiryService(proxyRepository)
 	subscriptionExpiryService := service.ProvideSubscriptionExpiryService(userSubscriptionRepository, settingRepository, notificationEmailService, leaderLockCache, db)
 	batchImageWorkerRuntime := service.ProvideBatchImageWorkerRuntime(batchImageRepository, accountRepository, batchImageQueue, usageBillingRepository, usageLogRepository, batchImageModelPricingResolver, apiKeyAuthCacheInvalidator, configConfig)
-	videoTaskRepository := repository.NewVideoTaskRepository(db)
-	videoBillingService := service.NewVideoBillingService(usageBillingRepository)
-	videoProviderRegistry, err := service.ProvideDurableVideoProviderRegistry(openAIGatewayService, httpUpstream)
-	if err != nil {
-		return nil, err
-	}
 	videoReconciler := service.ProvideVideoReconciler(videoTaskRepository, accountRepository, videoBillingService, videoProviderRegistry, configConfig)
 	videoRetention := service.ProvideVideoRetention(videoTaskRepository, configConfig)
 	videoRuntime := service.ProvideVideoRuntime(videoTaskRepository, videoReconciler, videoRetention, configConfig)

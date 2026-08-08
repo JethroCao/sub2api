@@ -65,6 +65,19 @@ func ProvideDurableVideoProviderRegistry(openAIGateway *OpenAIGatewayService, up
 	)
 }
 
+func ProvideVideoCapabilityValidator(registry *VideoProviderRegistry) VideoCapabilityValidator {
+	catalog := make(VideoCapabilityCatalog)
+	if registry == nil {
+		return catalog
+	}
+	for name, provider := range registry.providers {
+		if provider != nil {
+			catalog[name] = provider.Capabilities()
+		}
+	}
+	return catalog
+}
+
 func ProvideVideoReconciler(
 	repo VideoTaskRepository,
 	accounts AccountRepository,
@@ -767,7 +780,12 @@ var ProviderSet = wire.NewSet(
 	NewBatchImageDownloadService,
 	NewVideoPricingService,
 	NewVideoBillingService,
+	NewVideoContentFetcher,
 	ProvideDurableVideoProviderRegistry,
+	ProvideVideoCapabilityValidator,
+	NewOpenAIVideoAccountScheduler,
+	wire.Bind(new(VideoAccountScheduler), new(*OpenAIVideoAccountScheduler)),
+	wire.Bind(new(VideoSubscriptionWindowMaintainer), new(*SubscriptionService)),
 	ProvideVideoTaskService,
 	ProvideVideoReconciler,
 	ProvideVideoRetention,

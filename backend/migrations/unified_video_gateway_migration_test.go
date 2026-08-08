@@ -98,3 +98,18 @@ func TestKlingVideoPollRouteHintMigrationRetainsOnlyStrictDiscriminator(t *testi
 	require.NotContains(t, sql, "prompt")
 	require.NotContains(t, sql, "video_id")
 }
+
+func TestDurableGrokVideoRouteMigrationUsesForwardConstraints(t *testing.T) {
+	migration, err := FS.ReadFile("202_durable_grok_video_route.sql")
+	require.NoError(t, err)
+	sql := string(migration)
+	require.Contains(t, sql, "DROP CONSTRAINT video_tasks_platform_check")
+	require.Contains(t, sql, "DROP CONSTRAINT video_tasks_provider_check")
+	require.Contains(t, sql, "platform IN ('video', 'grok')")
+	require.Contains(t, sql, "provider IN ('seedance', 'kling', 'grok')")
+	require.Contains(t, sql, "(platform = 'grok' AND provider = 'grok')")
+	require.Contains(t, sql, "(platform = 'video' AND provider IN ('seedance', 'kling'))")
+	require.NotContains(t, sql, "ALTER TABLE video_tasks DROP COLUMN")
+	require.NotContains(t, sql, "DELETE FROM video_tasks")
+	require.NotContains(t, sql, "UPDATE video_tasks")
+}

@@ -285,13 +285,14 @@ func (s *VideoTaskService) validateSubmitCommand(command VideoSubmitCommand) (Vi
 	}
 	command.Platform = strings.ToLower(strings.TrimSpace(command.Platform))
 	command.Provider = strings.ToLower(strings.TrimSpace(command.Provider))
-	if command.Platform != PlatformVideo {
+	if command.Platform != PlatformVideo && command.Platform != PlatformGrok {
 		return command, nil, "", "", MinimizedVideoPayload{}, ErrVideoUnsupportedCapability
 	}
 	if command.Group.Platform != command.Platform && command.Group.Platform != PlatformComposite {
 		return command, nil, "", "", MinimizedVideoPayload{}, ErrVideoGenerationNotAllowed
 	}
-	if command.Provider != VideoProviderSeedance && command.Provider != VideoProviderKling {
+	if (command.Platform == PlatformGrok && command.Provider != PlatformGrok) ||
+		(command.Platform == PlatformVideo && command.Provider != VideoProviderSeedance && command.Provider != VideoProviderKling) {
 		return command, nil, "", "", MinimizedVideoPayload{}, ErrVideoInvalidRequest
 	}
 

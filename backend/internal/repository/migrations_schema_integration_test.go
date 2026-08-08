@@ -6,11 +6,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	migrationfiles "github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
@@ -245,6 +248,78 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 
 	// user_allowed_groups: created_at should be timestamptz
 	requireColumn(t, tx, "user_allowed_groups", "created_at", "timestamp with time zone", 0, false)
+}
+
+func TestDurableGrokVideoRouteMigrationEnforcesExactPlatformProviderPairs(t *testing.T) {
+	ctx := context.Background()
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	rolledBack := false
+	t.Cleanup(func() {
+		if !rolledBack {
+			_ = tx.Rollback()
+		}
+	})
+	_, err = tx.ExecContext(ctx, `
+		ALTER TABLE video_tasks
+			DROP CONSTRAINT video_tasks_platform_provider_check,
+			DROP CONSTRAINT video_tasks_platform_check,
+			DROP CONSTRAINT video_tasks_provider_check;
+		ALTER TABLE video_tasks
+			ADD CONSTRAINT video_tasks_platform_check CHECK (platform = 'video'),
+			ADD CONSTRAINT video_tasks_provider_check CHECK (provider IN ('seedance', 'kling'));
+	`)
+	require.NoError(t, err)
+	migration, err := migrationfiles.FS.ReadFile("202_durable_grok_video_route.sql")
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, string(migration))
+	require.NoError(t, err)
+
+	valid := []struct{ platform, provider string }{
+		{service.PlatformGrok, service.PlatformGrok},
+		{service.PlatformVideo, service.VideoProviderSeedance},
+		{service.PlatformVideo, service.VideoProviderKling},
+	}
+	invalid := []struct{ platform, provider string }{
+		{service.PlatformGrok, service.VideoProviderSeedance},
+		{service.PlatformVideo, service.PlatformGrok},
+		{"other", service.PlatformGrok},
+		{service.PlatformVideo, "other"},
+	}
+
+	insert := func(requestID, platform, provider string) error {
+		_, insertErr := tx.ExecContext(ctx, `INSERT INTO video_tasks (
+				request_id, user_id, api_key_id, group_id, account_id, platform, provider,
+				operation, external_model, upstream_model, request_hash, pricing_unit,
+				unit_price, estimated_units, estimated_amount, frozen_amount, currency,
+				billing_mode, billing_status
+			) VALUES ($1, 1, 1, 1, 0, $2, $3, 'generation', 'model', '', $4,
+				'per_request', 0, 1, 0, 0, 'USD', 'balance', 'held')`,
+			requestID, platform, provider, strings.Repeat("a", 64))
+		return insertErr
+	}
+	for i, route := range valid {
+		requestID := "vid_" + fmt.Sprintf("%032x", 9000+i)
+		require.NoError(t, insert(requestID, route.platform, route.provider), "route=%s/%s", route.platform, route.provider)
+	}
+	for i, route := range invalid {
+		_, err = tx.ExecContext(ctx, "SAVEPOINT invalid_video_route")
+		require.NoError(t, err)
+		requestID := "vid_" + fmt.Sprintf("%032x", 9100+i)
+		require.Error(t, insert(requestID, route.platform, route.provider), "route=%s/%s", route.platform, route.provider)
+		_, err = tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT invalid_video_route")
+		require.NoError(t, err)
+	}
+	var kept int
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM video_tasks WHERE request_id >= 'vid_00000000000000000000000000002328' AND request_id <= 'vid_0000000000000000000000000000232a'`).Scan(&kept))
+	require.Equal(t, len(valid), kept, "failed constraint probes must preserve valid rows in the migration transaction")
+
+	require.NoError(t, tx.Rollback())
+	rolledBack = true
+	var definition string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'video_tasks'::regclass AND conname = 'video_tasks_platform_provider_check'`).Scan(&definition))
+	require.Contains(t, definition, "(platform)::text = 'grok'::text")
+	require.Contains(t, definition, "(provider)::text = 'grok'::text")
 }
 
 func TestMigrationsUpgradeFromOriginal198AppliesForward199(t *testing.T) {
