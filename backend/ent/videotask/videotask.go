@@ -66,6 +66,8 @@ const (
 	FieldPricingUnit = "pricing_unit"
 	// FieldUnitPrice holds the string denoting the unit_price field in the database.
 	FieldUnitPrice = "unit_price"
+	// FieldUpstreamUnitCost holds the string denoting the upstream_unit_cost field in the database.
+	FieldUpstreamUnitCost = "upstream_unit_cost"
 	// FieldEstimatedUnits holds the string denoting the estimated_units field in the database.
 	FieldEstimatedUnits = "estimated_units"
 	// FieldEstimatedAmount holds the string denoting the estimated_amount field in the database.
@@ -147,6 +149,7 @@ var Columns = []string{
 	FieldResultHeight,
 	FieldPricingUnit,
 	FieldUnitPrice,
+	FieldUpstreamUnitCost,
 	FieldEstimatedUnits,
 	FieldEstimatedAmount,
 	FieldFrozenAmount,
@@ -471,6 +474,11 @@ func ByPricingUnit(opts ...sql.OrderTermOption) OrderOption {
 // ByUnitPrice orders the results by the unit_price field.
 func ByUnitPrice(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUnitPrice, opts...).ToFunc()
+}
+
+// ByUpstreamUnitCost orders the results by the upstream_unit_cost field.
+func ByUpstreamUnitCost(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldUpstreamUnitCost, opts...).ToFunc()
 }
 
 // ByEstimatedUnits orders the results by the estimated_units field.

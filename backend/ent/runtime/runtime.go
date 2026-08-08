@@ -2522,57 +2522,57 @@ func init() {
 	// videotask.PricingUnitValidator is a validator for the "pricing_unit" field. It is called by the builders before save.
 	videotask.PricingUnitValidator = videotaskDescPricingUnit.Validators[0].(func(string) error)
 	// videotaskDescCurrency is the schema descriptor for currency field.
-	videotaskDescCurrency := videotaskFields[30].Descriptor()
+	videotaskDescCurrency := videotaskFields[31].Descriptor()
 	// videotask.DefaultCurrency holds the default value on creation for the currency field.
 	videotask.DefaultCurrency = videotaskDescCurrency.Default.(string)
 	// videotask.CurrencyValidator is a validator for the "currency" field. It is called by the builders before save.
 	videotask.CurrencyValidator = videotaskDescCurrency.Validators[0].(func(string) error)
 	// videotaskDescBillingMode is the schema descriptor for billing_mode field.
-	videotaskDescBillingMode := videotaskFields[31].Descriptor()
+	videotaskDescBillingMode := videotaskFields[32].Descriptor()
 	// videotask.BillingModeValidator is a validator for the "billing_mode" field. It is called by the builders before save.
 	videotask.BillingModeValidator = videotaskDescBillingMode.Validators[0].(func(string) error)
 	// videotaskDescBillingStatus is the schema descriptor for billing_status field.
-	videotaskDescBillingStatus := videotaskFields[32].Descriptor()
+	videotaskDescBillingStatus := videotaskFields[33].Descriptor()
 	// videotask.BillingStatusValidator is a validator for the "billing_status" field. It is called by the builders before save.
 	videotask.BillingStatusValidator = videotaskDescBillingStatus.Validators[0].(func(string) error)
 	// videotaskDescBillingReference is the schema descriptor for billing_reference field.
-	videotaskDescBillingReference := videotaskFields[33].Descriptor()
+	videotaskDescBillingReference := videotaskFields[34].Descriptor()
 	// videotask.BillingReferenceValidator is a validator for the "billing_reference" field. It is called by the builders before save.
 	videotask.BillingReferenceValidator = videotaskDescBillingReference.Validators[0].(func(string) error)
 	// videotaskDescSubmissionAttempts is the schema descriptor for submission_attempts field.
-	videotaskDescSubmissionAttempts := videotaskFields[34].Descriptor()
+	videotaskDescSubmissionAttempts := videotaskFields[35].Descriptor()
 	// videotask.DefaultSubmissionAttempts holds the default value on creation for the submission_attempts field.
 	videotask.DefaultSubmissionAttempts = videotaskDescSubmissionAttempts.Default.(int)
 	// videotaskDescPollAttempts is the schema descriptor for poll_attempts field.
-	videotaskDescPollAttempts := videotaskFields[35].Descriptor()
+	videotaskDescPollAttempts := videotaskFields[36].Descriptor()
 	// videotask.DefaultPollAttempts holds the default value on creation for the poll_attempts field.
 	videotask.DefaultPollAttempts = videotaskDescPollAttempts.Default.(int)
 	// videotaskDescSettlementAttempts is the schema descriptor for settlement_attempts field.
-	videotaskDescSettlementAttempts := videotaskFields[36].Descriptor()
+	videotaskDescSettlementAttempts := videotaskFields[37].Descriptor()
 	// videotask.DefaultSettlementAttempts holds the default value on creation for the settlement_attempts field.
 	videotask.DefaultSettlementAttempts = videotaskDescSettlementAttempts.Default.(int)
 	// videotaskDescLeaseOwner is the schema descriptor for lease_owner field.
-	videotaskDescLeaseOwner := videotaskFields[38].Descriptor()
+	videotaskDescLeaseOwner := videotaskFields[39].Descriptor()
 	// videotask.LeaseOwnerValidator is a validator for the "lease_owner" field. It is called by the builders before save.
 	videotask.LeaseOwnerValidator = videotaskDescLeaseOwner.Validators[0].(func(string) error)
 	// videotaskDescLastErrorCode is the schema descriptor for last_error_code field.
-	videotaskDescLastErrorCode := videotaskFields[40].Descriptor()
+	videotaskDescLastErrorCode := videotaskFields[41].Descriptor()
 	// videotask.LastErrorCodeValidator is a validator for the "last_error_code" field. It is called by the builders before save.
 	videotask.LastErrorCodeValidator = videotaskDescLastErrorCode.Validators[0].(func(string) error)
 	// videotaskDescLastErrorRetryable is the schema descriptor for last_error_retryable field.
-	videotaskDescLastErrorRetryable := videotaskFields[42].Descriptor()
+	videotaskDescLastErrorRetryable := videotaskFields[43].Descriptor()
 	// videotask.DefaultLastErrorRetryable holds the default value on creation for the last_error_retryable field.
 	videotask.DefaultLastErrorRetryable = videotaskDescLastErrorRetryable.Default.(bool)
 	// videotaskDescVersion is the schema descriptor for version field.
-	videotaskDescVersion := videotaskFields[43].Descriptor()
+	videotaskDescVersion := videotaskFields[44].Descriptor()
 	// videotask.DefaultVersion holds the default value on creation for the version field.
 	videotask.DefaultVersion = videotaskDescVersion.Default.(int64)
 	// videotaskDescCreatedAt is the schema descriptor for created_at field.
-	videotaskDescCreatedAt := videotaskFields[44].Descriptor()
+	videotaskDescCreatedAt := videotaskFields[45].Descriptor()
 	// videotask.DefaultCreatedAt holds the default value on creation for the created_at field.
 	videotask.DefaultCreatedAt = videotaskDescCreatedAt.Default.(func() time.Time)
 	// videotaskDescUpdatedAt is the schema descriptor for updated_at field.
-	videotaskDescUpdatedAt := videotaskFields[45].Descriptor()
+	videotaskDescUpdatedAt := videotaskFields[46].Descriptor()
 	// videotask.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	videotask.DefaultUpdatedAt = videotaskDescUpdatedAt.Default.(func() time.Time)
 	// videotask.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

@@ -44,6 +44,27 @@ func TestVideoPricingRepositoryRejectsDuplicateDimensions(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestVideoPricingRepositoryLegacyGrokFallbackStopsAtFirstExplicitRule(t *testing.T) {
+	ctx := context.Background()
+	groupID := createVideoPricingTestGroup(t)
+	defer deleteVideoPricingTestGroup(t, groupID)
+	_, err := integrationDB.ExecContext(ctx, `UPDATE groups SET video_price_720p=0.37 WHERE id=$1`, groupID)
+	require.NoError(t, err)
+	repo := NewVideoPricingRepository(integrationDB)
+	query := service.VideoPricingQuery{GroupID: groupID, ExternalModel: "grok-imagine-video", Operation: "generation", Resolution: "720p", DurationSeconds: 5}
+
+	rules, err := repo.ListMatching(ctx, query)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	require.True(t, rules[0].Legacy)
+	require.InDelta(t, 0.37, rules[0].UnitPrice, 1e-9)
+
+	createVideoPricingTestRule(t, groupID, "seedance-2.0", "generation", "*", "any", "per_request", 1, false)
+	rules, err = repo.ListMatching(ctx, query)
+	require.NoError(t, err)
+	require.Empty(t, rules, "any explicit group rule must disable the Grok legacy fallback")
+}
+
 func createVideoPricingTestGroup(t *testing.T) int64 {
 	t.Helper()
 	var groupID int64

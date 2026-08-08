@@ -136,6 +136,7 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 		RequestPayload:     recoveryPayload,
 		PricingUnit:        quote.Unit,
 		UnitPrice:          quote.UnitPrice,
+		UpstreamUnitCost:   quote.UpstreamUnitCost,
 		EstimatedUnits:     quote.Units,
 		EstimatedAmount:    quote.HoldAmount,
 		FrozenAmount:       quote.HoldAmount,

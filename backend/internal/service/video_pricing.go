@@ -37,6 +37,7 @@ type VideoPricingRule struct {
 	UnitPrice        float64
 	UpstreamUnitCost *float64
 	Enabled          bool
+	Legacy           bool
 }
 
 // VideoPricingQuery identifies the video request to price. DurationSeconds is
@@ -144,7 +145,7 @@ func videoPricingAudioMode(audio bool) string {
 }
 
 func quoteVideoPricingRule(rule VideoPricingRule, query VideoPricingQuery) (VideoPriceQuote, error) {
-	if rule.ID <= 0 || rule.UnitPrice < 0 || math.IsNaN(rule.UnitPrice) || math.IsInf(rule.UnitPrice, 0) {
+	if (rule.ID <= 0 && !rule.Legacy) || rule.UnitPrice < 0 || math.IsNaN(rule.UnitPrice) || math.IsInf(rule.UnitPrice, 0) {
 		return VideoPriceQuote{}, ErrVideoPricingInvalid
 	}
 	if rule.UpstreamUnitCost != nil && (*rule.UpstreamUnitCost < 0 || math.IsNaN(*rule.UpstreamUnitCost) || math.IsInf(*rule.UpstreamUnitCost, 0)) {

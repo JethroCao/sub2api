@@ -113,3 +113,24 @@ func TestDurableGrokVideoRouteMigrationUsesForwardConstraints(t *testing.T) {
 	require.NotContains(t, sql, "DELETE FROM video_tasks")
 	require.NotContains(t, sql, "UPDATE video_tasks")
 }
+
+func TestAdminVideoOperationsMigrationIsForwardOnlyAndDurable(t *testing.T) {
+	migration, err := FS.ReadFile("203_admin_video_operations.sql")
+	require.NoError(t, err)
+	sql := string(migration)
+	require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS video_admin_actions")
+	require.Contains(t, sql, "idempotency_key_hash VARCHAR(64) NOT NULL")
+	require.Contains(t, sql, "request_hash VARCHAR(64) NOT NULL")
+	require.Contains(t, sql, "UNIQUE (request_id, action, idempotency_key_hash)")
+	require.Contains(t, sql, "ALTER TABLE video_pricing_rules")
+	require.Contains(t, sql, "video_pricing_rules_finite_nonnegative_prices")
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS upstream_unit_cost")
+	require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS video_ops_metrics")
+	require.Contains(t, sql, "upstream_cost                DECIMAL(20,10),")
+	require.Contains(t, sql, "margin                       DECIMAL(20,10),")
+	require.NotContains(t, sql, "upstream_cost                DECIMAL(20,10) NOT NULL")
+	require.NotContains(t, sql, "margin                       DECIMAL(20,10) NOT NULL")
+	require.NotContains(t, sql, "DROP TABLE video_pricing_rules")
+	require.NotContains(t, sql, "DELETE FROM video_pricing_rules")
+	require.NotContains(t, sql, "UPDATE video_tasks SET")
+}

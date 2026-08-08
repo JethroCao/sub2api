@@ -38,6 +38,7 @@ func RegisterAdminRoutes(
 
 		// 分组管理
 		registerGroupRoutes(admin, h)
+		registerAdminVideoRoutes(admin, h, stepUpAuth)
 
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
@@ -123,6 +124,19 @@ func RegisterAdminRoutes(
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
 	}
+}
+
+func registerAdminVideoRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
+	groups := admin.Group("/groups")
+	groups.GET("/:id/video-pricing-rules", h.Admin.Video.ListPricingRules)
+	groups.PUT("/:id/video-pricing-rules", gin.HandlerFunc(stepUpAuth), h.Admin.Video.ReplacePricingRules)
+
+	video := admin.Group("/video")
+	video.GET("/tasks", h.Admin.Video.ListTasks)
+	video.GET("/tasks/:request_id", h.Admin.Video.GetTask)
+	video.POST("/tasks/:request_id/reconcile", h.Admin.Video.Reconcile)
+	video.POST("/tasks/:request_id/refund", gin.HandlerFunc(stepUpAuth), h.Admin.Video.Refund)
+	video.POST("/tasks/:request_id/complete", gin.HandlerFunc(stepUpAuth), h.Admin.Video.Complete)
 }
 
 func registerFeishuOrgAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

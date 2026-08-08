@@ -507,6 +507,33 @@ func (_u *VideoTaskUpdate) AddUnitPrice(v float64) *VideoTaskUpdate {
 	return _u
 }
 
+// SetUpstreamUnitCost sets the "upstream_unit_cost" field.
+func (_u *VideoTaskUpdate) SetUpstreamUnitCost(v float64) *VideoTaskUpdate {
+	_u.mutation.ResetUpstreamUnitCost()
+	_u.mutation.SetUpstreamUnitCost(v)
+	return _u
+}
+
+// SetNillableUpstreamUnitCost sets the "upstream_unit_cost" field if the given value is not nil.
+func (_u *VideoTaskUpdate) SetNillableUpstreamUnitCost(v *float64) *VideoTaskUpdate {
+	if v != nil {
+		_u.SetUpstreamUnitCost(*v)
+	}
+	return _u
+}
+
+// AddUpstreamUnitCost adds value to the "upstream_unit_cost" field.
+func (_u *VideoTaskUpdate) AddUpstreamUnitCost(v float64) *VideoTaskUpdate {
+	_u.mutation.AddUpstreamUnitCost(v)
+	return _u
+}
+
+// ClearUpstreamUnitCost clears the value of the "upstream_unit_cost" field.
+func (_u *VideoTaskUpdate) ClearUpstreamUnitCost() *VideoTaskUpdate {
+	_u.mutation.ClearUpstreamUnitCost()
+	return _u
+}
+
 // SetEstimatedUnits sets the "estimated_units" field.
 func (_u *VideoTaskUpdate) SetEstimatedUnits(v float64) *VideoTaskUpdate {
 	_u.mutation.ResetEstimatedUnits()
@@ -1236,6 +1263,15 @@ func (_u *VideoTaskUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedUnitPrice(); ok {
 		_spec.AddField(videotask.FieldUnitPrice, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.UpstreamUnitCost(); ok {
+		_spec.SetField(videotask.FieldUpstreamUnitCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedUpstreamUnitCost(); ok {
+		_spec.AddField(videotask.FieldUpstreamUnitCost, field.TypeFloat64, value)
+	}
+	if _u.mutation.UpstreamUnitCostCleared() {
+		_spec.ClearField(videotask.FieldUpstreamUnitCost, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.EstimatedUnits(); ok {
 		_spec.SetField(videotask.FieldEstimatedUnits, field.TypeFloat64, value)
 	}
@@ -1856,6 +1892,33 @@ func (_u *VideoTaskUpdateOne) SetNillableUnitPrice(v *float64) *VideoTaskUpdateO
 // AddUnitPrice adds value to the "unit_price" field.
 func (_u *VideoTaskUpdateOne) AddUnitPrice(v float64) *VideoTaskUpdateOne {
 	_u.mutation.AddUnitPrice(v)
+	return _u
+}
+
+// SetUpstreamUnitCost sets the "upstream_unit_cost" field.
+func (_u *VideoTaskUpdateOne) SetUpstreamUnitCost(v float64) *VideoTaskUpdateOne {
+	_u.mutation.ResetUpstreamUnitCost()
+	_u.mutation.SetUpstreamUnitCost(v)
+	return _u
+}
+
+// SetNillableUpstreamUnitCost sets the "upstream_unit_cost" field if the given value is not nil.
+func (_u *VideoTaskUpdateOne) SetNillableUpstreamUnitCost(v *float64) *VideoTaskUpdateOne {
+	if v != nil {
+		_u.SetUpstreamUnitCost(*v)
+	}
+	return _u
+}
+
+// AddUpstreamUnitCost adds value to the "upstream_unit_cost" field.
+func (_u *VideoTaskUpdateOne) AddUpstreamUnitCost(v float64) *VideoTaskUpdateOne {
+	_u.mutation.AddUpstreamUnitCost(v)
+	return _u
+}
+
+// ClearUpstreamUnitCost clears the value of the "upstream_unit_cost" field.
+func (_u *VideoTaskUpdateOne) ClearUpstreamUnitCost() *VideoTaskUpdateOne {
+	_u.mutation.ClearUpstreamUnitCost()
 	return _u
 }
 
@@ -2617,6 +2680,15 @@ func (_u *VideoTaskUpdateOne) sqlSave(ctx context.Context) (_node *VideoTask, er
 	}
 	if value, ok := _u.mutation.AddedUnitPrice(); ok {
 		_spec.AddField(videotask.FieldUnitPrice, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.UpstreamUnitCost(); ok {
+		_spec.SetField(videotask.FieldUpstreamUnitCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedUpstreamUnitCost(); ok {
+		_spec.AddField(videotask.FieldUpstreamUnitCost, field.TypeFloat64, value)
+	}
+	if _u.mutation.UpstreamUnitCostCleared() {
+		_spec.ClearField(videotask.FieldUpstreamUnitCost, field.TypeFloat64)
 	}
 	if value, ok := _u.mutation.EstimatedUnits(); ok {
 		_spec.SetField(videotask.FieldEstimatedUnits, field.TypeFloat64, value)

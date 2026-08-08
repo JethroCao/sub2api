@@ -171,6 +171,7 @@ type VideoTask struct {
 	ResultHeight            *int
 	PricingUnit             string
 	UnitPrice               float64
+	UpstreamUnitCost        *float64
 	EstimatedUnits          float64
 	EstimatedAmount         float64
 	FrozenAmount            float64
@@ -213,6 +214,7 @@ type CreateVideoTaskParams struct {
 	RequestPayload     MinimizedVideoPayload
 	PricingUnit        string
 	UnitPrice          float64
+	UpstreamUnitCost   *float64
 	EstimatedUnits     float64
 	EstimatedAmount    float64
 	FrozenAmount       float64
@@ -358,6 +360,9 @@ type VideoTaskListQuery struct {
 	AccountID     *int64
 	Status        VideoTaskStatus
 	Provider      string
+	ExternalModel string
+	Operation     string
+	GroupID       *int64
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time
 	Limit         int

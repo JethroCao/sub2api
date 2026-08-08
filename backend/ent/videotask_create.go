@@ -275,6 +275,20 @@ func (_c *VideoTaskCreate) SetUnitPrice(v float64) *VideoTaskCreate {
 	return _c
 }
 
+// SetUpstreamUnitCost sets the "upstream_unit_cost" field.
+func (_c *VideoTaskCreate) SetUpstreamUnitCost(v float64) *VideoTaskCreate {
+	_c.mutation.SetUpstreamUnitCost(v)
+	return _c
+}
+
+// SetNillableUpstreamUnitCost sets the "upstream_unit_cost" field if the given value is not nil.
+func (_c *VideoTaskCreate) SetNillableUpstreamUnitCost(v *float64) *VideoTaskCreate {
+	if v != nil {
+		_c.SetUpstreamUnitCost(*v)
+	}
+	return _c
+}
+
 // SetEstimatedUnits sets the "estimated_units" field.
 func (_c *VideoTaskCreate) SetEstimatedUnits(v float64) *VideoTaskCreate {
 	_c.mutation.SetEstimatedUnits(v)
@@ -965,6 +979,10 @@ func (_c *VideoTaskCreate) createSpec() (*VideoTask, *sqlgraph.CreateSpec) {
 		_spec.SetField(videotask.FieldUnitPrice, field.TypeFloat64, value)
 		_node.UnitPrice = value
 	}
+	if value, ok := _c.mutation.UpstreamUnitCost(); ok {
+		_spec.SetField(videotask.FieldUpstreamUnitCost, field.TypeFloat64, value)
+		_node.UpstreamUnitCost = &value
+	}
 	if value, ok := _c.mutation.EstimatedUnits(); ok {
 		_spec.SetField(videotask.FieldEstimatedUnits, field.TypeFloat64, value)
 		_node.EstimatedUnits = value
@@ -1530,6 +1548,30 @@ func (u *VideoTaskUpsert) UpdateUnitPrice() *VideoTaskUpsert {
 // AddUnitPrice adds v to the "unit_price" field.
 func (u *VideoTaskUpsert) AddUnitPrice(v float64) *VideoTaskUpsert {
 	u.Add(videotask.FieldUnitPrice, v)
+	return u
+}
+
+// SetUpstreamUnitCost sets the "upstream_unit_cost" field.
+func (u *VideoTaskUpsert) SetUpstreamUnitCost(v float64) *VideoTaskUpsert {
+	u.Set(videotask.FieldUpstreamUnitCost, v)
+	return u
+}
+
+// UpdateUpstreamUnitCost sets the "upstream_unit_cost" field to the value that was provided on create.
+func (u *VideoTaskUpsert) UpdateUpstreamUnitCost() *VideoTaskUpsert {
+	u.SetExcluded(videotask.FieldUpstreamUnitCost)
+	return u
+}
+
+// AddUpstreamUnitCost adds v to the "upstream_unit_cost" field.
+func (u *VideoTaskUpsert) AddUpstreamUnitCost(v float64) *VideoTaskUpsert {
+	u.Add(videotask.FieldUpstreamUnitCost, v)
+	return u
+}
+
+// ClearUpstreamUnitCost clears the value of the "upstream_unit_cost" field.
+func (u *VideoTaskUpsert) ClearUpstreamUnitCost() *VideoTaskUpsert {
+	u.SetNull(videotask.FieldUpstreamUnitCost)
 	return u
 }
 
@@ -2458,6 +2500,34 @@ func (u *VideoTaskUpsertOne) AddUnitPrice(v float64) *VideoTaskUpsertOne {
 func (u *VideoTaskUpsertOne) UpdateUnitPrice() *VideoTaskUpsertOne {
 	return u.Update(func(s *VideoTaskUpsert) {
 		s.UpdateUnitPrice()
+	})
+}
+
+// SetUpstreamUnitCost sets the "upstream_unit_cost" field.
+func (u *VideoTaskUpsertOne) SetUpstreamUnitCost(v float64) *VideoTaskUpsertOne {
+	return u.Update(func(s *VideoTaskUpsert) {
+		s.SetUpstreamUnitCost(v)
+	})
+}
+
+// AddUpstreamUnitCost adds v to the "upstream_unit_cost" field.
+func (u *VideoTaskUpsertOne) AddUpstreamUnitCost(v float64) *VideoTaskUpsertOne {
+	return u.Update(func(s *VideoTaskUpsert) {
+		s.AddUpstreamUnitCost(v)
+	})
+}
+
+// UpdateUpstreamUnitCost sets the "upstream_unit_cost" field to the value that was provided on create.
+func (u *VideoTaskUpsertOne) UpdateUpstreamUnitCost() *VideoTaskUpsertOne {
+	return u.Update(func(s *VideoTaskUpsert) {
+		s.UpdateUpstreamUnitCost()
+	})
+}
+
+// ClearUpstreamUnitCost clears the value of the "upstream_unit_cost" field.
+func (u *VideoTaskUpsertOne) ClearUpstreamUnitCost() *VideoTaskUpsertOne {
+	return u.Update(func(s *VideoTaskUpsert) {
+		s.ClearUpstreamUnitCost()
 	})
 }
 
@@ -3617,6 +3687,34 @@ func (u *VideoTaskUpsertBulk) AddUnitPrice(v float64) *VideoTaskUpsertBulk {
 func (u *VideoTaskUpsertBulk) UpdateUnitPrice() *VideoTaskUpsertBulk {
 	return u.Update(func(s *VideoTaskUpsert) {
 		s.UpdateUnitPrice()
+	})
+}
+
+// SetUpstreamUnitCost sets the "upstream_unit_cost" field.
+func (u *VideoTaskUpsertBulk) SetUpstreamUnitCost(v float64) *VideoTaskUpsertBulk {
+	return u.Update(func(s *VideoTaskUpsert) {
+		s.SetUpstreamUnitCost(v)
+	})
+}
+
+// AddUpstreamUnitCost adds v to the "upstream_unit_cost" field.
+func (u *VideoTaskUpsertBulk) AddUpstreamUnitCost(v float64) *VideoTaskUpsertBulk {
+	return u.Update(func(s *VideoTaskUpsert) {
+		s.AddUpstreamUnitCost(v)
+	})
+}
+
+// UpdateUpstreamUnitCost sets the "upstream_unit_cost" field to the value that was provided on create.
+func (u *VideoTaskUpsertBulk) UpdateUpstreamUnitCost() *VideoTaskUpsertBulk {
+	return u.Update(func(s *VideoTaskUpsert) {
+		s.UpdateUpstreamUnitCost()
+	})
+}
+
+// ClearUpstreamUnitCost clears the value of the "upstream_unit_cost" field.
+func (u *VideoTaskUpsertBulk) ClearUpstreamUnitCost() *VideoTaskUpsertBulk {
+	return u.Update(func(s *VideoTaskUpsert) {
+		s.ClearUpstreamUnitCost()
 	})
 }
 

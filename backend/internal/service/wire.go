@@ -90,6 +90,10 @@ func ProvideVideoCapabilityValidator(catalog VideoCapabilityCatalog) VideoCapabi
 	return catalog
 }
 
+func ProvideAdminVideoService(repo AdminVideoRepository, catalog VideoCapabilityCatalog) *AdminVideoService {
+	return NewAdminVideoService(repo, catalog, nil)
+}
+
 func ProvideVideoReconciler(
 	repo VideoTaskRepository,
 	accounts AccountRepository,
@@ -792,6 +796,7 @@ var ProviderSet = wire.NewSet(
 	NewBatchImageDownloadService,
 	NewVideoPricingService,
 	NewVideoBillingService,
+	ProvideAdminVideoService,
 	NewVideoContentFetcher,
 	ProvideDurableVideoProviderRegistry,
 	ProvideVideoCapabilityCatalog,

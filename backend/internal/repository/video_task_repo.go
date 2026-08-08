@@ -97,14 +97,14 @@ INSERT INTO video_tasks (
     request_id, user_id, api_key_id, subscription_id, group_id, account_id,
     platform, provider, operation, external_model, upstream_model,
     idempotency_key_hash, request_hash, request_payload,
-    pricing_unit, unit_price, estimated_units, estimated_amount, frozen_amount,
+    pricing_unit, unit_price, upstream_unit_cost, estimated_units, estimated_amount, frozen_amount,
     currency, billing_mode, billing_status, next_poll_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11,
     $12, $13, $14,
-    $15, $16, $17, ROUND($18::numeric, 8), ROUND($19::numeric, 8),
-    $20, $21, $22, $23
+    $15, $16, $17, $18, ROUND($19::numeric, 8), ROUND($20::numeric, 8),
+    $21, $22, $23, $24
 )
 ON CONFLICT (user_id, api_key_id, idempotency_key_hash)
     WHERE idempotency_key_hash <> ''
@@ -113,7 +113,7 @@ RETURNING `+videoTaskColumns, requestID, params.UserID, params.APIKeyID, params.
 		params.GroupID, params.AccountID, params.Platform, params.Provider, params.Operation,
 		params.ExternalModel, params.UpstreamModel, params.IdempotencyKeyHash, params.RequestHash,
 		videoPayloadSQLValue(params.RequestPayload), params.PricingUnit, params.UnitPrice,
-		params.EstimatedUnits, params.EstimatedAmount, params.FrozenAmount, params.Currency,
+		params.UpstreamUnitCost, params.EstimatedUnits, params.EstimatedAmount, params.FrozenAmount, params.Currency,
 		params.BillingMode, params.BillingStatus, params.NextPollAt))
 	created := err == nil
 	if created {
@@ -838,6 +838,15 @@ func (r *videoTaskRepository) ListAdmin(ctx context.Context, query service.Video
 	if query.Provider != "" {
 		add("provider = $%d", query.Provider)
 	}
+	if query.ExternalModel != "" {
+		add("external_model = $%d", query.ExternalModel)
+	}
+	if query.Operation != "" {
+		add("operation = $%d", query.Operation)
+	}
+	if query.GroupID != nil {
+		add("group_id = $%d", *query.GroupID)
+	}
 	if query.CreatedAfter != nil {
 		add("created_at >= $%d", *query.CreatedAfter)
 	}
@@ -937,6 +946,7 @@ func validateCreateVideoTaskParams(params service.CreateVideoTaskParams) error {
 		!videoTaskSHA256Pattern.MatchString(params.RequestHash) ||
 		(params.IdempotencyKeyHash != "" && !videoTaskSHA256Pattern.MatchString(params.IdempotencyKeyHash)) ||
 		!isFiniteNonNegativeVideoAmount(params.UnitPrice) || !isFiniteNonNegativeVideoAmount(params.EstimatedUnits) ||
+		(params.UpstreamUnitCost != nil && !isFiniteNonNegativeVideoAmount(*params.UpstreamUnitCost)) ||
 		!isFiniteNonNegativeVideoAmount(params.EstimatedAmount) || !isFiniteNonNegativeVideoAmount(params.FrozenAmount) ||
 		strings.TrimSpace(params.PricingUnit) == "" || strings.TrimSpace(params.Currency) == "" ||
 		(params.BillingMode != "balance" && params.BillingMode != "subscription") ||
@@ -1002,7 +1012,7 @@ platform, provider, operation, external_model, upstream_model,
 idempotency_key_hash, request_hash, provider_submission_token, request_payload,
 status, upstream_task_id, upstream_status,
 result_url, result_url_expires_at, result_content_type, result_duration_seconds, result_width, result_height,
-pricing_unit, unit_price, estimated_units, estimated_amount, frozen_amount, settled_amount,
+pricing_unit, unit_price, upstream_unit_cost, estimated_units, estimated_amount, frozen_amount, settled_amount,
 currency, billing_mode, billing_status, billing_reference,
 submission_attempts, poll_attempts, settlement_attempts, next_poll_at, lease_owner, lease_expires_at,
 last_error_code, last_error_message, last_error_retryable, version,
@@ -1030,6 +1040,7 @@ func scanVideoTask(scanner videoTaskScanner) (*service.VideoTask, error) {
 	var resultDuration sql.NullFloat64
 	var resultWidth, resultHeight sql.NullInt64
 	var settledAmount sql.NullFloat64
+	var upstreamUnitCost sql.NullFloat64
 	var billingReference sql.NullString
 	var nextPollAt, leaseExpiresAt sql.NullTime
 	var leaseOwner, lastErrorCode, lastErrorMessage sql.NullString
@@ -1040,7 +1051,7 @@ func scanVideoTask(scanner videoTaskScanner) (*service.VideoTask, error) {
 		&task.IdempotencyKeyHash, &task.RequestHash, &providerToken, &requestPayload,
 		&task.Status, &upstreamTaskID, &upstreamStatus,
 		&resultURL, &resultURLExpiresAt, &resultContentType, &resultDuration, &resultWidth, &resultHeight,
-		&task.PricingUnit, &task.UnitPrice, &task.EstimatedUnits, &task.EstimatedAmount, &task.FrozenAmount, &settledAmount,
+		&task.PricingUnit, &task.UnitPrice, &upstreamUnitCost, &task.EstimatedUnits, &task.EstimatedAmount, &task.FrozenAmount, &settledAmount,
 		&task.Currency, &task.BillingMode, &task.BillingStatus, &billingReference,
 		&task.SubmissionAttempts, &task.PollAttempts, &task.SettlementAttempts, &nextPollAt, &leaseOwner, &leaseExpiresAt,
 		&lastErrorCode, &lastErrorMessage, &task.LastErrorRetryable, &task.Version,
@@ -1061,6 +1072,7 @@ func scanVideoTask(scanner videoTaskScanner) (*service.VideoTask, error) {
 	task.ResultWidth = nullIntPointer(resultWidth)
 	task.ResultHeight = nullIntPointer(resultHeight)
 	task.SettledAmount = nullFloat64Pointer(settledAmount)
+	task.UpstreamUnitCost = nullFloat64Pointer(upstreamUnitCost)
 	task.BillingReference = nullStringPointer(billingReference)
 	task.NextPollAt = nullTimePointer(nextPollAt)
 	task.LeaseOwner = nullStringPointer(leaseOwner)

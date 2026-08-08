@@ -56921,6 +56921,8 @@ type VideoTaskMutation struct {
 	pricing_unit               *string
 	unit_price                 *float64
 	addunit_price              *float64
+	upstream_unit_cost         *float64
+	addupstream_unit_cost      *float64
 	estimated_units            *float64
 	addestimated_units         *float64
 	estimated_amount           *float64
@@ -58336,6 +58338,76 @@ func (m *VideoTaskMutation) ResetUnitPrice() {
 	m.addunit_price = nil
 }
 
+// SetUpstreamUnitCost sets the "upstream_unit_cost" field.
+func (m *VideoTaskMutation) SetUpstreamUnitCost(f float64) {
+	m.upstream_unit_cost = &f
+	m.addupstream_unit_cost = nil
+}
+
+// UpstreamUnitCost returns the value of the "upstream_unit_cost" field in the mutation.
+func (m *VideoTaskMutation) UpstreamUnitCost() (r float64, exists bool) {
+	v := m.upstream_unit_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpstreamUnitCost returns the old "upstream_unit_cost" field's value of the VideoTask entity.
+// If the VideoTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VideoTaskMutation) OldUpstreamUnitCost(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpstreamUnitCost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpstreamUnitCost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpstreamUnitCost: %w", err)
+	}
+	return oldValue.UpstreamUnitCost, nil
+}
+
+// AddUpstreamUnitCost adds f to the "upstream_unit_cost" field.
+func (m *VideoTaskMutation) AddUpstreamUnitCost(f float64) {
+	if m.addupstream_unit_cost != nil {
+		*m.addupstream_unit_cost += f
+	} else {
+		m.addupstream_unit_cost = &f
+	}
+}
+
+// AddedUpstreamUnitCost returns the value that was added to the "upstream_unit_cost" field in this mutation.
+func (m *VideoTaskMutation) AddedUpstreamUnitCost() (r float64, exists bool) {
+	v := m.addupstream_unit_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearUpstreamUnitCost clears the value of the "upstream_unit_cost" field.
+func (m *VideoTaskMutation) ClearUpstreamUnitCost() {
+	m.upstream_unit_cost = nil
+	m.addupstream_unit_cost = nil
+	m.clearedFields[videotask.FieldUpstreamUnitCost] = struct{}{}
+}
+
+// UpstreamUnitCostCleared returns if the "upstream_unit_cost" field was cleared in this mutation.
+func (m *VideoTaskMutation) UpstreamUnitCostCleared() bool {
+	_, ok := m.clearedFields[videotask.FieldUpstreamUnitCost]
+	return ok
+}
+
+// ResetUpstreamUnitCost resets all changes to the "upstream_unit_cost" field.
+func (m *VideoTaskMutation) ResetUpstreamUnitCost() {
+	m.upstream_unit_cost = nil
+	m.addupstream_unit_cost = nil
+	delete(m.clearedFields, videotask.FieldUpstreamUnitCost)
+}
+
 // SetEstimatedUnits sets the "estimated_units" field.
 func (m *VideoTaskMutation) SetEstimatedUnits(f float64) {
 	m.estimated_units = &f
@@ -59538,7 +59610,7 @@ func (m *VideoTaskMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *VideoTaskMutation) Fields() []string {
-	fields := make([]string, 0, 50)
+	fields := make([]string, 0, 51)
 	if m.request_id != nil {
 		fields = append(fields, videotask.FieldRequestID)
 	}
@@ -59616,6 +59688,9 @@ func (m *VideoTaskMutation) Fields() []string {
 	}
 	if m.unit_price != nil {
 		fields = append(fields, videotask.FieldUnitPrice)
+	}
+	if m.upstream_unit_cost != nil {
+		fields = append(fields, videotask.FieldUpstreamUnitCost)
 	}
 	if m.estimated_units != nil {
 		fields = append(fields, videotask.FieldEstimatedUnits)
@@ -59749,6 +59824,8 @@ func (m *VideoTaskMutation) Field(name string) (ent.Value, bool) {
 		return m.PricingUnit()
 	case videotask.FieldUnitPrice:
 		return m.UnitPrice()
+	case videotask.FieldUpstreamUnitCost:
+		return m.UpstreamUnitCost()
 	case videotask.FieldEstimatedUnits:
 		return m.EstimatedUnits()
 	case videotask.FieldEstimatedAmount:
@@ -59858,6 +59935,8 @@ func (m *VideoTaskMutation) OldField(ctx context.Context, name string) (ent.Valu
 		return m.OldPricingUnit(ctx)
 	case videotask.FieldUnitPrice:
 		return m.OldUnitPrice(ctx)
+	case videotask.FieldUpstreamUnitCost:
+		return m.OldUpstreamUnitCost(ctx)
 	case videotask.FieldEstimatedUnits:
 		return m.OldEstimatedUnits(ctx)
 	case videotask.FieldEstimatedAmount:
@@ -60097,6 +60176,13 @@ func (m *VideoTaskMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetUnitPrice(v)
 		return nil
+	case videotask.FieldUpstreamUnitCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpstreamUnitCost(v)
+		return nil
 	case videotask.FieldEstimatedUnits:
 		v, ok := value.(float64)
 		if !ok {
@@ -60300,6 +60386,9 @@ func (m *VideoTaskMutation) AddedFields() []string {
 	if m.addunit_price != nil {
 		fields = append(fields, videotask.FieldUnitPrice)
 	}
+	if m.addupstream_unit_cost != nil {
+		fields = append(fields, videotask.FieldUpstreamUnitCost)
+	}
 	if m.addestimated_units != nil {
 		fields = append(fields, videotask.FieldEstimatedUnits)
 	}
@@ -60350,6 +60439,8 @@ func (m *VideoTaskMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedResultHeight()
 	case videotask.FieldUnitPrice:
 		return m.AddedUnitPrice()
+	case videotask.FieldUpstreamUnitCost:
+		return m.AddedUpstreamUnitCost()
 	case videotask.FieldEstimatedUnits:
 		return m.AddedEstimatedUnits()
 	case videotask.FieldEstimatedAmount:
@@ -60437,6 +60528,13 @@ func (m *VideoTaskMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddUnitPrice(v)
+		return nil
+	case videotask.FieldUpstreamUnitCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUpstreamUnitCost(v)
 		return nil
 	case videotask.FieldEstimatedUnits:
 		v, ok := value.(float64)
@@ -60535,6 +60633,9 @@ func (m *VideoTaskMutation) ClearedFields() []string {
 	if m.FieldCleared(videotask.FieldResultHeight) {
 		fields = append(fields, videotask.FieldResultHeight)
 	}
+	if m.FieldCleared(videotask.FieldUpstreamUnitCost) {
+		fields = append(fields, videotask.FieldUpstreamUnitCost)
+	}
 	if m.FieldCleared(videotask.FieldSettledAmount) {
 		fields = append(fields, videotask.FieldSettledAmount)
 	}
@@ -60614,6 +60715,9 @@ func (m *VideoTaskMutation) ClearField(name string) error {
 		return nil
 	case videotask.FieldResultHeight:
 		m.ClearResultHeight()
+		return nil
+	case videotask.FieldUpstreamUnitCost:
+		m.ClearUpstreamUnitCost()
 		return nil
 	case videotask.FieldSettledAmount:
 		m.ClearSettledAmount()
@@ -60733,6 +60837,9 @@ func (m *VideoTaskMutation) ResetField(name string) error {
 		return nil
 	case videotask.FieldUnitPrice:
 		m.ResetUnitPrice()
+		return nil
+	case videotask.FieldUpstreamUnitCost:
+		m.ResetUpstreamUnitCost()
 		return nil
 	case videotask.FieldEstimatedUnits:
 		m.ResetEstimatedUnits()

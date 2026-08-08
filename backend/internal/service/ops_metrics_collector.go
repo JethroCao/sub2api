@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"math"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
@@ -38,6 +41,91 @@ const (
 )
 
 var opsMetricsCollectorAdvisoryLockID = hashAdvisoryLockID(opsMetricsCollectorLeaderLockKey)
+
+// videoOpsMetricsAggregationSQL intentionally projects only bounded dimensions.
+// Identifiers, users, payloads, URLs, and arbitrary error text never become labels.
+const videoOpsMetricsAggregationSQL = `
+WITH bounded AS (
+    SELECT
+        CASE WHEN provider IN ('grok','seedance','kling') THEN provider ELSE 'other' END AS provider,
+        CASE WHEN external_model = ANY($3::text[]) THEN external_model ELSE 'other' END AS model,
+        CASE WHEN operation IN ('generation','edit','extension') THEN operation ELSE 'other' END AS operation,
+        group_id, status, created_at, submitted_at, started_at, finished_at, updated_at,
+        last_error_code, lease_expires_at, settled_at, settled_amount, upstream_unit_cost,
+        pricing_unit, result_duration_seconds
+    FROM video_tasks
+)
+SELECT
+    provider,
+    model,
+    operation,
+    group_id,
+    jsonb_build_object(
+        'created', COUNT(*) FILTER (WHERE status = 'created'),
+        'submitting', COUNT(*) FILTER (WHERE status = 'submitting'),
+        'submitted', COUNT(*) FILTER (WHERE status = 'submitted'),
+        'queued', COUNT(*) FILTER (WHERE status = 'queued'),
+        'running', COUNT(*) FILTER (WHERE status = 'running'),
+        'succeeded', COUNT(*) FILTER (WHERE status = 'succeeded'),
+        'failed', COUNT(*) FILTER (WHERE status = 'failed'),
+        'cancelled', COUNT(*) FILTER (WHERE status = 'cancelled'),
+        'unknown', COUNT(*) FILTER (WHERE status = 'unknown')
+    ) AS status_counts,
+    COUNT(*) FILTER (WHERE created_at >= $1 AND created_at < $2) AS submission_count,
+    AVG(EXTRACT(EPOCH FROM (submitted_at - created_at))) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2) AS submission_latency_seconds,
+    AVG(EXTRACT(EPOCH FROM (started_at - submitted_at))) FILTER (WHERE started_at >= $1 AND started_at < $2) AS provider_queue_seconds,
+    AVG(EXTRACT(EPOCH FROM (finished_at - created_at))) FILTER (WHERE finished_at >= $1 AND finished_at < $2) AS completion_seconds,
+    COUNT(*) FILTER (WHERE updated_at >= $1 AND updated_at < $2 AND last_error_code IN ('rate_limit_error', 'upstream_rate_limited')) AS rate_limit_count,
+    COUNT(*) FILTER (WHERE status = 'unknown') AS unknown_count,
+    COALESCE(MAX(EXTRACT(EPOCH FROM (clock_timestamp() - updated_at))) FILTER (WHERE status = 'unknown'), 0) AS unknown_max_age_seconds,
+    COUNT(*) FILTER (WHERE lease_expires_at <= clock_timestamp() AND status NOT IN ('succeeded','failed','cancelled')) AS expired_lease_count,
+    COUNT(*) FILTER (WHERE status IN ('succeeded','failed','cancelled') AND settled_at IS NULL) AS pending_settlement_count,
+    0::BIGINT AS failed_refund_count,
+    COALESCE(SUM(settled_amount) FILTER (WHERE settled_at >= $1 AND settled_at < $2), 0) AS revenue,
+    CASE
+        WHEN COUNT(*) FILTER (WHERE settled_at >= $1 AND settled_at < $2) = 0 THEN 0
+        WHEN COUNT(*) FILTER (WHERE settled_at >= $1 AND settled_at < $2) <>
+             COUNT(upstream_unit_cost * CASE WHEN pricing_unit = 'per_output_second' THEN result_duration_seconds ELSE 1 END)
+                 FILTER (WHERE settled_at >= $1 AND settled_at < $2) THEN NULL
+        ELSE SUM(upstream_unit_cost * CASE WHEN pricing_unit = 'per_output_second' THEN result_duration_seconds ELSE 1 END)
+                 FILTER (WHERE settled_at >= $1 AND settled_at < $2)
+    END AS upstream_cost,
+    CASE
+        WHEN COUNT(*) FILTER (WHERE settled_at >= $1 AND settled_at < $2) = 0 THEN 0
+        WHEN COUNT(*) FILTER (WHERE settled_at >= $1 AND settled_at < $2) <>
+             COUNT(upstream_unit_cost * CASE WHEN pricing_unit = 'per_output_second' THEN result_duration_seconds ELSE 1 END)
+                 FILTER (WHERE settled_at >= $1 AND settled_at < $2) THEN NULL
+        ELSE SUM(settled_amount - upstream_unit_cost * CASE WHEN pricing_unit = 'per_output_second' THEN result_duration_seconds ELSE 1 END)
+                 FILTER (WHERE settled_at >= $1 AND settled_at < $2)
+    END AS margin
+FROM bounded
+GROUP BY provider, model, operation, group_id`
+
+type videoMetricDimensions struct {
+	Provider  string
+	Model     string
+	Operation string
+	GroupID   int64
+}
+
+func normalizeVideoMetricDimensions(provider, model, operation string, groupID int64, configuredModels map[string]struct{}) videoMetricDimensions {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider != PlatformGrok && provider != VideoProviderSeedance && provider != VideoProviderKling {
+		provider = "other"
+	}
+	model = strings.TrimSpace(model)
+	if _, ok := configuredModels[model]; !ok {
+		model = "other"
+	}
+	operation = strings.ToLower(strings.TrimSpace(operation))
+	if operation != string(VideoOperationGeneration) && operation != string(VideoOperationEdit) && operation != string(VideoOperationExtension) {
+		operation = "other"
+	}
+	if groupID < 1 {
+		groupID = 0
+	}
+	return videoMetricDimensions{Provider: provider, Model: model, Operation: operation, GroupID: groupID}
+}
 
 type opsSchedulableAccountLoadRepository interface {
 	ListSchedulableAccountLoads(ctx context.Context) ([]AccountWithConcurrency, error)
@@ -364,7 +452,144 @@ func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context) error {
 		ConcurrencyQueueDepth: concurrencyQueueDepth,
 	}
 
-	return c.opsRepo.InsertSystemMetrics(ctx, input)
+	if err := c.opsRepo.InsertSystemMetrics(ctx, input); err != nil {
+		return err
+	}
+	return c.collectAndPersistVideoMetrics(ctx, windowStart, windowEnd)
+}
+
+type videoOpsMetricRow struct {
+	Dimensions               videoMetricDimensions
+	StatusCounts             []byte
+	SubmissionCount          int64
+	SubmissionLatencySeconds sql.NullFloat64
+	ProviderQueueSeconds     sql.NullFloat64
+	CompletionSeconds        sql.NullFloat64
+	RateLimitCount           int64
+	UnknownCount             int64
+	UnknownMaxAgeSeconds     float64
+	ExpiredLeaseCount        int64
+	PendingSettlementCount   int64
+	FailedRefundCount        int64
+	Revenue                  float64
+	UpstreamCost             sql.NullFloat64
+	Margin                   sql.NullFloat64
+}
+
+func (c *OpsMetricsCollector) collectAndPersistVideoMetrics(ctx context.Context, windowStart, windowEnd time.Time) error {
+	configuredModels, err := c.configuredVideoMetricModels(ctx)
+	if err != nil {
+		return fmt.Errorf("query configured video metric models: %w", err)
+	}
+	modelValues := make([]string, 0, len(configuredModels))
+	for model := range configuredModels {
+		modelValues = append(modelValues, model)
+	}
+	sort.Strings(modelValues)
+	rows, err := c.db.QueryContext(ctx, videoOpsMetricsAggregationSQL, windowStart, windowEnd, pq.Array(modelValues))
+	if err != nil {
+		return fmt.Errorf("query video operations metrics: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	metrics := make(map[videoMetricDimensions]*videoOpsMetricRow)
+	for rows.Next() {
+		var provider, model, operation string
+		var groupID int64
+		metric := &videoOpsMetricRow{}
+		if err := rows.Scan(
+			&provider, &model, &operation, &groupID, &metric.StatusCounts,
+			&metric.SubmissionCount, &metric.SubmissionLatencySeconds, &metric.ProviderQueueSeconds, &metric.CompletionSeconds,
+			&metric.RateLimitCount, &metric.UnknownCount, &metric.UnknownMaxAgeSeconds,
+			&metric.ExpiredLeaseCount, &metric.PendingSettlementCount, &metric.FailedRefundCount,
+			&metric.Revenue, &metric.UpstreamCost, &metric.Margin,
+		); err != nil {
+			return fmt.Errorf("scan video operations metrics: %w", err)
+		}
+		metric.Dimensions = normalizeVideoMetricDimensions(provider, model, operation, groupID, configuredModels)
+		metrics[metric.Dimensions] = metric
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	refundFailures := snapshotAdminVideoRefundFailures()
+	for key, count := range refundFailures {
+		dimensions := normalizeVideoMetricDimensions(key.Provider, key.Model, key.Operation, key.GroupID, configuredModels)
+		metric := metrics[dimensions]
+		if metric == nil {
+			metric = &videoOpsMetricRow{Dimensions: dimensions, StatusCounts: []byte(`{}`)}
+			metrics[dimensions] = metric
+		}
+		metric.FailedRefundCount += count
+	}
+
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, metric := range metrics {
+		if !json.Valid(metric.StatusCounts) {
+			metric.StatusCounts = []byte(`{}`)
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO video_ops_metrics (
+    bucket_at,provider,model,operation,group_id,status_counts,
+    submission_count,submission_latency_seconds,provider_queue_seconds,completion_seconds,
+    rate_limit_count,unknown_count,unknown_max_age_seconds,expired_lease_count,
+    pending_settlement_count,failed_refund_count,revenue,upstream_cost,margin
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+ON CONFLICT (bucket_at,provider,model,operation,group_id) DO UPDATE SET
+    status_counts=EXCLUDED.status_counts, submission_count=EXCLUDED.submission_count,
+    submission_latency_seconds=EXCLUDED.submission_latency_seconds,
+    provider_queue_seconds=EXCLUDED.provider_queue_seconds, completion_seconds=EXCLUDED.completion_seconds,
+    rate_limit_count=EXCLUDED.rate_limit_count, unknown_count=EXCLUDED.unknown_count,
+    unknown_max_age_seconds=EXCLUDED.unknown_max_age_seconds, expired_lease_count=EXCLUDED.expired_lease_count,
+    pending_settlement_count=EXCLUDED.pending_settlement_count,
+    failed_refund_count=video_ops_metrics.failed_refund_count + EXCLUDED.failed_refund_count,
+    revenue=EXCLUDED.revenue, upstream_cost=EXCLUDED.upstream_cost, margin=EXCLUDED.margin`,
+			windowEnd, metric.Dimensions.Provider, metric.Dimensions.Model, metric.Dimensions.Operation, metric.Dimensions.GroupID,
+			string(metric.StatusCounts), metric.SubmissionCount, nullFloat64Value(metric.SubmissionLatencySeconds),
+			nullFloat64Value(metric.ProviderQueueSeconds), nullFloat64Value(metric.CompletionSeconds), metric.RateLimitCount,
+			metric.UnknownCount, metric.UnknownMaxAgeSeconds, metric.ExpiredLeaseCount, metric.PendingSettlementCount,
+			metric.FailedRefundCount, metric.Revenue, nullFloat64Value(metric.UpstreamCost), nullFloat64Value(metric.Margin)); err != nil {
+			return fmt.Errorf("persist video operations metrics: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	acknowledgeAdminVideoRefundFailures(refundFailures)
+	return nil
+}
+
+func (c *OpsMetricsCollector) configuredVideoMetricModels(ctx context.Context) (map[string]struct{}, error) {
+	models := map[string]struct{}{
+		"seedance-2.0": {}, "grok-imagine-video": {}, "grok-imagine-video-1.5": {},
+	}
+	rows, err := c.db.QueryContext(ctx, `SELECT DISTINCT external_model FROM video_pricing_rules WHERE enabled=TRUE`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var model string
+		if err := rows.Scan(&model); err != nil {
+			return nil, err
+		}
+		model = strings.TrimSpace(model)
+		if model != "" && len(model) <= 128 {
+			models[model] = struct{}{}
+		}
+	}
+	return models, rows.Err()
+}
+
+func nullFloat64Value(value sql.NullFloat64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Float64
 }
 
 func (c *OpsMetricsCollector) collectConcurrencyQueueDepth(parentCtx context.Context) *int {

@@ -70,6 +70,8 @@ type VideoTask struct {
 	PricingUnit string `json:"pricing_unit,omitempty"`
 	// UnitPrice holds the value of the "unit_price" field.
 	UnitPrice float64 `json:"unit_price,omitempty"`
+	// UpstreamUnitCost holds the value of the "upstream_unit_cost" field.
+	UpstreamUnitCost *float64 `json:"upstream_unit_cost,omitempty"`
 	// EstimatedUnits holds the value of the "estimated_units" field.
 	EstimatedUnits float64 `json:"estimated_units,omitempty"`
 	// EstimatedAmount holds the value of the "estimated_amount" field.
@@ -130,7 +132,7 @@ func (*VideoTask) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case videotask.FieldLastErrorRetryable:
 			values[i] = new(sql.NullBool)
-		case videotask.FieldResultDurationSeconds, videotask.FieldUnitPrice, videotask.FieldEstimatedUnits, videotask.FieldEstimatedAmount, videotask.FieldFrozenAmount, videotask.FieldSettledAmount:
+		case videotask.FieldResultDurationSeconds, videotask.FieldUnitPrice, videotask.FieldUpstreamUnitCost, videotask.FieldEstimatedUnits, videotask.FieldEstimatedAmount, videotask.FieldFrozenAmount, videotask.FieldSettledAmount:
 			values[i] = new(sql.NullFloat64)
 		case videotask.FieldID, videotask.FieldUserID, videotask.FieldAPIKeyID, videotask.FieldSubscriptionID, videotask.FieldGroupID, videotask.FieldAccountID, videotask.FieldResultWidth, videotask.FieldResultHeight, videotask.FieldSubmissionAttempts, videotask.FieldPollAttempts, videotask.FieldSettlementAttempts, videotask.FieldVersion:
 			values[i] = new(sql.NullInt64)
@@ -326,6 +328,13 @@ func (_m *VideoTask) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field unit_price", values[i])
 			} else if value.Valid {
 				_m.UnitPrice = value.Float64
+			}
+		case videotask.FieldUpstreamUnitCost:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field upstream_unit_cost", values[i])
+			} else if value.Valid {
+				_m.UpstreamUnitCost = new(float64)
+				*_m.UpstreamUnitCost = value.Float64
 			}
 		case videotask.FieldEstimatedUnits:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
@@ -615,6 +624,11 @@ func (_m *VideoTask) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("unit_price=")
 	builder.WriteString(fmt.Sprintf("%v", _m.UnitPrice))
+	builder.WriteString(", ")
+	if v := _m.UpstreamUnitCost; v != nil {
+		builder.WriteString("upstream_unit_cost=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("estimated_units=")
 	builder.WriteString(fmt.Sprintf("%v", _m.EstimatedUnits))
