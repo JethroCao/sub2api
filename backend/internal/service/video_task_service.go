@@ -427,6 +427,9 @@ func (s *VideoTaskService) validateSelectedAccount(ctx context.Context, command 
 	if err := s.capabilities.Validate(providerName, command.Request); err != nil {
 		return "", false
 	}
+	if err := ValidateVideoAccountCapabilityOverrides(account, command.Request); err != nil {
+		return "", false
+	}
 	upstreamModel := strings.TrimSpace(account.GetMappedModel(command.Request.Model))
 	if upstreamModel == "" {
 		return "", false

@@ -85,6 +85,7 @@ func TestRedactCredentials_AllKnownSensitiveKeys(t *testing.T) {
 	keys := []string{
 		"access_token", "refresh_token", "id_token",
 		"api_key", "session_key", "cookie",
+		"access_key", "secret_key",
 		"aws_secret_access_key", "aws_session_token",
 		"service_account_json", "service_account", "private_key",
 		"agent_private_key",

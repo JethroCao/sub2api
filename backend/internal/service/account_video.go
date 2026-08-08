@@ -6,7 +6,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-const videoProviderExtraKey = "video_provider"
+const videoProviderExtraKey = VideoProviderExtraKey
 
 // VideoProvider returns the configured provider for a Video account.
 func (a *Account) VideoProvider() string {

@@ -59,6 +59,19 @@ func TestVideoSubmitRejectsUnsupportedBeforeHold(t *testing.T) {
 	require.Equal(t, []string{"validate"}, deps.order)
 }
 
+func TestVideoSubmitSkipsAccountWithAdministratorDisabledCapability(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.account.Extra[VideoDisabledCapabilitiesExtraKey] = []any{"text"}
+
+	_, err := deps.service.Submit(context.Background(), deps.command())
+
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Equal(t, 1, deps.pricing.calls)
+	require.Equal(t, 1, deps.submissions.reserveCalls)
+	require.Equal(t, 1, deps.billing.releaseCalls)
+	require.Zero(t, deps.provider.submitCalls)
+}
+
 func TestVideoSubmitAcceptsDurableGrokWhenEnabled(t *testing.T) {
 	deps := newVideoSubmitHarness(t)
 	deps.service.videoConfig.GrokEnabled = true

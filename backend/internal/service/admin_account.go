@@ -460,6 +460,10 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
+	status := input.Status
+	if status == "" {
+		status = StatusActive
+	}
 	account := &Account{
 		Name:        input.Name,
 		Notes:       normalizeAccountNotes(input.Notes),
@@ -470,7 +474,7 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		ProxyID:     input.ProxyID,
 		Concurrency: normalizeAccountConcurrency(input.Platform, input.Type, input.Concurrency),
 		Priority:    input.Priority,
-		Status:      StatusActive,
+		Status:      status,
 		Schedulable: true,
 	}
 	if input.ProbeEnabled != nil && *input.ProbeEnabled {
@@ -518,6 +522,13 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
+	}
+	if input.Platform == PlatformVideo {
+		input.Credentials, accountExtra, err = NormalizeVideoAccountAdminCreate(input.Platform, input.Credentials, accountExtra)
+		if err != nil {
+			return nil, err
+		}
+		input.Status = normalizeVideoAccountAdminStatus(input.Status)
 	}
 	accountExtra, err = normalizeGrokMediaEligibilityExtra(input.Platform, accountExtra)
 	if err != nil {
@@ -605,6 +616,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	videoAccountUpdate := account.Platform == PlatformVideo
+	if videoAccountUpdate {
+		input.Status = normalizeVideoAccountAdminStatus(input.Status)
+		input.Credentials, input.Extra, err = NormalizeVideoAccountAdminUpdate(account, input.Credentials, input.Extra, input.Status)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -656,7 +675,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Notes != nil {
 		account.Notes = normalizeAccountNotes(input.Notes)
 	}
-	if account.IsCredentialShadow() && input.Credentials != nil {
+	if videoAccountUpdate {
+		account.Credentials = input.Credentials
+		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
+			return nil, err
+		}
+	} else if account.IsCredentialShadow() && input.Credentials != nil {
 		account.Credentials = sanitizeSparkShadowCredentials(input.Credentials)
 	} else if len(input.Credentials) > 0 {
 		// 敏感子键采用"incoming 没提供就保留"的合并语义：前端响应已脱敏，
@@ -736,7 +760,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		ComputeQuotaResetAt(account.Extra)
 		NormalizeFixedQuotaWindows(account.Extra)
 	}
-	if err := ValidateVideoAccountConfig(account.Platform, account.Type, account.Extra, account.Credentials); err != nil {
+	finalStatus := account.Status
+	if input.Status != "" {
+		finalStatus = input.Status
+	}
+	if err := ValidateVideoAccountAdminFinalConfig(account.Platform, account.Type, finalStatus, account.Extra, account.Credentials); err != nil {
 		return nil, err
 	}
 	if requestedRateSyncEnabledUpdate != nil && *requestedRateSyncEnabledUpdate {

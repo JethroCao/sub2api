@@ -123,6 +123,7 @@ type CreateAccountRequest struct {
 	Priority                int            `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
 	LoadFactor              *int           `json:"load_factor"`
+	Status                  string         `json:"status" binding:"omitempty,oneof=active inactive error"`
 	GroupIDs                []int64        `json:"group_ids"`
 	ExpiresAt               *int64         `json:"expires_at"`
 	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
@@ -217,6 +218,11 @@ const accountListGroupUngroupedQueryValue = "ungrouped"
 
 func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
 	out := dto.AccountFromService(account)
+	if account != nil && out != nil && account.Platform == service.PlatformVideo {
+		metadata := service.BuildVideoAccountAdminMetadata(account)
+		out.VideoProvider = metadata.Provider
+		out.VideoCapabilities = metadata.CapabilityTags
+	}
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
@@ -858,6 +864,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			Priority:              req.Priority,
 			RateMultiplier:        req.RateMultiplier,
 			LoadFactor:            req.LoadFactor,
+			Status:                req.Status,
 			GroupIDs:              req.GroupIDs,
 			ExpiresAt:             req.ExpiresAt,
 			AutoPauseOnExpired:    req.AutoPauseOnExpired,

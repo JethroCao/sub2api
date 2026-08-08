@@ -659,8 +659,14 @@ func stringMappingFromRaw(raw any) map[string]string {
 }
 
 func (a *Account) GetModelMapping() map[string]string {
-	credentialsPtr := mapPtr(a.Credentials)
-	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
+	mappingSource := a.Credentials
+	if a.Platform == PlatformVideo && a.Extra != nil {
+		if _, configuredInExtra := a.Extra[VideoModelMappingExtraKey]; configuredInExtra {
+			mappingSource = a.Extra
+		}
+	}
+	credentialsPtr := mapPtr(mappingSource)
+	rawMapping, _ := mappingSource["model_mapping"].(map[string]any)
 	rawPtr := mapPtr(rawMapping)
 	rawLen := len(rawMapping)
 	rawSig := uint64(0)

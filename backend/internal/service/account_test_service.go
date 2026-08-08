@@ -73,6 +73,7 @@ type AccountTestService struct {
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
+	videoAccountProbe         VideoAccountCredentialProbe
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 }
@@ -97,6 +98,7 @@ func NewAccountTestService(
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
 		tlsFPProfileService:       tlsFPProfileService,
+		videoAccountProbe:         NewLocalVideoAccountProbe(),
 	}
 }
 
@@ -213,11 +215,50 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testGrokAccountConnection(c, account, modelID)
 	}
 
+	if account.Platform == PlatformVideo {
+		return s.testVideoAccountConnection(c, account)
+	}
+
 	if account.Platform == PlatformAntigravity {
 		return s.routeAntigravityTest(c, account, modelID, prompt)
 	}
 
 	return s.testClaudeAccountConnection(c, account, modelID)
+}
+
+func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account *Account) error {
+	probe := s.videoAccountProbe
+	if probe == nil {
+		probe = NewLocalVideoAccountProbe()
+	}
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: account.VideoProvider()})
+	_, err := probe.ProbeCredentials(c.Request.Context(), account)
+	if errors.Is(err, ErrVideoAccountProbeNotSupported) {
+		s.sendEvent(c, TestEvent{
+			Type:   "test_complete",
+			Code:   VideoAccountProbeNotSupportedCode,
+			Status: VideoAccountProbeLocalConfigValidatedStatus,
+			Error:  "authenticated non-billable probe is not supported for this provider contract",
+		})
+		return ErrVideoAccountProbeNotSupported
+	}
+	if err != nil {
+		s.sendEvent(c, TestEvent{
+			Type:  "error",
+			Code:  "invalid_video_account_config",
+			Error: "video account configuration is invalid",
+		})
+		return err
+	}
+	// A probe implementation must explicitly prove remote authentication. The
+	// checked-in implementation never reaches this branch; an empty or unknown
+	// result is a stable failure, never a successful completion.
+	s.sendEvent(c, TestEvent{
+		Type:  "error",
+		Code:  "video_probe_unverified",
+		Error: "video account probe returned no verified authentication result",
+	})
+	return errors.New("video account probe returned no verified authentication result")
 }
 
 // testClaudeAccountConnection tests an Anthropic Claude account's connection
