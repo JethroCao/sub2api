@@ -220,6 +220,8 @@ func TestVideoReconcilerRepositoryPollExhaustionPreservesAcceptedRouteAndHoldFor
 	ctx := context.Background()
 	repo := NewVideoTaskRepository(integrationDB)
 	task := createDueVideoTask(t, repo, "poll-exhaustion-review")
+	_, err := integrationDB.ExecContext(ctx, `UPDATE video_tasks SET billing_status = 'held' WHERE request_id = $1`, task.RequestID)
+	require.NoError(t, err)
 	leased, err := repo.LeaseDue(ctx, "worker-poll-review", 1, time.Minute, time.Now().UTC())
 	require.NoError(t, err)
 	active := findLeasedVideoTask(t, leased, task.RequestID)
