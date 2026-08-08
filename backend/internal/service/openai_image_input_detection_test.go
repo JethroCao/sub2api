@@ -17,6 +17,9 @@ func TestOpenAIRequestBodyMayContainImageInput(t *testing.T) {
 		{name: "chat image url", body: `{"messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://example.test/a.png"}}]}]}`, want: true},
 		{name: "anthropic image", body: `{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]}]}`, want: true},
 		{name: "historical image", body: `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/a.png"}}]},{"role":"user","content":"continue"}]}`, want: true},
+		{name: "function call output image", body: `{"input":[{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_image","image_url":"data:image/png;base64,abc"}]}]}`, want: true},
+		{name: "custom tool output nested image", body: `{"input":[{"type":"custom_tool_call_output","call_id":"call_1","output":{"content":[{"type":"image_url","image_url":{"url":"https://example.test/tool.png"}}]}}]}`, want: true},
+		{name: "plain function call output", body: `{"input":[{"type":"function_call_output","call_id":"call_1","output":{"status":"ok","text":"done"}}]}`, want: false},
 	}
 
 	for _, tt := range tests {

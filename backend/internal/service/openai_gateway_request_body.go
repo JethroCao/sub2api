@@ -1266,7 +1266,15 @@ func openAIJSONValueMayContainImageInput(value gjson.Result) bool {
 		if contentType == "input_image" || contentType == "image" || value.Get("image_url").Exists() {
 			return true
 		}
-		return openAIJSONValueMayContainImageInput(value.Get("content"))
+		found := false
+		value.ForEach(func(_, child gjson.Result) bool {
+			if openAIJSONValueMayContainImageInput(child) {
+				found = true
+				return false
+			}
+			return true
+		})
+		return found
 	}
 	return false
 }
