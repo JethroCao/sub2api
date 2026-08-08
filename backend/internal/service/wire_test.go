@@ -49,7 +49,7 @@ func TestProvideDurableVideoProviderRegistryKeepsKlingGated(t *testing.T) {
 func TestProductionVideoRegistryCapabilityChainEnablesOnlyDeclaredModels(t *testing.T) {
 	registry, err := ProvideDurableVideoProviderRegistry(nil, nil)
 	require.NoError(t, err)
-	validator := ProvideVideoCapabilityValidator(registry)
+	validator := ProvideVideoCapabilityValidator(ProvideVideoCapabilityCatalog(registry))
 
 	require.NoError(t, validator.Validate(PlatformGrok, CanonicalVideoRequest{
 		Operation: VideoOperationGeneration, Model: "grok-imagine-video", Prompt: "waves",

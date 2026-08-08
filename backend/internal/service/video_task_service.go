@@ -408,15 +408,23 @@ func (s *VideoTaskService) validateSelectedAccount(ctx context.Context, command 
 	account := selection.Account
 	if account == nil || account.ID <= 0 || account.Platform != command.Platform ||
 		(!selection.GroupMatched && !openAIStickyAccountMatchesGroup(account, &command.Group.ID)) ||
-		!account.IsSchedulableForModelWithContext(ctx, command.Request.Model) || !account.IsModelSupported(command.Request.Model) {
+		!account.IsSchedulableForModelWithContext(ctx, command.Request.Model) {
 		return "", false
 	}
 	providerName := PlatformGrok
+	upstreamModel := ""
 	if command.Platform == PlatformVideo {
 		if err := ValidateVideoAccountConfig(account.Platform, account.Type, account.Extra, account.Credentials); err != nil {
 			return "", false
 		}
+		var mapped bool
+		upstreamModel, mapped = videoAccountExactMappedModel(account, command.Request.Model)
+		if !mapped {
+			return "", false
+		}
 		providerName = account.VideoProvider()
+	} else if !account.IsModelSupported(command.Request.Model) {
+		return "", false
 	}
 	if providerName != command.Provider {
 		return "", false
@@ -430,7 +438,9 @@ func (s *VideoTaskService) validateSelectedAccount(ctx context.Context, command 
 	if err := ValidateVideoAccountCapabilityOverrides(account, command.Request); err != nil {
 		return "", false
 	}
-	upstreamModel := strings.TrimSpace(account.GetMappedModel(command.Request.Model))
+	if command.Platform != PlatformVideo {
+		upstreamModel = strings.TrimSpace(account.GetMappedModel(command.Request.Model))
+	}
 	if upstreamModel == "" {
 		return "", false
 	}

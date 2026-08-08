@@ -275,10 +275,10 @@ func seedanceValidatedBaseURL(raw string) (string, error) {
 		return "", errors.New("base URL rejected by URL security policy")
 	}
 	parsed, err := url.Parse(normalized)
-	if err != nil || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+	if err != nil || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return "", errors.New("base URL rejected by URL security policy")
 	}
-	return normalized, nil
+	return strings.TrimRight(normalized, "/"), nil
 }
 
 func seedanceValidatedContentURL(raw string) (string, error) {

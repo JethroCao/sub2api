@@ -40,12 +40,17 @@ func VideoModelCapabilityKey(provider, model string) string {
 	return strings.TrimSpace(provider) + videoModelCapabilityKeySeparator + strings.TrimSpace(model)
 }
 
-func (catalog VideoCapabilityCatalog) Validate(provider string, request CanonicalVideoRequest) error {
+func (catalog VideoCapabilityCatalog) CapabilitiesFor(provider, model string) (VideoProviderCapabilities, bool) {
 	provider = strings.TrimSpace(provider)
-	providerCapabilities, ok := catalog[VideoModelCapabilityKey(provider, request.Model)]
+	providerCapabilities, ok := catalog[VideoModelCapabilityKey(provider, model)]
 	if !ok {
 		providerCapabilities, ok = catalog[provider]
 	}
+	return providerCapabilities, ok
+}
+
+func (catalog VideoCapabilityCatalog) Validate(provider string, request CanonicalVideoRequest) error {
+	providerCapabilities, ok := catalog.CapabilitiesFor(provider, request.Model)
 	if !ok {
 		return ErrVideoUnsupportedCapability
 	}

@@ -460,9 +460,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
-	status := input.Status
-	if status == "" {
-		status = StatusActive
+	status := StatusActive
+	if input.Platform == PlatformVideo && input.Status != "" {
+		status = input.Status
 	}
 	account := &Account{
 		Name:        input.Name,

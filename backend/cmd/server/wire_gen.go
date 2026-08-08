@@ -195,7 +195,12 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	accountUsageService := service.ProvideAccountUsageService(accountRepository, usageLogRepository, claudeUsageFetcher, geminiQuotaService, antigravityQuotaFetcher, grokQuotaFetcher, grokQuotaService, openAIQuotaService, usageCache, identityCache, tlsFingerprintProfileService, openAIGatewayService)
 	accountTestService := service.ProvideAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, grokTokenProvider, antigravityGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService, openAIGatewayService)
 	crsSyncService := service.NewCRSSyncService(accountRepository, proxyRepository, oAuthService, openAIOAuthService, geminiOAuthService, configConfig)
-	accountHandler := admin.ProvideAccountHandler(adminService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, rateLimitService, accountUsageService, accountTestService, concurrencyService, crsSyncService, sessionLimitCache, rpmCache, compositeTokenCacheInvalidator, grokQuotaService)
+	videoProviderRegistry, err := service.ProvideDurableVideoProviderRegistry(openAIGatewayService, httpUpstream)
+	if err != nil {
+		return nil, err
+	}
+	videoCapabilityCatalog := service.ProvideVideoCapabilityCatalog(videoProviderRegistry)
+	accountHandler := admin.ProvideAccountHandler(adminService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, rateLimitService, accountUsageService, accountTestService, concurrencyService, crsSyncService, sessionLimitCache, rpmCache, compositeTokenCacheInvalidator, grokQuotaService, videoCapabilityCatalog)
 	adminAnnouncementHandler := admin.NewAnnouncementHandler(announcementService)
 	dataManagementService := service.NewDataManagementService()
 	dataManagementHandler := admin.NewDataManagementHandler(dataManagementService)
@@ -308,11 +313,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	videoPricingRepository := repository.NewVideoPricingRepository(db)
 	videoPricingService := service.NewVideoPricingService(videoPricingRepository)
 	videoBillingService := service.NewVideoBillingService(usageBillingRepository)
-	videoProviderRegistry, err := service.ProvideDurableVideoProviderRegistry(openAIGatewayService, httpUpstream)
-	if err != nil {
-		return nil, err
-	}
-	videoCapabilityValidator := service.ProvideVideoCapabilityValidator(videoProviderRegistry)
+	videoCapabilityValidator := service.ProvideVideoCapabilityValidator(videoCapabilityCatalog)
 	openAIVideoAccountScheduler := service.NewOpenAIVideoAccountScheduler(openAIGatewayService)
 	videoTaskService := service.ProvideVideoTaskService(videoSubmissionRepository, videoTaskRepository, videoPricingService, videoBillingService, videoProviderRegistry, videoCapabilityValidator, openAIVideoAccountScheduler, subscriptionService, configConfig)
 	videoContentFetcher := service.NewVideoContentFetcher()

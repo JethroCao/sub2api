@@ -33,7 +33,12 @@ func TestVideoAccountHandlerReadResponseExposesMetadataWithoutSecrets(t *testing
 			"video_disabled_capabilities": []any{"audio"},
 		},
 	}
-	handler := NewAccountHandler(stub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	catalog := service.VideoCapabilityCatalog{
+		service.VideoModelCapabilityKey(service.VideoProviderSeedance, "seedance-2.0"): {
+			service.VideoOperationGeneration: {Text: true},
+		},
+	}
+	handler := NewAccountHandler(stub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, catalog)
 	router := gin.New()
 	router.GET("/accounts/:id", handler.GetByID)
 	recorder := httptest.NewRecorder()
@@ -51,7 +56,9 @@ func TestVideoAccountHandlerReadResponseExposesMetadataWithoutSecrets(t *testing
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
 	require.Equal(t, service.VideoProviderSeedance, body.Data.VideoProvider)
 	require.Contains(t, body.Data.Capabilities, "generation")
+	require.Contains(t, body.Data.Capabilities, "text")
 	require.NotContains(t, body.Data.Capabilities, "audio")
+	require.NotContains(t, body.Data.Capabilities, "reference_videos")
 	require.Equal(t, "https://ark.example.com", body.Data.Credentials["base_url"])
 	require.True(t, body.Data.CredentialsStatus["has_api_key"])
 	require.True(t, body.Data.CredentialsStatus["has_access_key"])
@@ -73,6 +80,32 @@ func TestVideoAccountResponseFieldsAreOmittedForNonVideoAccounts(t *testing.T) {
 	require.NotContains(t, string(raw), "video_provider")
 	require.NotContains(t, string(raw), "video_capabilities")
 	require.NotContains(t, string(raw), "secret")
+}
+
+func TestVideoAccountHandlerReadResponseDropsUnsafeStoredBaseURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := newStubAdminService()
+	stub.getAccountResult = &service.Account{
+		ID: 43, Platform: service.PlatformVideo, Type: service.AccountTypeAPIKey, Status: service.StatusActive,
+		Credentials: map[string]any{
+			"api_key":  "api-secret",
+			"base_url": "https://admin:base-secret@ark.example.com?token=query-secret",
+		},
+		Extra: map[string]any{
+			"video_provider": service.VideoProviderSeedance,
+			"model_mapping":  map[string]any{"seedance-2.0": "endpoint"},
+		},
+	}
+	handler := NewAccountHandler(stub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.GET("/accounts/:id", handler.GetByID)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/accounts/43", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), "base-secret")
+	require.NotContains(t, recorder.Body.String(), "query-secret")
+	require.NotContains(t, recorder.Body.String(), "base_url")
 }
 
 func TestVideoAccountHandlerCreateMapsAdministrationFields(t *testing.T) {

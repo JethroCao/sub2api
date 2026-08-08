@@ -72,6 +72,44 @@ func TestVideoSubmitSkipsAccountWithAdministratorDisabledCapability(t *testing.T
 	require.Zero(t, deps.provider.submitCalls)
 }
 
+func TestVideoSubmitRejectsVideoAccountWithoutExactModelMapping(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		mapping any
+	}{
+		{name: "missing"},
+		{name: "wildcard only", mapping: map[string]any{"seedance-*": "endpoint-id"}},
+		{name: "different exact model", mapping: map[string]any{"seedance-1.0": "endpoint-id"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := newVideoSubmitHarness(t)
+			delete(deps.account.Credentials, "model_mapping")
+			if tt.mapping != nil {
+				deps.account.Extra[VideoModelMappingExtraKey] = tt.mapping
+			}
+
+			_, err := deps.service.Submit(context.Background(), deps.command())
+
+			require.ErrorIs(t, err, ErrNoAvailableAccounts)
+			require.Equal(t, 1, deps.submissions.reserveCalls)
+			require.Equal(t, 1, deps.billing.releaseCalls)
+			require.Zero(t, deps.provider.submitCalls)
+		})
+	}
+}
+
+func TestVideoSubmitRejectsAccountWithCorruptPersistedDisabledCapabilities(t *testing.T) {
+	deps := newVideoSubmitHarness(t)
+	deps.account.Extra[VideoDisabledCapabilitiesExtraKey] = []any{"telepathy"}
+
+	_, err := deps.service.Submit(context.Background(), deps.command())
+
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Equal(t, 1, deps.submissions.reserveCalls)
+	require.Equal(t, 1, deps.billing.releaseCalls)
+	require.Zero(t, deps.provider.submitCalls)
+}
+
 func TestVideoSubmitAcceptsDurableGrokWhenEnabled(t *testing.T) {
 	deps := newVideoSubmitHarness(t)
 	deps.service.videoConfig.GrokEnabled = true

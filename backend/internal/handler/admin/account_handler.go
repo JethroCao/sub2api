@@ -64,6 +64,7 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	videoCapabilities       service.VideoCapabilityCatalog
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -91,8 +92,9 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
+	videoCapabilities ...service.VideoCapabilityCatalog,
 ) *AccountHandler {
-	return &AccountHandler{
+	handler := &AccountHandler{
 		adminService:            adminService,
 		oauthService:            oauthService,
 		openaiOAuthService:      openaiOAuthService,
@@ -108,6 +110,10 @@ func NewAccountHandler(
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
 	}
+	if len(videoCapabilities) > 0 {
+		handler.videoCapabilities = videoCapabilities[0]
+	}
+	return handler
 }
 
 // CreateAccountRequest represents create account request
@@ -219,9 +225,16 @@ const accountListGroupUngroupedQueryValue = "ungrouped"
 func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
 	out := dto.AccountFromService(account)
 	if account != nil && out != nil && account.Platform == service.PlatformVideo {
-		metadata := service.BuildVideoAccountAdminMetadata(account)
+		metadata := service.BuildVideoAccountAdminMetadata(account, h.videoCapabilities)
 		out.VideoProvider = metadata.Provider
 		out.VideoCapabilities = metadata.CapabilityTags
+		if out.Credentials != nil {
+			if baseURL, ok := service.VideoAccountDisplayBaseURL(account); ok {
+				out.Credentials["base_url"] = baseURL
+			} else {
+				delete(out.Credentials, "base_url")
+			}
+		}
 	}
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)

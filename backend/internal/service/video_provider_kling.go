@@ -494,6 +494,10 @@ func klingBaseURL(account *Account) (string, error) {
 	if account != nil && strings.TrimSpace(account.GetCredential("base_url")) != "" {
 		raw = account.GetCredential("base_url")
 	}
+	return klingValidatedBaseURL(raw)
+}
+
+func klingValidatedBaseURL(raw string) (string, error) {
 	normalized, err := urlvalidator.ValidateHTTPSURL(raw, urlvalidator.ValidationOptions{AllowPrivate: false})
 	if err != nil {
 		return "", errors.New("base URL rejected by URL security policy")

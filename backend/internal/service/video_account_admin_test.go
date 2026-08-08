@@ -35,6 +35,64 @@ func TestNormalizeVideoAccountAdminCreateStoresOnlyAllowlistedKeys(t *testing.T)
 	}, extra)
 }
 
+func TestNormalizeVideoAccountAdminRejectsMissingOrClearedModelMapping(t *testing.T) {
+	_, _, err := NormalizeVideoAccountAdminCreate(
+		PlatformVideo,
+		map[string]any{"api_key": "ark-key"},
+		map[string]any{"video_provider": VideoProviderSeedance},
+	)
+	require.Equal(t, "VIDEO_MODEL_MAPPING_REQUIRED", infraerrors.Reason(err))
+
+	_, _, err = NormalizeVideoAccountAdminCreate(
+		PlatformVideo,
+		map[string]any{"api_key": "ark-key"},
+		map[string]any{
+			VideoProviderExtraKey:     VideoProviderSeedance,
+			VideoModelMappingExtraKey: map[string]any{"seedance-*": "endpoint-id"},
+		},
+	)
+	require.Equal(t, "VIDEO_MODEL_MAPPING_INVALID", infraerrors.Reason(err))
+
+	_, _, err = NormalizeVideoAccountAdminCreate(
+		PlatformVideo,
+		map[string]any{"api_key": "ark-key"},
+		map[string]any{
+			VideoProviderExtraKey:     VideoProviderSeedance,
+			VideoModelMappingExtraKey: map[string]any{"seedance-2.0": "seedance-2.0"},
+		},
+	)
+	require.NoError(t, err)
+
+	err = ValidateVideoAccountAdminFinalConfig(
+		PlatformVideo,
+		AccountTypeAPIKey,
+		StatusActive,
+		map[string]any{"video_provider": VideoProviderSeedance},
+		map[string]any{"api_key": "ark-key"},
+	)
+	require.Equal(t, "VIDEO_MODEL_MAPPING_REQUIRED", infraerrors.Reason(err))
+
+	account := &Account{
+		Platform: PlatformVideo,
+		Type:     AccountTypeAPIKey,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"api_key": "ark-key",
+		},
+		Extra: map[string]any{
+			"video_provider": VideoProviderSeedance,
+			"model_mapping":  map[string]any{"seedance-2.0": "endpoint-id"},
+		},
+	}
+	_, _, err = NormalizeVideoAccountAdminUpdate(
+		account,
+		nil,
+		map[string]any{"model_mapping": map[string]any{}},
+		StatusDisabled,
+	)
+	require.Equal(t, "VIDEO_MODEL_MAPPING_REQUIRED", infraerrors.Reason(err))
+}
+
 func TestNormalizeVideoAccountAdminCreateLeavesNonVideoMapsCompatible(t *testing.T) {
 	credentials := map[string]any{"api_key": "secret", "legacy_option": true}
 	extra := map[string]any{"legacy_extra": "kept"}
@@ -56,19 +114,19 @@ func TestNormalizeVideoAccountAdminCreateRejectsUnapprovedKeysAndInvalidHTTPS(t 
 		{
 			name:        "unknown credential",
 			credentials: map[string]any{"api_key": "ark-key", "region": "cn"},
-			extra:       map[string]any{"video_provider": VideoProviderSeedance},
+			extra:       map[string]any{"video_provider": VideoProviderSeedance, "model_mapping": map[string]any{"seedance-2.0": "endpoint-id"}},
 			wantReason:  "VIDEO_CREDENTIAL_KEY_INVALID",
 		},
 		{
 			name:        "unknown extra",
 			credentials: map[string]any{"api_key": "ark-key"},
-			extra:       map[string]any{"video_provider": VideoProviderSeedance, "provider_state": "trusted"},
+			extra:       map[string]any{"video_provider": VideoProviderSeedance, "model_mapping": map[string]any{"seedance-2.0": "endpoint-id"}, "provider_state": "trusted"},
 			wantReason:  "VIDEO_EXTRA_KEY_INVALID",
 		},
 		{
 			name:        "http base url",
 			credentials: map[string]any{"api_key": "ark-key", "base_url": "http://ark.example.com"},
-			extra:       map[string]any{"video_provider": VideoProviderSeedance},
+			extra:       map[string]any{"video_provider": VideoProviderSeedance, "model_mapping": map[string]any{"seedance-2.0": "endpoint-id"}},
 			wantReason:  "VIDEO_BASE_URL_INVALID",
 		},
 		{
@@ -76,6 +134,7 @@ func TestNormalizeVideoAccountAdminCreateRejectsUnapprovedKeysAndInvalidHTTPS(t 
 			credentials: map[string]any{"api_key": "ark-key"},
 			extra: map[string]any{
 				"video_provider":              VideoProviderSeedance,
+				"model_mapping":               map[string]any{"seedance-2.0": "endpoint-id"},
 				"video_disabled_capabilities": []any{"telepathy"},
 			},
 			wantReason: "VIDEO_CAPABILITY_INVALID",
@@ -87,6 +146,36 @@ func TestNormalizeVideoAccountAdminCreateRejectsUnapprovedKeysAndInvalidHTTPS(t 
 			_, _, err := NormalizeVideoAccountAdminCreate(PlatformVideo, tt.credentials, tt.extra)
 			require.Error(t, err)
 			require.Equal(t, tt.wantReason, infraerrors.Reason(err))
+		})
+	}
+}
+
+func TestNormalizeVideoAccountAdminRejectsProviderUnsafeBaseURLsWithoutEchoingSecrets(t *testing.T) {
+	tests := []struct {
+		name        string
+		provider    string
+		credentials map[string]any
+		mapping     map[string]any
+	}{
+		{name: "seedance userinfo", provider: VideoProviderSeedance, credentials: map[string]any{"api_key": "ark-key", "base_url": "https://admin:base-secret@ark.example.com"}, mapping: map[string]any{"seedance-2.0": "endpoint"}},
+		{name: "seedance query", provider: VideoProviderSeedance, credentials: map[string]any{"api_key": "ark-key", "base_url": "https://ark.example.com?token=base-secret"}, mapping: map[string]any{"seedance-2.0": "endpoint"}},
+		{name: "seedance fragment", provider: VideoProviderSeedance, credentials: map[string]any{"api_key": "ark-key", "base_url": "https://ark.example.com/#base-secret"}, mapping: map[string]any{"seedance-2.0": "endpoint"}},
+		{name: "seedance unverified path", provider: VideoProviderSeedance, credentials: map[string]any{"api_key": "ark-key", "base_url": "https://ark.example.com/unverified"}, mapping: map[string]any{"seedance-2.0": "endpoint"}},
+		{name: "kling userinfo", provider: VideoProviderKling, credentials: map[string]any{"access_key": "access", "secret_key": "secret", "base_url": "https://admin:base-secret@kling.example.com"}, mapping: map[string]any{"kling-3.0": "kling-v3"}},
+		{name: "kling query", provider: VideoProviderKling, credentials: map[string]any{"access_key": "access", "secret_key": "secret", "base_url": "https://kling.example.com?token=base-secret"}, mapping: map[string]any{"kling-3.0": "kling-v3"}},
+		{name: "kling fragment", provider: VideoProviderKling, credentials: map[string]any{"access_key": "access", "secret_key": "secret", "base_url": "https://kling.example.com/#base-secret"}, mapping: map[string]any{"kling-3.0": "kling-v3"}},
+		{name: "kling non-root path", provider: VideoProviderKling, credentials: map[string]any{"access_key": "access", "secret_key": "secret", "base_url": "https://kling.example.com/v1"}, mapping: map[string]any{"kling-3.0": "kling-v3"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := NormalizeVideoAccountAdminCreate(PlatformVideo, tt.credentials, map[string]any{
+				VideoProviderExtraKey:     tt.provider,
+				VideoModelMappingExtraKey: tt.mapping,
+			})
+
+			require.Equal(t, "VIDEO_BASE_URL_INVALID", infraerrors.Reason(err))
+			require.NotContains(t, fmt.Sprint(err), "base-secret")
 		})
 	}
 }
@@ -133,7 +222,7 @@ func TestNormalizeVideoAccountAdminUpdateSecretClearingRequiresExplicitInactive(
 			"access_key": "access",
 			"secret_key": "secret",
 		},
-		Extra: map[string]any{"video_provider": VideoProviderKling},
+		Extra: map[string]any{"video_provider": VideoProviderKling, "model_mapping": map[string]any{"kling-3.0": "kling-v3"}},
 	}
 
 	_, _, err := NormalizeVideoAccountAdminUpdate(existing, map[string]any{"secret_key": ""}, nil, "")
@@ -153,6 +242,14 @@ func TestNormalizeVideoAccountAdminUpdateSecretClearingRequiresExplicitInactive(
 }
 
 func TestBuildVideoAccountAdminMetadataNeverExposesSecrets(t *testing.T) {
+	catalog := VideoCapabilityCatalog{
+		VideoModelCapabilityKey(VideoProviderSeedance, "seedance-2.0"): {
+			VideoOperationGeneration: {Text: true, Audio: true},
+		},
+		VideoModelCapabilityKey(VideoProviderSeedance, "seedance-1.0"): {
+			VideoOperationGeneration: {FirstFrame: true, ReferenceImages: true},
+		},
+	}
 	account := &Account{
 		Platform: PlatformVideo,
 		Type:     AccountTypeAPIKey,
@@ -164,20 +261,39 @@ func TestBuildVideoAccountAdminMetadataNeverExposesSecrets(t *testing.T) {
 		},
 		Extra: map[string]any{
 			"video_provider":              VideoProviderSeedance,
+			"model_mapping":               map[string]any{"seedance-2.0": "endpoint-id"},
 			"video_disabled_capabilities": []any{"audio"},
 		},
 	}
 
-	got := BuildVideoAccountAdminMetadata(account)
+	got := BuildVideoAccountAdminMetadata(account, catalog)
 	require.Equal(t, VideoProviderSeedance, got.Provider)
 	require.Contains(t, got.CapabilityTags, "generation")
-	require.Contains(t, got.CapabilityTags, "reference_videos")
+	require.Contains(t, got.CapabilityTags, "text")
 	require.NotContains(t, got.CapabilityTags, "audio")
+	require.NotContains(t, got.CapabilityTags, "first_frame")
+	require.NotContains(t, got.CapabilityTags, "reference_images")
 	raw, err := json.Marshal(got)
 	require.NoError(t, err)
 	require.NotContains(t, fmt.Sprint(got), "secret-secret")
 	require.NotContains(t, string(raw), "api-secret")
 	require.NotContains(t, string(raw), "access-secret")
+
+	account.Extra[VideoDisabledCapabilitiesExtraKey] = []any{"telepathy"}
+	corrupt := BuildVideoAccountAdminMetadata(account, catalog)
+	require.Equal(t, VideoProviderSeedance, corrupt.Provider)
+	require.Empty(t, corrupt.CapabilityTags)
+
+	account.Extra[VideoDisabledCapabilitiesExtraKey] = []any{}
+	delete(account.Extra, VideoModelMappingExtraKey)
+	missingMapping := BuildVideoAccountAdminMetadata(account, catalog)
+	require.Equal(t, VideoProviderSeedance, missingMapping.Provider)
+	require.Empty(t, missingMapping.CapabilityTags)
+
+	account.Extra[VideoModelMappingExtraKey] = map[string]any{"seedance-unknown": "endpoint"}
+	unknownMapping := BuildVideoAccountAdminMetadata(account, catalog)
+	require.Equal(t, VideoProviderSeedance, unknownMapping.Provider)
+	require.Empty(t, unknownMapping.CapabilityTags)
 }
 
 func TestVideoAccountModelMappingReadsNewExtraAndLegacyCredentials(t *testing.T) {
@@ -200,6 +316,12 @@ func TestVideoAccountModelMappingReadsNewExtraAndLegacyCredentials(t *testing.T)
 
 	require.Equal(t, "ep-new", newAccount.GetMappedModel("seedance-2.0"))
 	require.Equal(t, "ep-legacy", legacyAccount.GetMappedModel("seedance-2.0"))
+	catalog := VideoCapabilityCatalog{
+		VideoModelCapabilityKey(VideoProviderSeedance, "seedance-2.0"): {
+			VideoOperationGeneration: {Text: true},
+		},
+	}
+	require.Contains(t, BuildVideoAccountAdminMetadata(legacyAccount, catalog).CapabilityTags, "generation")
 }
 
 func TestValidateVideoAccountCapabilityOverridesRejectsDisabledRequestFeatures(t *testing.T) {
@@ -234,4 +356,28 @@ func TestValidateVideoAccountCapabilityOverridesRejectsDisabledRequestFeatures(t
 		Prompt:    "waves",
 	})
 	require.NoError(t, err)
+}
+
+func TestValidateVideoAccountCapabilityOverridesRejectsCorruptPersistedCapabilities(t *testing.T) {
+	for _, raw := range []any{
+		"audio",
+		[]any{"telepathy"},
+		[]any{42},
+	} {
+		account := &Account{
+			Platform: PlatformVideo,
+			Extra: map[string]any{
+				VideoProviderExtraKey:             VideoProviderSeedance,
+				VideoDisabledCapabilitiesExtraKey: raw,
+			},
+		}
+
+		err := ValidateVideoAccountCapabilityOverrides(account, CanonicalVideoRequest{
+			Operation: VideoOperationGeneration,
+			Model:     "seedance-2.0",
+			Prompt:    "waves",
+		})
+
+		require.Equal(t, "VIDEO_CAPABILITY_INVALID", infraerrors.Reason(err))
+	}
 }

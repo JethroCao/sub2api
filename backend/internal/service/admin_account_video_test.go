@@ -11,10 +11,13 @@ func TestCreateAccountRejectsInvalidVideoConfig(t *testing.T) {
 	repo := &upstreamBillingProbeAccountRepo{}
 
 	_, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "invalid video",
-		Platform:             PlatformVideo,
-		Type:                 AccountTypeOAuth,
-		Extra:                map[string]any{"video_provider": VideoProviderSeedance},
+		Name:     "invalid video",
+		Platform: PlatformVideo,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"video_provider": VideoProviderSeedance,
+			"model_mapping":  map[string]any{"seedance-2.0": "endpoint-id"},
+		},
 		Credentials:          map[string]any{"api_key": "ark-key"},
 		SkipDefaultGroupBind: true,
 	})
@@ -31,7 +34,7 @@ func TestUpdateAccountValidatesVideoConfigAfterCredentialMerge(t *testing.T) {
 			Platform:    PlatformVideo,
 			Type:        AccountTypeAPIKey,
 			Status:      StatusActive,
-			Extra:       map[string]any{"video_provider": VideoProviderSeedance},
+			Extra:       map[string]any{"video_provider": VideoProviderSeedance, "model_mapping": map[string]any{"seedance-2.0": "endpoint-id"}},
 			Credentials: map[string]any{"api_key": "ark-key"},
 		},
 	}}}
@@ -53,7 +56,7 @@ func TestUpdateAccountRejectsVideoTypeChange(t *testing.T) {
 			Platform:    PlatformVideo,
 			Type:        AccountTypeAPIKey,
 			Status:      StatusActive,
-			Extra:       map[string]any{"video_provider": VideoProviderSeedance},
+			Extra:       map[string]any{"video_provider": VideoProviderSeedance, "model_mapping": map[string]any{"seedance-2.0": "endpoint-id"}},
 			Credentials: map[string]any{"api_key": "ark-key"},
 		},
 	}}}
@@ -74,7 +77,7 @@ func TestUpdateAccountPreservesMaskedKlingCredentials(t *testing.T) {
 			Platform: PlatformVideo,
 			Type:     AccountTypeAPIKey,
 			Status:   StatusActive,
-			Extra:    map[string]any{"video_provider": VideoProviderKling},
+			Extra:    map[string]any{"video_provider": VideoProviderKling, "model_mapping": map[string]any{"kling-3.0": "kling-v3"}},
 			Credentials: map[string]any{
 				"access_key": "ak",
 				"secret_key": "sk",
@@ -127,27 +130,49 @@ func TestCreateAccountPersistsExplicitVideoStatusButStillRequiresCredentials(t *
 	repo := &upstreamBillingProbeAccountRepo{}
 
 	created, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "disabled seedance",
-		Platform:             PlatformVideo,
-		Type:                 AccountTypeAPIKey,
-		Status:               "inactive",
-		Credentials:          map[string]any{"api_key": "ark-key"},
-		Extra:                map[string]any{"video_provider": VideoProviderSeedance},
+		Name:        "disabled seedance",
+		Platform:    PlatformVideo,
+		Type:        AccountTypeAPIKey,
+		Status:      "inactive",
+		Credentials: map[string]any{"api_key": "ark-key"},
+		Extra: map[string]any{
+			"video_provider": VideoProviderSeedance,
+			"model_mapping":  map[string]any{"seedance-2.0": "endpoint-id"},
+		},
 		SkipDefaultGroupBind: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, StatusDisabled, created.Status)
 
 	_, err = (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
-		Name:                 "invalid disabled seedance",
-		Platform:             PlatformVideo,
-		Type:                 AccountTypeAPIKey,
-		Status:               "inactive",
-		Credentials:          map[string]any{},
-		Extra:                map[string]any{"video_provider": VideoProviderSeedance},
+		Name:        "invalid disabled seedance",
+		Platform:    PlatformVideo,
+		Type:        AccountTypeAPIKey,
+		Status:      "inactive",
+		Credentials: map[string]any{},
+		Extra: map[string]any{
+			"video_provider": VideoProviderSeedance,
+			"model_mapping":  map[string]any{"seedance-2.0": "endpoint-id"},
+		},
 		SkipDefaultGroupBind: true,
 	})
 	require.Error(t, err)
+}
+
+func TestCreateAccountVideoStatusFieldDoesNotChangeNonVideoDefaultStatus(t *testing.T) {
+	repo := &upstreamBillingProbeAccountRepo{}
+
+	created, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
+		Name:                 "anthropic remains active",
+		Platform:             PlatformAnthropic,
+		Type:                 AccountTypeAPIKey,
+		Status:               StatusDisabled,
+		Credentials:          map[string]any{"api_key": "anthropic-key"},
+		SkipDefaultGroupBind: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, StatusActive, created.Status)
 }
 
 func TestUpdateAccountValidatesFinalVideoProviderAndCredentials(t *testing.T) {
@@ -158,13 +183,13 @@ func TestUpdateAccountValidatesFinalVideoProviderAndCredentials(t *testing.T) {
 			Platform:    PlatformVideo,
 			Type:        AccountTypeAPIKey,
 			Status:      StatusActive,
-			Extra:       map[string]any{"video_provider": VideoProviderSeedance},
+			Extra:       map[string]any{"video_provider": VideoProviderSeedance, "model_mapping": map[string]any{"seedance-2.0": "endpoint-id"}},
 			Credentials: map[string]any{"api_key": "ark-key"},
 		},
 	}}}
 
 	_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
-		Extra: map[string]any{"video_provider": VideoProviderKling},
+		Extra: map[string]any{"video_provider": VideoProviderKling, "model_mapping": map[string]any{"kling-3.0": "kling-v3"}},
 	})
 
 	require.Error(t, err)
@@ -180,14 +205,14 @@ func TestUpdateAccountSwitchesVideoProviderUsingOnlyNewProviderCredentials(t *te
 			Platform:    PlatformVideo,
 			Type:        AccountTypeAPIKey,
 			Status:      StatusActive,
-			Extra:       map[string]any{"video_provider": VideoProviderSeedance},
+			Extra:       map[string]any{"video_provider": VideoProviderSeedance, "model_mapping": map[string]any{"seedance-2.0": "endpoint-id"}},
 			Credentials: map[string]any{"api_key": "old-ark-key"},
 		},
 	}}}
 
 	updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
 		Credentials: map[string]any{"access_key": "new-access", "secret_key": "new-secret"},
-		Extra:       map[string]any{"video_provider": VideoProviderKling},
+		Extra:       map[string]any{"video_provider": VideoProviderKling, "model_mapping": map[string]any{"kling-3.0": "kling-v3"}},
 	})
 
 	require.NoError(t, err)
@@ -206,7 +231,7 @@ func TestUpdateAccountSecretClearPersistsOnlyWithExplicitInactive(t *testing.T) 
 				Platform: PlatformVideo,
 				Type:     AccountTypeAPIKey,
 				Status:   StatusActive,
-				Extra:    map[string]any{"video_provider": VideoProviderKling},
+				Extra:    map[string]any{"video_provider": VideoProviderKling, "model_mapping": map[string]any{"kling-3.0": "kling-v3"}},
 				Credentials: map[string]any{
 					"access_key": "access",
 					"secret_key": "secret",
