@@ -52,7 +52,10 @@ WITH bounded AS (
         CASE WHEN operation IN ('generation','edit','extension') THEN operation ELSE 'other' END AS operation,
         group_id, status, created_at, submitted_at, started_at, finished_at, updated_at,
         last_error_code, lease_expires_at, settled_at, settled_amount, upstream_unit_cost,
-        pricing_unit, result_duration_seconds
+        pricing_unit, result_duration_seconds,
+        EXTRACT(EPOCH FROM (submitted_at - created_at)) AS submission_latency_value,
+        EXTRACT(EPOCH FROM (started_at - submitted_at)) AS provider_queue_value,
+        EXTRACT(EPOCH FROM (finished_at - created_at)) AS completion_value
     FROM video_tasks
 )
 SELECT
@@ -75,6 +78,42 @@ SELECT
     AVG(EXTRACT(EPOCH FROM (submitted_at - created_at))) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2) AS submission_latency_seconds,
     AVG(EXTRACT(EPOCH FROM (started_at - submitted_at))) FILTER (WHERE started_at >= $1 AND started_at < $2) AS provider_queue_seconds,
     AVG(EXTRACT(EPOCH FROM (finished_at - created_at))) FILTER (WHERE finished_at >= $1 AND finished_at < $2) AS completion_seconds,
+    jsonb_build_object(
+        'le_1', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 1),
+        'le_5', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 5),
+        'le_15', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 15),
+        'le_30', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 30),
+        'le_60', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 60),
+        'le_120', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 120),
+        'le_300', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 300),
+        'le_600', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 600),
+        'le_1800', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2 AND submission_latency_value <= 1800),
+        'inf', COUNT(submission_latency_value) FILTER (WHERE submitted_at >= $1 AND submitted_at < $2)
+    ) AS submission_latency_histogram,
+    jsonb_build_object(
+        'le_1', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 1),
+        'le_5', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 5),
+        'le_15', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 15),
+        'le_30', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 30),
+        'le_60', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 60),
+        'le_120', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 120),
+        'le_300', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 300),
+        'le_600', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 600),
+        'le_1800', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2 AND provider_queue_value <= 1800),
+        'inf', COUNT(provider_queue_value) FILTER (WHERE started_at >= $1 AND started_at < $2)
+    ) AS provider_queue_histogram,
+    jsonb_build_object(
+        'le_1', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 1),
+        'le_5', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 5),
+        'le_15', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 15),
+        'le_30', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 30),
+        'le_60', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 60),
+        'le_120', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 120),
+        'le_300', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 300),
+        'le_600', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 600),
+        'le_1800', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2 AND completion_value <= 1800),
+        'inf', COUNT(completion_value) FILTER (WHERE finished_at >= $1 AND finished_at < $2)
+    ) AS completion_histogram,
     COUNT(*) FILTER (WHERE updated_at >= $1 AND updated_at < $2 AND last_error_code IN ('rate_limit_error', 'upstream_rate_limited')) AS rate_limit_count,
     COUNT(*) FILTER (WHERE status = 'unknown') AS unknown_count,
     COALESCE(MAX(EXTRACT(EPOCH FROM (clock_timestamp() - updated_at))) FILTER (WHERE status = 'unknown'), 0) AS unknown_max_age_seconds,
@@ -459,21 +498,24 @@ func (c *OpsMetricsCollector) collectAndPersist(ctx context.Context) error {
 }
 
 type videoOpsMetricRow struct {
-	Dimensions               videoMetricDimensions
-	StatusCounts             []byte
-	SubmissionCount          int64
-	SubmissionLatencySeconds sql.NullFloat64
-	ProviderQueueSeconds     sql.NullFloat64
-	CompletionSeconds        sql.NullFloat64
-	RateLimitCount           int64
-	UnknownCount             int64
-	UnknownMaxAgeSeconds     float64
-	ExpiredLeaseCount        int64
-	PendingSettlementCount   int64
-	FailedRefundCount        int64
-	Revenue                  float64
-	UpstreamCost             sql.NullFloat64
-	Margin                   sql.NullFloat64
+	Dimensions                 videoMetricDimensions
+	StatusCounts               []byte
+	SubmissionCount            int64
+	SubmissionLatencySeconds   sql.NullFloat64
+	ProviderQueueSeconds       sql.NullFloat64
+	CompletionSeconds          sql.NullFloat64
+	SubmissionLatencyHistogram []byte
+	ProviderQueueHistogram     []byte
+	CompletionHistogram        []byte
+	RateLimitCount             int64
+	UnknownCount               int64
+	UnknownMaxAgeSeconds       float64
+	ExpiredLeaseCount          int64
+	PendingSettlementCount     int64
+	FailedRefundCount          int64
+	Revenue                    float64
+	UpstreamCost               sql.NullFloat64
+	Margin                     sql.NullFloat64
 }
 
 func (c *OpsMetricsCollector) collectAndPersistVideoMetrics(ctx context.Context, windowStart, windowEnd time.Time) error {
@@ -499,6 +541,7 @@ func (c *OpsMetricsCollector) collectAndPersistVideoMetrics(ctx context.Context,
 		if err := rows.Scan(
 			&provider, &model, &operation, &groupID, &metric.StatusCounts,
 			&metric.SubmissionCount, &metric.SubmissionLatencySeconds, &metric.ProviderQueueSeconds, &metric.CompletionSeconds,
+			&metric.SubmissionLatencyHistogram, &metric.ProviderQueueHistogram, &metric.CompletionHistogram,
 			&metric.RateLimitCount, &metric.UnknownCount, &metric.UnknownMaxAgeSeconds,
 			&metric.ExpiredLeaseCount, &metric.PendingSettlementCount, &metric.FailedRefundCount,
 			&metric.Revenue, &metric.UpstreamCost, &metric.Margin,
@@ -532,17 +575,29 @@ func (c *OpsMetricsCollector) collectAndPersistVideoMetrics(ctx context.Context,
 		if !json.Valid(metric.StatusCounts) {
 			metric.StatusCounts = []byte(`{}`)
 		}
+		if !json.Valid(metric.SubmissionLatencyHistogram) {
+			metric.SubmissionLatencyHistogram = []byte(`{}`)
+		}
+		if !json.Valid(metric.ProviderQueueHistogram) {
+			metric.ProviderQueueHistogram = []byte(`{}`)
+		}
+		if !json.Valid(metric.CompletionHistogram) {
+			metric.CompletionHistogram = []byte(`{}`)
+		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO video_ops_metrics (
     bucket_at,provider,model,operation,group_id,status_counts,
     submission_count,submission_latency_seconds,provider_queue_seconds,completion_seconds,
+    submission_latency_histogram,provider_queue_histogram,completion_histogram,
     rate_limit_count,unknown_count,unknown_max_age_seconds,expired_lease_count,
     pending_settlement_count,failed_refund_count,revenue,upstream_cost,margin
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
 ON CONFLICT (bucket_at,provider,model,operation,group_id) DO UPDATE SET
     status_counts=EXCLUDED.status_counts, submission_count=EXCLUDED.submission_count,
     submission_latency_seconds=EXCLUDED.submission_latency_seconds,
     provider_queue_seconds=EXCLUDED.provider_queue_seconds, completion_seconds=EXCLUDED.completion_seconds,
+    submission_latency_histogram=EXCLUDED.submission_latency_histogram,
+    provider_queue_histogram=EXCLUDED.provider_queue_histogram, completion_histogram=EXCLUDED.completion_histogram,
     rate_limit_count=EXCLUDED.rate_limit_count, unknown_count=EXCLUDED.unknown_count,
     unknown_max_age_seconds=EXCLUDED.unknown_max_age_seconds, expired_lease_count=EXCLUDED.expired_lease_count,
     pending_settlement_count=EXCLUDED.pending_settlement_count,
@@ -550,7 +605,8 @@ ON CONFLICT (bucket_at,provider,model,operation,group_id) DO UPDATE SET
     revenue=EXCLUDED.revenue, upstream_cost=EXCLUDED.upstream_cost, margin=EXCLUDED.margin`,
 			windowEnd, metric.Dimensions.Provider, metric.Dimensions.Model, metric.Dimensions.Operation, metric.Dimensions.GroupID,
 			string(metric.StatusCounts), metric.SubmissionCount, nullFloat64Value(metric.SubmissionLatencySeconds),
-			nullFloat64Value(metric.ProviderQueueSeconds), nullFloat64Value(metric.CompletionSeconds), metric.RateLimitCount,
+			nullFloat64Value(metric.ProviderQueueSeconds), nullFloat64Value(metric.CompletionSeconds),
+			string(metric.SubmissionLatencyHistogram), string(metric.ProviderQueueHistogram), string(metric.CompletionHistogram), metric.RateLimitCount,
 			metric.UnknownCount, metric.UnknownMaxAgeSeconds, metric.ExpiredLeaseCount, metric.PendingSettlementCount,
 			metric.FailedRefundCount, metric.Revenue, nullFloat64Value(metric.UpstreamCost), nullFloat64Value(metric.Margin)); err != nil {
 			return fmt.Errorf("persist video operations metrics: %w", err)

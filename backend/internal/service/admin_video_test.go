@@ -20,6 +20,8 @@ type adminVideoRepositoryStub struct {
 	lastReconcile  AdminVideoReconcileMutation
 }
 
+var adminVideoTestURLHashKey = AdminVideoURLHashKey("0123456789abcdef0123456789abcdef")
+
 func (r *adminVideoRepositoryStub) ListPricingRules(context.Context, int64) ([]VideoPricingRule, error) {
 	return nil, nil
 }
@@ -66,7 +68,7 @@ func TestAdminVideoPricingRejectsOverlapMissingCoverageAndNonFinitePrices(t *tes
 			VideoOperationGeneration: {Text: true, Audio: true, Resolutions: []string{"720p", "1080p"}},
 		},
 	}
-	service := NewAdminVideoService(repo, catalog, nil)
+	service := NewAdminVideoService(repo, catalog, nil, adminVideoTestURLHashKey)
 
 	tests := []struct {
 		name  string
@@ -120,7 +122,7 @@ func TestAdminVideoPricingAcceptsAuthoritativeCoveredRule(t *testing.T) {
 			VideoOperationGeneration: {Text: true, Audio: true},
 		},
 	}
-	service := NewAdminVideoService(repo, catalog, nil)
+	service := NewAdminVideoService(repo, catalog, nil, adminVideoTestURLHashKey)
 	rules := []VideoPricingRuleInput{{
 		ExternalModel: "seedance-2.0", Operation: "generation", Resolution: "*", AudioMode: "any",
 		Unit: "per_output_second", UnitPrice: 0.25, Enabled: true,
@@ -137,7 +139,7 @@ func TestAdminVideoRefundRequiresUnknownOrFailedUnsettledHeldTask(t *testing.T) 
 	}
 	for _, task := range tests {
 		repo := &adminVideoRepositoryStub{task: &task}
-		service := NewAdminVideoService(repo, nil, nil)
+		service := NewAdminVideoService(repo, nil, nil, adminVideoTestURLHashKey)
 		_, err := service.Refund(context.Background(), task.RequestID, AdminVideoRefundCommand{
 			ActorUserID: 1, Reason: "operator confirmed no upstream job", IdempotencyKey: "refund-1",
 		})
@@ -149,7 +151,7 @@ func TestAdminVideoRefundRequiresUnknownOrFailedUnsettledHeldTask(t *testing.T) 
 func TestAdminVideoRefundHashesIdempotencyAndNeverPersistsRawKey(t *testing.T) {
 	task := VideoTask{RequestID: "vid_00000000000000000000000000000001", Status: VideoTaskUnknown, BillingStatus: "held"}
 	repo := &adminVideoRepositoryStub{task: &task}
-	service := NewAdminVideoService(repo, nil, nil)
+	service := NewAdminVideoService(repo, nil, nil, adminVideoTestURLHashKey)
 	_, err := service.Refund(context.Background(), task.RequestID, AdminVideoRefundCommand{
 		ActorUserID: 7, Reason: "provider confirmed missing", IdempotencyKey: "raw-secret-key",
 	})
@@ -162,7 +164,7 @@ func TestAdminVideoRefundHashesIdempotencyAndNeverPersistsRawKey(t *testing.T) {
 func TestAdminVideoRefundRejectsCredentialShapedAuditReason(t *testing.T) {
 	task := VideoTask{RequestID: "vid_00000000000000000000000000000001", Status: VideoTaskUnknown, BillingStatus: "held"}
 	repo := &adminVideoRepositoryStub{task: &task}
-	admin := NewAdminVideoService(repo, nil, nil)
+	admin := NewAdminVideoService(repo, nil, nil, adminVideoTestURLHashKey)
 	_, err := admin.Refund(context.Background(), task.RequestID, AdminVideoRefundCommand{
 		ActorUserID: 7, Reason: "api_key=sk-proj-this-is-a-secret-value", IdempotencyKey: "refund-1",
 	})
@@ -180,9 +182,9 @@ func TestAdminVideoCompleteRequiresSafeResultAndStoredHoldCap(t *testing.T) {
 		if raw != "https://cdn.example.com/video.mp4?token=secret" {
 			return "", "", ErrVideoResultURLInvalid
 		}
-		return raw, "https://cdn.example.com/video.mp4", nil
+		return raw, "https://cdn.example.com/video-result", nil
 	})
-	service := NewAdminVideoService(repo, nil, validator)
+	service := NewAdminVideoService(repo, nil, validator, adminVideoTestURLHashKey)
 
 	_, err := service.Complete(context.Background(), task.RequestID, AdminVideoCompleteCommand{
 		ActorUserID: 7, Reason: "verified in provider console", IdempotencyKey: "complete-1",
@@ -199,25 +201,53 @@ func TestAdminVideoCompleteRequiresSafeResultAndStoredHoldCap(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, repo.completeCalls)
-	require.Equal(t, "https://cdn.example.com/video.mp4", repo.lastComplete.ResultURLAuditSummary)
+	require.Equal(t, "https://cdn.example.com/video-result", repo.lastComplete.ResultURLAuditSummary)
 	require.NotContains(t, repo.lastComplete.ResultURLAuditSummary, "token")
 	require.Equal(t, task.UnitPrice, repo.lastComplete.StoredUnitPrice)
 }
 
-func TestAdminVideoReconcileRejectsTerminalOrLiveLease(t *testing.T) {
+func TestAdminVideoReconcileDelegatesClockAndReplayPolicyToRepository(t *testing.T) {
 	now := time.Now().UTC()
 	for _, task := range []VideoTask{
 		{RequestID: "vid_00000000000000000000000000000001", Status: VideoTaskSucceeded},
 		{RequestID: "vid_00000000000000000000000000000001", Status: VideoTaskRunning, LeaseExpiresAt: timePtr(now.Add(time.Minute))},
 	} {
 		repo := &adminVideoRepositoryStub{task: &task}
-		service := NewAdminVideoService(repo, nil, nil)
+		service := NewAdminVideoService(repo, nil, nil, adminVideoTestURLHashKey)
 		_, err := service.Reconcile(context.Background(), task.RequestID, AdminVideoReconcileCommand{
 			ActorUserID: 7, Reason: "stuck task", IdempotencyKey: "reconcile-1", Now: now,
 		})
-		require.ErrorIs(t, err, ErrVideoFinancialStateConflict)
-		require.Zero(t, repo.reconcileCalls)
+		require.NoError(t, err)
+		require.Equal(t, 1, repo.reconcileCalls)
 	}
+}
+
+func TestAdminVideoCompleteHashBindsFullNormalizedURLWithoutPersistingIt(t *testing.T) {
+	task := VideoTask{RequestID: "vid_00000000000000000000000000000001", Status: VideoTaskUnknown, BillingStatus: "held", FrozenAmount: 2, UnitPrice: 0.25}
+	repo := &adminVideoRepositoryStub{task: &task}
+	validator := AdminVideoResultURLValidatorFunc(func(_ context.Context, raw string) (string, string, error) {
+		return raw, "https://cdn.example.com/private/video.mp4?token=unsafe-summary", nil
+	})
+	admin := NewAdminVideoService(repo, nil, validator, adminVideoTestURLHashKey)
+	command := AdminVideoCompleteCommand{
+		ActorUserID: 7, Reason: "verified", IdempotencyKey: "complete-1", ProviderTaskID: "provider-task",
+		ResultURL: "https://cdn.example.com/private/video.mp4?token=first-secret", DurationSeconds: 6, Resolution: "720p", FinalAmount: 1.5,
+	}
+	_, err := admin.Complete(context.Background(), task.RequestID, command)
+	require.NoError(t, err)
+	require.Equal(t, "https://cdn.example.com/video-result", repo.lastComplete.ResultURLAuditSummary)
+	firstHash := repo.lastComplete.RequestHash
+	command.ResultURL = "https://cdn.example.com/private/video.mp4?token=second-secret"
+	_, err = admin.Complete(context.Background(), task.RequestID, command)
+	require.NoError(t, err)
+	require.NotEqual(t, firstHash, repo.lastComplete.RequestHash)
+	require.NotContains(t, firstHash, "first-secret")
+}
+
+func TestSafeAdminVideoResultURLSummaryOmitsUserinfoPathQueryAndFragment(t *testing.T) {
+	require.Empty(t, SafeAdminVideoResultURLSummary("https://user:password@cdn.example.com/video.mp4"))
+	require.Equal(t, "https://cdn.example.com/video-result",
+		SafeAdminVideoResultURLSummary("https://cdn.example.com/private/customer/token/video.mp4?sig=secret#fragment"))
 }
 
 func timePtr(value time.Time) *time.Time { return &value }

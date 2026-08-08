@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -289,10 +288,6 @@ func (r *adminVideoRepository) applyAction(ctx context.Context, requestID, actio
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
 	}
-	var databaseNow time.Time
-	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
-		return nil, err
-	}
 	var storedHash string
 	err = tx.QueryRowContext(ctx, `SELECT request_hash FROM video_admin_actions WHERE request_id=$1 AND action=$2 AND idempotency_key_hash=$3`,
 		requestID, action, metadata.IdempotencyKeyHash).Scan(&storedHash)
@@ -306,6 +301,10 @@ func (r *adminVideoRepository) applyAction(ctx context.Context, requestID, actio
 		return &service.AdminVideoActionResult{Task: *current, Replayed: true}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	var databaseNow time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
 		return nil, err
 	}
 	updated, err := mutate(tx, current, databaseNow)
@@ -383,9 +382,5 @@ func safeStoredResultURLSummary(raw *string) string {
 	if raw == nil {
 		return ""
 	}
-	value := *raw
-	if index := strings.IndexAny(value, "?#"); index >= 0 {
-		value = value[:index]
-	}
-	return value
+	return service.SafeAdminVideoResultURLSummary(*raw)
 }

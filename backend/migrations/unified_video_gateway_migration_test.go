@@ -134,3 +134,14 @@ func TestAdminVideoOperationsMigrationIsForwardOnlyAndDurable(t *testing.T) {
 	require.NotContains(t, sql, "DELETE FROM video_pricing_rules")
 	require.NotContains(t, sql, "UPDATE video_tasks SET")
 }
+
+func TestAdminVideoHistogramMigrationIsForwardOnly(t *testing.T) {
+	migration, err := FS.ReadFile("204_video_ops_histograms.sql")
+	require.NoError(t, err)
+	sql := string(migration)
+	for _, column := range []string{"submission_latency_histogram", "provider_queue_histogram", "completion_histogram"} {
+		require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS "+column)
+	}
+	require.NotContains(t, sql, "DROP TABLE")
+	require.NotContains(t, sql, "DROP COLUMN")
+}

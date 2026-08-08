@@ -275,7 +275,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogService := service.ProvideAuditLogService(auditLogRepository, settingService)
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
 	adminVideoRepository := repository.NewAdminVideoRepository(db)
-	adminVideoService := service.ProvideAdminVideoService(adminVideoRepository, videoCapabilityCatalog)
+	adminVideoService := service.ProvideAdminVideoService(adminVideoRepository, videoCapabilityCatalog, configConfig)
 	videoHandler := admin.NewVideoHandler(adminVideoService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	ollamaCloudUsageService := service.ProvideOllamaCloudUsageService(accountRepository, httpUpstream, settingService, secretEncryptor, configConfig, leaderLockCache, db)

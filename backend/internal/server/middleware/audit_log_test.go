@@ -188,3 +188,42 @@ func TestOllamaCloudUsageSessionRouteOmitsAuditBody(t *testing.T) {
 	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
 	require.NotContains(t, logs[0].RequestBody, "audit-canary")
 }
+
+func TestAdminVideoActionRoutesOmitAuditBodies(t *testing.T) {
+	expected := []string{
+		"POST /api/v1/admin/video/tasks/:request_id/reconcile",
+		"POST /api/v1/admin/video/tasks/:request_id/refund",
+		"POST /api/v1/admin/video/tasks/:request_id/complete",
+	}
+	for _, route := range expected {
+		require.Contains(t, auditBodyOmittedRoutes, route)
+	}
+
+	gin.SetMode(gin.TestMode)
+	repository := &auditCaptureRepository{}
+	auditService := service.NewAuditLogService(repository, nil)
+	auditService.Start()
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyUser), AuthSubject{UserID: 77})
+		c.Set(string(ContextKeyUserRole), "admin")
+		c.Next()
+	})
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+	router.POST("/api/v1/admin/video/tasks/:request_id/complete", func(c *gin.Context) {
+		c.JSON(http.StatusConflict, gin.H{"ok": false})
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/video/tasks/vid_1/complete",
+		bytes.NewBufferString(`{"result_url":"https://cdn.example.com/private/video.mp4?token=audit-canary-signed-token"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	auditService.Stop()
+
+	repository.mu.Lock()
+	logs := append([]*service.AuditLog(nil), repository.logs...)
+	repository.mu.Unlock()
+	require.Len(t, logs, 1)
+	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
+	require.NotContains(t, logs[0].RequestBody, "audit-canary")
+}

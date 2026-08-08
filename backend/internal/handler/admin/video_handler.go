@@ -291,11 +291,29 @@ func adminVideoTaskResponse(task *service.VideoTask) map[string]any {
 		"upstream_status": task.UpstreamStatus, "result_url_summary": safeAdminVideoResultURL(task.ResultURL),
 		"result_duration_seconds": task.ResultDurationSeconds, "result_width": task.ResultWidth, "result_height": task.ResultHeight,
 		"pricing_unit": task.PricingUnit, "unit_price": task.UnitPrice, "estimated_units": task.EstimatedUnits,
+		"upstream_unit_cost": task.UpstreamUnitCost, "actual_upstream_cost": adminVideoActualUpstreamCost(task),
 		"estimated_amount": task.EstimatedAmount, "frozen_amount": task.FrozenAmount, "settled_amount": task.SettledAmount,
 		"billing_status": task.BillingStatus, "last_error_code": task.LastErrorCode,
 		"next_poll_at": task.NextPollAt, "lease_expires_at": task.LeaseExpiresAt,
 		"created_at": task.CreatedAt, "updated_at": task.UpdatedAt, "submitted_at": task.SubmittedAt,
 		"started_at": task.StartedAt, "finished_at": task.FinishedAt, "settled_at": task.SettledAt,
+	}
+}
+
+func adminVideoActualUpstreamCost(task *service.VideoTask) any {
+	if task == nil || task.UpstreamUnitCost == nil {
+		return nil
+	}
+	switch task.PricingUnit {
+	case "per_request":
+		return *task.UpstreamUnitCost
+	case "per_output_second":
+		if task.ResultDurationSeconds == nil || *task.ResultDurationSeconds <= 0 {
+			return nil
+		}
+		return *task.UpstreamUnitCost * *task.ResultDurationSeconds
+	default:
+		return nil
 	}
 }
 
@@ -310,11 +328,7 @@ func safeAdminVideoResultURL(raw *string) string {
 	if raw == nil {
 		return ""
 	}
-	value := *raw
-	if index := strings.IndexAny(value, "?#"); index >= 0 {
-		value = value[:index]
-	}
-	return value
+	return service.SafeAdminVideoResultURLSummary(*raw)
 }
 
 func adminVideoPositiveID(c *gin.Context, name string) (int64, bool) {

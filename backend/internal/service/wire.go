@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -90,8 +92,13 @@ func ProvideVideoCapabilityValidator(catalog VideoCapabilityCatalog) VideoCapabi
 	return catalog
 }
 
-func ProvideAdminVideoService(repo AdminVideoRepository, catalog VideoCapabilityCatalog) *AdminVideoService {
-	return NewAdminVideoService(repo, catalog, nil)
+func ProvideAdminVideoService(repo AdminVideoRepository, catalog VideoCapabilityCatalog, cfg *config.Config) *AdminVideoService {
+	var key AdminVideoURLHashKey
+	if cfg != nil && strings.TrimSpace(cfg.JWT.Secret) != "" {
+		sum := sha256.Sum256([]byte("sub2api:admin-video:result-url:v1\x00" + cfg.JWT.Secret))
+		key = append(key, sum[:]...)
+	}
+	return NewAdminVideoService(repo, catalog, nil, key)
 }
 
 func ProvideVideoReconciler(

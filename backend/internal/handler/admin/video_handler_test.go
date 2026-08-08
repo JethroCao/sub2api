@@ -93,3 +93,19 @@ func TestAdminVideoActionFingerprintBindsTargetRequestID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, first, second)
 }
+
+func TestAdminVideoTaskResponsePreservesUnknownAndCalculatesActualUpstreamCost(t *testing.T) {
+	unknown := adminVideoTaskResponse(&service.VideoTask{PricingUnit: "per_output_second"})
+	require.Contains(t, unknown, "upstream_unit_cost")
+	require.Contains(t, unknown, "actual_upstream_cost")
+	require.Nil(t, unknown["upstream_unit_cost"])
+	require.Nil(t, unknown["actual_upstream_cost"])
+
+	unitCost := 0.2
+	duration := 6.0
+	known := adminVideoTaskResponse(&service.VideoTask{
+		PricingUnit: "per_output_second", UpstreamUnitCost: &unitCost, ResultDurationSeconds: &duration,
+	})
+	require.Equal(t, &unitCost, known["upstream_unit_cost"])
+	require.InDelta(t, 1.2, known["actual_upstream_cost"], 1e-12)
+}

@@ -188,6 +188,54 @@ func TestAdminVideoCompleteRollsBackFinanceTaskEventAndAuditTogether(t *testing.
 	require.Zero(t, audits)
 }
 
+func TestAdminVideoCompleteSameKeyDifferentSignedTokenConflicts(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	billing := NewUsageBillingRepository(client, integrationDB)
+	task, _, _ := createVideoBillingTask(t, client, taskRepo, "admin-complete-token-conflict", "balance", nil, 2, 10, nil, 0)
+	require.NoError(t, reserveVideoTask(t, billing, task))
+	_, err := integrationDB.ExecContext(ctx, `UPDATE video_tasks SET status='unknown', billing_status='held' WHERE request_id=$1`, task.RequestID)
+	require.NoError(t, err)
+
+	repo := NewAdminVideoRepository(integrationDB)
+	checker := service.AdminVideoResultURLValidatorFunc(func(_ context.Context, raw string) (string, string, error) {
+		return raw, "https://cdn.example.com/video-result", nil
+	})
+	admin := service.NewAdminVideoService(repo, nil, checker, service.AdminVideoURLHashKey("0123456789abcdef0123456789abcdef"))
+	command := service.AdminVideoCompleteCommand{
+		ActorUserID: 7, Reason: "verified", IdempotencyKey: "complete-token-key", ProviderTaskID: "provider-task",
+		ResultURL: "https://cdn.example.com/private/video.mp4?token=first-secret", DurationSeconds: 6, Resolution: "720p", FinalAmount: 1.5,
+	}
+	_, err = admin.Complete(ctx, task.RequestID, command)
+	require.NoError(t, err)
+	command.ResultURL = "https://cdn.example.com/private/video.mp4?token=second-secret"
+	_, err = admin.Complete(ctx, task.RequestID, command)
+	require.ErrorIs(t, err, service.ErrIdempotencyKeyConflict)
+}
+
+func TestAdminVideoReconcileUsesDatabaseClockAndReplaysAfterTerminalTransition(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	taskRepo := NewVideoTaskRepository(integrationDB)
+	task, _, _ := createVideoBillingTask(t, client, taskRepo, "admin-reconcile-db-clock", "balance", nil, 0, 10, nil, 0)
+	_, err := integrationDB.ExecContext(ctx, `UPDATE video_tasks SET status='running', lease_owner='worker-1', lease_expires_at=clock_timestamp()-interval '1 second' WHERE request_id=$1`, task.RequestID)
+	require.NoError(t, err)
+
+	admin := service.NewAdminVideoService(NewAdminVideoRepository(integrationDB), nil, nil, service.AdminVideoURLHashKey("0123456789abcdef0123456789abcdef"))
+	command := service.AdminVideoReconcileCommand{
+		ActorUserID: 7, Reason: "expired lease", IdempotencyKey: "reconcile-db-clock", Now: time.Now().Add(-time.Hour),
+	}
+	first, err := admin.Reconcile(ctx, task.RequestID, command)
+	require.NoError(t, err)
+	require.False(t, first.Replayed)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET status='succeeded' WHERE request_id=$1`, task.RequestID)
+	require.NoError(t, err)
+	replay, err := admin.Reconcile(ctx, task.RequestID, command)
+	require.NoError(t, err)
+	require.True(t, replay.Replayed)
+}
+
 func TestAdminVideoMigration203CanApplyAndRollbackInOneTransaction(t *testing.T) {
 	ctx := context.Background()
 	tx, err := integrationDB.BeginTx(ctx, nil)
@@ -208,4 +256,30 @@ func TestAdminVideoMigration203CanApplyAndRollbackInOneTransaction(t *testing.T)
 	var installed bool
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT to_regclass('video_admin_actions') IS NOT NULL`).Scan(&installed))
 	require.True(t, installed, fmt.Sprintf("installed migration must remain after rollback probe"))
+}
+
+func TestAdminVideoMigration204CanApplyAndRollbackInOneTransaction(t *testing.T) {
+	ctx := context.Background()
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `ALTER TABLE video_ops_metrics
+		DROP COLUMN IF EXISTS submission_latency_histogram,
+		DROP COLUMN IF EXISTS provider_queue_histogram,
+		DROP COLUMN IF EXISTS completion_histogram`)
+	require.NoError(t, err)
+	migration, err := migrationfiles.FS.ReadFile("204_video_ops_histograms.sql")
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, string(migration))
+	require.NoError(t, err)
+	var installed int
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_name='video_ops_metrics' AND column_name IN
+		('submission_latency_histogram','provider_queue_histogram','completion_histogram')`).Scan(&installed))
+	require.Equal(t, 3, installed)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_name='video_ops_metrics' AND column_name IN
+		('submission_latency_histogram','provider_queue_histogram','completion_histogram')`).Scan(&installed))
+	require.Equal(t, 3, installed)
 }

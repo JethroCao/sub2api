@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,12 +18,13 @@ import (
 )
 
 var (
-	ErrVideoPricingRuleInvalid     = infraerrors.BadRequest("VIDEO_PRICING_RULE_INVALID", "invalid video pricing rule")
-	ErrVideoPricingRuleOverlap     = infraerrors.Conflict("VIDEO_PRICING_RULE_OVERLAP", "video pricing rules overlap")
-	ErrVideoPricingCoverage        = infraerrors.BadRequest("VIDEO_PRICING_COVERAGE_INCOMPLETE", "video pricing rules do not cover an enabled capability")
-	ErrVideoFinancialStateConflict = infraerrors.Conflict("VIDEO_FINANCIAL_STATE_CONFLICT", "video task state does not permit this action")
-	ErrVideoResultURLInvalid       = infraerrors.BadRequest("VIDEO_RESULT_URL_INVALID", "video result URL is invalid")
-	ErrAdminVideoIdempotencyKey    = infraerrors.BadRequest("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required")
+	ErrVideoPricingRuleInvalid      = infraerrors.BadRequest("VIDEO_PRICING_RULE_INVALID", "invalid video pricing rule")
+	ErrVideoPricingRuleOverlap      = infraerrors.Conflict("VIDEO_PRICING_RULE_OVERLAP", "video pricing rules overlap")
+	ErrVideoPricingCoverage         = infraerrors.BadRequest("VIDEO_PRICING_COVERAGE_INCOMPLETE", "video pricing rules do not cover an enabled capability")
+	ErrVideoFinancialStateConflict  = infraerrors.Conflict("VIDEO_FINANCIAL_STATE_CONFLICT", "video task state does not permit this action")
+	ErrVideoResultURLInvalid        = infraerrors.BadRequest("VIDEO_RESULT_URL_INVALID", "video result URL is invalid")
+	ErrAdminVideoIdempotencyKey     = infraerrors.BadRequest("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required")
+	ErrAdminVideoURLHashUnavailable = infraerrors.ServiceUnavailable("VIDEO_RESULT_URL_HASH_UNAVAILABLE", "video result URL hashing is unavailable")
 )
 
 const adminVideoReasonMaxBytes = 512
@@ -124,6 +126,8 @@ type AdminVideoResultURLValidator interface {
 
 type AdminVideoResultURLValidatorFunc func(context.Context, string) (string, string, error)
 
+type AdminVideoURLHashKey []byte
+
 func (f AdminVideoResultURLValidatorFunc) Validate(ctx context.Context, raw string) (string, string, error) {
 	return f(ctx, raw)
 }
@@ -132,6 +136,7 @@ type AdminVideoService struct {
 	repo       AdminVideoRepository
 	catalog    VideoCapabilityCatalog
 	urlChecker AdminVideoResultURLValidator
+	urlHashKey AdminVideoURLHashKey
 }
 
 type videoRefundFailureKey struct {
@@ -147,11 +152,11 @@ var adminVideoRefundFailures = struct {
 	counts map[videoRefundFailureKey]int64
 }{counts: make(map[videoRefundFailureKey]int64)}
 
-func NewAdminVideoService(repo AdminVideoRepository, catalog VideoCapabilityCatalog, checker AdminVideoResultURLValidator) *AdminVideoService {
+func NewAdminVideoService(repo AdminVideoRepository, catalog VideoCapabilityCatalog, checker AdminVideoResultURLValidator, urlHashKey AdminVideoURLHashKey) *AdminVideoService {
 	if checker == nil {
 		checker = AdminVideoResultURLValidatorFunc(validateAdminVideoResultURL)
 	}
-	return &AdminVideoService{repo: repo, catalog: catalog, urlChecker: checker}
+	return &AdminVideoService{repo: repo, catalog: catalog, urlChecker: checker, urlHashKey: append(AdminVideoURLHashKey(nil), urlHashKey...)}
 }
 
 func (s *AdminVideoService) ListPricingRules(ctx context.Context, groupID int64) ([]VideoPricingRule, error) {
@@ -268,22 +273,16 @@ func (s *AdminVideoService) GetTask(ctx context.Context, requestID string) (*Adm
 }
 
 func (s *AdminVideoService) Reconcile(ctx context.Context, requestID string, command AdminVideoReconcileCommand) (*AdminVideoActionResult, error) {
-	detail, err := s.GetTask(ctx, requestID)
+	if s == nil || s.repo == nil || !IsVideoRequestID(requestID) {
+		return nil, ErrVideoTaskInvalidRequest
+	}
+	metadata, err := buildAdminVideoActionMetadata(command.ActorUserID, command.AuditRequestID, command.Reason, command.IdempotencyKey, map[string]any{
+		"action": "reconcile", "request_id": requestID, "reason": strings.TrimSpace(command.Reason),
+	})
 	if err != nil {
 		return nil, err
 	}
-	now := command.Now
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	if IsTerminalVideoTaskStatus(detail.Task.Status) || (detail.Task.LeaseExpiresAt != nil && detail.Task.LeaseExpiresAt.After(now)) {
-		return nil, ErrVideoFinancialStateConflict
-	}
-	metadata, err := buildAdminVideoActionMetadata(command.ActorUserID, command.AuditRequestID, command.Reason, command.IdempotencyKey, map[string]any{"action": "reconcile", "request_id": requestID})
-	if err != nil {
-		return nil, err
-	}
-	return s.repo.Reconcile(ctx, AdminVideoReconcileMutation{AdminVideoActionMetadata: metadata, RequestID: requestID, Now: now})
+	return s.repo.Reconcile(ctx, AdminVideoReconcileMutation{AdminVideoActionMetadata: metadata, RequestID: requestID})
 }
 
 func (s *AdminVideoService) Refund(ctx context.Context, requestID string, command AdminVideoRefundCommand) (*AdminVideoActionResult, error) {
@@ -368,13 +367,21 @@ func (s *AdminVideoService) Complete(ctx context.Context, requestID string, comm
 		}
 		return nil, ErrVideoTaskInvalidRequest
 	}
-	normalizedURL, summary, err := s.urlChecker.Validate(ctx, command.ResultURL)
+	normalizedURL, _, err := s.urlChecker.Validate(ctx, command.ResultURL)
 	if err != nil {
 		return nil, ErrVideoResultURLInvalid
 	}
+	summary := SafeAdminVideoResultURLSummary(normalizedURL)
+	if summary == "" {
+		return nil, ErrVideoResultURLInvalid
+	}
+	resultURLDigest, err := adminVideoResultURLDigest(s.urlHashKey, normalizedURL)
+	if err != nil {
+		return nil, err
+	}
 	metadata, err := buildAdminVideoActionMetadata(command.ActorUserID, command.AuditRequestID, command.Reason, command.IdempotencyKey, map[string]any{
 		"action": "complete", "request_id": requestID, "provider_task_id": command.ProviderTaskID,
-		"result_url_summary": summary, "duration_seconds": command.DurationSeconds,
+		"result_url_digest": resultURLDigest, "duration_seconds": command.DurationSeconds,
 		"resolution": command.Resolution, "final_amount": command.FinalAmount,
 	})
 	if err != nil {
@@ -428,10 +435,24 @@ func validateAdminVideoResultURL(_ context.Context, raw string) (string, string,
 	if err := urlvalidator.ValidateResolvedIP(parsed.Hostname()); err != nil {
 		return "", "", err
 	}
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	parsed.User = nil
-	return normalized, parsed.String(), nil
+	return normalized, SafeAdminVideoResultURLSummary(normalized), nil
+}
+
+func adminVideoResultURLDigest(key AdminVideoURLHashKey, normalized string) (string, error) {
+	if len(key) < sha256.Size || strings.TrimSpace(normalized) == "" {
+		return "", ErrAdminVideoURLHashUnavailable
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(normalized))
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+func SafeAdminVideoResultURLSummary(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.User != nil || parsed.Scheme == "" || strings.TrimSpace(parsed.Hostname()) == "" {
+		return ""
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + parsed.Host + "/video-result"
 }
 
 func finiteNonNegative(value float64) bool {
