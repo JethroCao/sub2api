@@ -576,7 +576,10 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 }
 
 func grokMediaSignedVideoContentURL(body []byte, requestID string) (string, error) {
-	rawURL := strings.TrimSpace(gjson.GetBytes(body, "video.url").String())
+	rawURL := firstNonEmpty(
+		strings.TrimSpace(gjson.GetBytes(body, "video.url").String()),
+		strings.TrimSpace(gjson.GetBytes(body, "url").String()),
+	)
 	if rawURL == "" {
 		return "", nil
 	}

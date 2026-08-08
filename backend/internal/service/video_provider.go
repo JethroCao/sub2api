@@ -94,6 +94,14 @@ type VideoProvider interface {
 	OpenContent(context.Context, *Account, VideoTask) (io.ReadCloser, http.Header, int64, error)
 }
 
+// VideoContentStatusProvider preserves the upstream response status for
+// authenticated content relays where a Range request can legitimately return
+// 200, 206, or 416. Providers without this optional capability retain the
+// legacy OpenContent contract.
+type VideoContentStatusProvider interface {
+	OpenContentWithStatus(context.Context, *Account, VideoTask) (io.ReadCloser, http.Header, int64, int, error)
+}
+
 type VideoProviderRegistry struct {
 	providers map[string]VideoProvider
 }

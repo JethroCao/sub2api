@@ -46,6 +46,25 @@ func TestProvideDurableVideoProviderRegistryKeepsKlingGated(t *testing.T) {
 	require.False(t, hasKling, "Kling must remain unregistered until authenticated paid recovery fixtures exist")
 }
 
+func TestProductionVideoRegistryCapabilityChainEnablesOnlyDeclaredModels(t *testing.T) {
+	registry, err := ProvideDurableVideoProviderRegistry(nil, nil)
+	require.NoError(t, err)
+	validator := ProvideVideoCapabilityValidator(registry)
+
+	require.NoError(t, validator.Validate(PlatformGrok, CanonicalVideoRequest{
+		Operation: VideoOperationGeneration, Model: "grok-imagine-video", Prompt: "waves",
+	}))
+	require.NoError(t, validator.Validate(VideoProviderSeedance, CanonicalVideoRequest{
+		Operation: VideoOperationGeneration, Model: "seedance-2.0", Prompt: "waves",
+	}))
+	require.ErrorIs(t, validator.Validate(VideoProviderSeedance, CanonicalVideoRequest{
+		Operation: VideoOperationGeneration, Model: "seedance-unknown", Prompt: "waves",
+	}), ErrVideoUnsupportedCapability)
+	require.ErrorIs(t, validator.Validate(VideoProviderKling, CanonicalVideoRequest{
+		Operation: VideoOperationGeneration, Model: "kling-3.0", Prompt: "waves",
+	}), ErrVideoUnsupportedCapability)
+}
+
 func providerSetRegisters(t *testing.T, providerName string) bool {
 	t.Helper()
 	_, testFile, _, ok := runtime.Caller(0)

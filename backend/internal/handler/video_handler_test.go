@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -63,9 +66,10 @@ func TestVideoSubmitMapsStableErrorEnvelope(t *testing.T) {
 	}{
 		{name: "invalid request", err: service.ErrVideoInvalidRequest, wantStatus: http.StatusBadRequest, wantType: "invalid_request_error"},
 		{name: "invalid idempotency key", err: service.ErrIdempotencyKeyInvalid, wantStatus: http.StatusBadRequest, wantType: "invalid_request_error"},
+		{name: "idempotency conflict", err: service.ErrVideoIdempotencyConflict, wantStatus: http.StatusConflict, wantType: "idempotency_conflict"},
 		{name: "unsupported", err: service.ErrVideoUnsupportedCapability, wantStatus: http.StatusBadRequest, wantType: "unsupported_capability"},
 		{name: "pricing", err: service.ErrVideoPricingUnavailable, wantStatus: http.StatusServiceUnavailable, wantType: "video_pricing_unavailable"},
-		{name: "balance", err: service.ErrVideoInsufficientBalance, wantStatus: http.StatusPaymentRequired, wantType: "insufficient_balance"},
+		{name: "balance", err: service.ErrVideoInsufficientBalance, wantStatus: http.StatusForbidden, wantType: "insufficient_balance"},
 		{name: "account", err: service.ErrNoAvailableAccounts, wantStatus: http.StatusServiceUnavailable, wantType: "no_available_account"},
 		{name: "provider invalid request", err: service.NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, errors.New("secret")), wantStatus: http.StatusBadRequest, wantType: "invalid_request_error"},
 		{name: "rate limit", err: service.NewVideoProviderError(http.StatusTooManyRequests, "upstream_rate_limit", true, false, errors.New("secret")), wantStatus: http.StatusTooManyRequests, wantType: "rate_limit_error"},
@@ -85,6 +89,43 @@ func TestVideoSubmitMapsStableErrorEnvelope(t *testing.T) {
 	}
 }
 
+func TestVideoSubmitMapsBillingEligibilityErrorsWithoutTaskSideEffects(t *testing.T) {
+	quotaErr := service.ErrUserPlatformDailyQuotaExhausted.WithMetadata(map[string]string{
+		"window_resets_at": time.Now().Add(10 * time.Second).UTC().Format(time.RFC3339),
+	})
+	tests := []struct {
+		name           string
+		err            error
+		wantStatus     int
+		wantType       string
+		wantRetryAfter bool
+	}{
+		{name: "balance", err: service.ErrInsufficientBalance, wantStatus: http.StatusForbidden, wantType: "insufficient_balance"},
+		{name: "billing service", err: service.ErrBillingServiceUnavailable, wantStatus: http.StatusServiceUnavailable, wantType: "upstream_error"},
+		{name: "group rpm", err: service.ErrGroupRPMExceeded, wantStatus: http.StatusTooManyRequests, wantType: "rate_limit_error", wantRetryAfter: true},
+		{name: "platform quota", err: quotaErr, wantStatus: http.StatusTooManyRequests, wantType: "rate_limit_error", wantRetryAfter: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasks := &videoHandlerTaskStub{}
+			billing := &videoBillingEligibilityStub{err: tt.err}
+			h := newVideoHandlerForTest(tasks, billing, nil, nil, nil)
+			w := performVideoHandlerRequest(t, h.Generate, http.MethodPost, "/v1/videos/generations",
+				`{"model":"grok-imagine-video","prompt":"waves"}`, ownedVideoAPIKey(10, 20, service.PlatformGrok))
+
+			require.Equal(t, tt.wantStatus, w.Code)
+			require.Equal(t, tt.wantType, gjson.GetBytes(w.Body.Bytes(), "error.type").String())
+			if tt.wantRetryAfter {
+				require.NotEmpty(t, w.Header().Get("Retry-After"))
+			} else {
+				require.Empty(t, w.Header().Get("Retry-After"))
+			}
+			require.Equal(t, 1, billing.calls)
+			require.Zero(t, tasks.submitCalls)
+		})
+	}
+}
+
 func TestVideoSubmitRejectsKlingWhileProviderIsDormant(t *testing.T) {
 	tasks := &videoHandlerTaskStub{}
 	h := newVideoHandlerForTest(tasks, nil, nil, nil, nil)
@@ -93,6 +134,30 @@ func TestVideoSubmitRejectsKlingWhileProviderIsDormant(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	require.Equal(t, "unsupported_capability", gjson.GetBytes(w.Body.Bytes(), "error.type").String())
 	require.Zero(t, tasks.submitCalls)
+}
+
+func TestVideoSubmitSecurityAuditBlocksBeforeBillingOrTaskSideEffects(t *testing.T) {
+	engine := blockingHandlerPromptEngine()
+	openAI := &OpenAIGatewayHandler{securityAuditCoordinator: securityaudit.NewCoordinator(nil, engine)}
+	tasks := &videoHandlerTaskStub{submitTask: &service.VideoTask{RequestID: "vid_0123456789abcdef0123456789abcdef"}}
+	billing := &videoBillingEligibilityStub{}
+	h := NewVideoHandler(nil, nil, nil, nil, nil, openAI, nil)
+	h.tasks = tasks
+	h.billing = billing
+
+	w := performVideoHandlerRequest(t, h.Generate, http.MethodPost, "/v1/videos/generations",
+		`{"model":"grok-imagine-video","prompt":"blocked video prompt","image":{"url":"https://example.com/reference.png"}}`,
+		ownedVideoAPIKey(10, 20, service.PlatformGrok))
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Equal(t, securityaudit.ErrorCodeBlocked, gjson.GetBytes(w.Body.Bytes(), "error.code").String())
+	require.Zero(t, billing.calls, "audit rejection must precede billing eligibility")
+	require.Zero(t, tasks.submitCalls, "audit rejection must precede pricing, hold, task creation, scheduling, and provider submission")
+	evaluated, _, requests := engine.snapshot()
+	require.Equal(t, 1, evaluated)
+	require.Len(t, requests, 1)
+	require.Contains(t, string(requests[0].Body), "blocked video prompt")
+	require.Contains(t, string(requests[0].Body), "https://example.com/reference.png")
 }
 
 func TestVideoStatusDoesNotLeakAcrossAPIKeys(t *testing.T) {
@@ -234,12 +299,156 @@ func TestVideoContentWithoutPublicURLUsesStoredAccountProvider(t *testing.T) {
 	require.Equal(t, task.RequestID, provider.task.RequestID)
 }
 
+func TestVideoContentWithoutPublicURLPreservesProviderRangeStatus(t *testing.T) {
+	task := &service.VideoTask{
+		RequestID: "vid_0123456789abcdef0123456789abcdef", UserID: 10, APIKeyID: 20,
+		AccountID: 77, Provider: service.PlatformGrok, Status: service.VideoTaskSucceeded,
+	}
+	tasks := &videoHandlerTaskStub{getOwned: func(context.Context, string, int64, int64) (*service.VideoTask, error) {
+		return task, nil
+	}}
+	provider := &videoContentProviderStub{name: service.PlatformGrok, status: http.StatusRequestedRangeNotSatisfiable, headers: http.Header{
+		"Content-Range": {"bytes */14"},
+	}}
+	registry, err := service.NewVideoProviderRegistry(provider)
+	require.NoError(t, err)
+	h := newVideoHandler(tasks, nil, videoAccountReaderStub{account: &service.Account{ID: 77}}, registry, nil, nil, nil)
+
+	w := performVideoHandlerRequest(t, h.Content, http.MethodGet,
+		"/v1/videos/vid_0123456789abcdef0123456789abcdef/content", "", ownedVideoAPIKey(10, 20, service.PlatformGrok))
+
+	require.Equal(t, http.StatusRequestedRangeNotSatisfiable, w.Code)
+	require.Equal(t, "bytes */14", w.Header().Get("Content-Range"))
+}
+
+func TestVideoContentEndToEndClassifiesGrokRelayAndPublicURLs(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	for _, tt := range []struct {
+		name           string
+		account        *service.Account
+		statusURL      string
+		wantAuth       string
+		wantProxyFetch bool
+	}{
+		{
+			name: "api key protected relay",
+			account: &service.Account{ID: 77, Platform: service.PlatformGrok, Type: service.AccountTypeAPIKey,
+				Credentials: map[string]any{"api_key": "api-key", "base_url": "https://xai.example/v1"}},
+			statusURL: "https://xai.example/v1/videos/upstream-task/content", wantAuth: "Bearer api-key",
+		},
+		{
+			name: "oauth protected relay",
+			account: &service.Account{ID: 77, Platform: service.PlatformGrok, Type: service.AccountTypeOAuth,
+				Credentials: map[string]any{"base_url": "https://relay.example/v1"}},
+			statusURL: "https://relay.example/v1/videos/upstream-task/content", wantAuth: "Bearer oauth-token",
+		},
+		{
+			name: "public vidgen",
+			account: &service.Account{ID: 77, Platform: service.PlatformGrok, Type: service.AccountTypeAPIKey,
+				Credentials: map[string]any{"api_key": "api-key", "base_url": "https://xai.example/v1"}},
+			statusURL: "https://vidgen.x.ai/signed/video.mp4?token=redacted", wantAuth: "Bearer api-key", wantProxyFetch: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			statusBody := `{"status":"completed","video":{"url":"` + tt.statusURL + `"}}`
+			responses := []*http.Response{videoGrokHandlerResponse(http.StatusOK, "application/json", statusBody)}
+			if !tt.wantProxyFetch {
+				responses = append(responses,
+					videoGrokHandlerResponse(http.StatusOK, "application/json", statusBody),
+					videoGrokHandlerResponse(http.StatusPartialContent, "video/mp4", "video-bytes"),
+				)
+				responses[2].Header.Set("Content-Range", "bytes 0-10/11")
+			}
+			upstream := &videoGrokHandlerUpstream{responses: responses}
+			provider := service.NewGrokVideoProvider(upstream, videoGrokTokenProvider("oauth-token"))
+			upstreamID := "upstream-task"
+			poll, err := provider.Poll(context.Background(), tt.account, service.VideoTask{UpstreamTaskID: &upstreamID})
+			require.NoError(t, err)
+
+			task := &service.VideoTask{
+				RequestID: "vid_0123456789abcdef0123456789abcdef", UserID: 10, APIKeyID: 20,
+				AccountID: tt.account.ID, Platform: service.PlatformGrok, Provider: service.PlatformGrok,
+				Status: service.VideoTaskSucceeded, UpstreamTaskID: &upstreamID,
+			}
+			if poll.ResultURL != "" {
+				task.ResultURL = &poll.ResultURL
+			}
+			tasks := &videoHandlerTaskStub{getOwned: func(context.Context, string, int64, int64) (*service.VideoTask, error) {
+				return task, nil
+			}}
+			registry, err := service.NewVideoProviderRegistry(provider)
+			require.NoError(t, err)
+			fetcher := &videoContentFetcherStub{response: videoGrokHandlerResponse(http.StatusOK, "video/mp4", "public-bytes")}
+			h := newVideoHandler(tasks, nil, videoAccountReaderStub{account: tt.account}, registry, fetcher, nil, nil)
+
+			w := performVideoHandlerRequest(t, h.Content, http.MethodGet,
+				"/v1/videos/vid_0123456789abcdef0123456789abcdef/content", "", ownedVideoAPIKey(10, 20, service.PlatformGrok))
+
+			if tt.wantProxyFetch {
+				require.Equal(t, http.StatusOK, w.Code)
+				require.Equal(t, "public-bytes", w.Body.String())
+				require.Equal(t, tt.statusURL, fetcher.rawURL)
+				require.Len(t, upstream.requests, 1, "public signed content must not invoke authenticated OpenContent")
+			} else {
+				require.Equal(t, http.StatusPartialContent, w.Code)
+				require.Equal(t, "video-bytes", w.Body.String())
+				require.Zero(t, fetcher.calls, "protected relay content must not use the public URL fetcher")
+				require.Len(t, upstream.requests, 3)
+				require.Equal(t, tt.wantAuth, upstream.requests[1].Header.Get("Authorization"))
+				require.Equal(t, tt.wantAuth, upstream.requests[2].Header.Get("Authorization"))
+			}
+		})
+	}
+}
+
+type videoGrokTokenProvider string
+
+func (p videoGrokTokenProvider) GetAccessToken(context.Context, *service.Account) (string, error) {
+	return string(p), nil
+}
+
+type videoGrokHandlerUpstream struct {
+	requests  []*http.Request
+	responses []*http.Response
+}
+
+func (u *videoGrokHandlerUpstream) Do(request *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	u.requests = append(u.requests, request)
+	if len(u.responses) == 0 {
+		return nil, io.ErrUnexpectedEOF
+	}
+	response := u.responses[0]
+	u.responses = u.responses[1:]
+	return response, nil
+}
+
+func (u *videoGrokHandlerUpstream) DoWithTLS(request *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(request, proxyURL, accountID, accountConcurrency)
+}
+
+func videoGrokHandlerResponse(status int, contentType, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status, Header: http.Header{"Content-Type": []string{contentType}},
+		Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)),
+	}
+}
+
 type videoHandlerTaskStub struct {
 	submitTask    *service.VideoTask
 	submitErr     error
 	submitCalls   int
 	submitCommand service.VideoSubmitCommand
 	getOwned      func(context.Context, string, int64, int64) (*service.VideoTask, error)
+}
+
+type videoBillingEligibilityStub struct {
+	calls int
+	err   error
+}
+
+func (s *videoBillingEligibilityStub) CheckBillingEligibility(context.Context, *service.User, *service.APIKey, *service.Group, *service.UserSubscription, string) error {
+	s.calls++
+	return s.err
 }
 
 func (s *videoHandlerTaskStub) Submit(_ context.Context, command service.VideoSubmitCommand) (*service.VideoTask, error) {
@@ -304,6 +513,7 @@ type videoContentProviderStub struct {
 	body    string
 	headers http.Header
 	length  int64
+	status  int
 	account *service.Account
 	task    service.VideoTask
 }
@@ -324,6 +534,18 @@ func (p *videoContentProviderStub) Poll(context.Context, *service.Account, servi
 func (p *videoContentProviderStub) OpenContent(_ context.Context, account *service.Account, task service.VideoTask) (io.ReadCloser, http.Header, int64, error) {
 	p.account, p.task = account, task
 	return io.NopCloser(strings.NewReader(p.body)), p.headers.Clone(), p.length, nil
+}
+
+func (p *videoContentProviderStub) OpenContentWithStatus(_ context.Context, account *service.Account, task service.VideoTask) (io.ReadCloser, http.Header, int64, int, error) {
+	p.account, p.task = account, task
+	status := p.status
+	if status == 0 {
+		status = http.StatusOK
+		if p.headers.Get("Content-Range") != "" {
+			status = http.StatusPartialContent
+		}
+	}
+	return io.NopCloser(strings.NewReader(p.body)), p.headers.Clone(), p.length, status, nil
 }
 
 func (f *videoContentFetcherStub) Fetch(_ context.Context, rawURL, rangeHeader string) (*http.Response, error) {

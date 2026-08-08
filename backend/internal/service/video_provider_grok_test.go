@@ -245,6 +245,46 @@ func TestGrokVideoProviderPollMapsUpstreamStatus(t *testing.T) {
 	}
 }
 
+func TestGrokVideoProviderPollPersistsOnlyStrictPublicVidgenURL(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	oauthAccount := &Account{
+		ID: 82, Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"base_url": "https://relay.example/v1"},
+	}
+	for _, tt := range []struct {
+		name    string
+		account *Account
+		body    string
+		wantURL string
+		wantErr bool
+	}{
+		{name: "public vidgen", account: grokAPIKeyAccount(), body: `{"status":"completed","video":{"url":"https://vidgen.x.ai/signed/video.mp4?token=redacted"}}`, wantURL: "https://vidgen.x.ai/signed/video.mp4?token=redacted"},
+		{name: "root public vidgen compatibility", account: grokAPIKeyAccount(), body: `{"status":"completed","url":"https://vidgen.x.ai/signed/root-video.mp4?token=redacted"}`, wantURL: "https://vidgen.x.ai/signed/root-video.mp4?token=redacted"},
+		{name: "api key relay", account: grokAPIKeyAccount(), body: `{"status":"completed","video":{"url":"https://xai.test/v1/videos/up_123/content"}}`},
+		{name: "root api key relay compatibility", account: grokAPIKeyAccount(), body: `{"status":"completed","url":"https://xai.test/v1/videos/up_123/content"}`},
+		{name: "oauth relay", account: oauthAccount, body: `{"status":"completed","video":{"url":"https://relay.example/v1/videos/up_123/content"}}`},
+		{name: "relative protected relay", account: grokAPIKeyAccount(), body: `{"status":"completed","video":{"url":"/v1/videos/up_123/content"}}`},
+		{name: "unsupported public origin", account: grokAPIKeyAccount(), body: `{"status":"completed","video":{"url":"https://attacker.example/video.mp4"}}`, wantErr: true},
+		{name: "unsupported root public origin", account: grokAPIKeyAccount(), body: `{"status":"completed","url":"https://attacker.example/video.mp4"}`, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, tt.body)}}
+			provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
+			upstreamID := "up_123"
+
+			got, err := provider.Poll(context.Background(), tt.account, VideoTask{UpstreamTaskID: &upstreamID})
+			if tt.wantErr {
+				var providerErr VideoProviderError
+				require.ErrorAs(t, err, &providerErr)
+				require.Equal(t, "provider_contract_error", providerErr.Code)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantURL, got.ResultURL)
+		})
+	}
+}
+
 func TestGrokVideoProviderPollRejectsRedirectStatusResponse(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	body := &grokVideoCloseTrackingBody{Reader: strings.NewReader(`{"status":"completed"}`)}
@@ -325,6 +365,31 @@ func TestGrokVideoProviderOpenContentPreservesRangeAndTemporaryVidgenURL(t *test
 	require.Empty(t, upstream.requests[1].Header.Get("Authorization"))
 	require.Equal(t, "bytes=0-12", upstream.requests[1].Header.Get("Range"))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[1].Context()))
+}
+
+func TestGrokVideoProviderOpenContentWithStatusPreservesRequestedRangeNotSatisfiable(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	upstream := &recordingHTTPUpstream{responses: []*http.Response{
+		grokVideoTestResponse(http.StatusOK, `{"status":"completed"}`),
+		{
+			StatusCode: http.StatusRequestedRangeNotSatisfiable,
+			Header:     http.Header{"Content-Range": []string{"bytes */100"}},
+			Body:       io.NopCloser(strings.NewReader("")),
+		},
+	}}
+	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
+	upstreamID := "up_123"
+
+	body, headers, _, status, err := provider.OpenContentWithStatus(
+		WithGrokVideoContentRange(context.Background(), "bytes=200-300"),
+		grokAPIKeyAccount(), VideoTask{UpstreamTaskID: &upstreamID},
+	)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, body.Close()) }()
+	require.Equal(t, http.StatusRequestedRangeNotSatisfiable, status)
+	require.Equal(t, "bytes */100", headers.Get("Content-Range"))
+	require.Equal(t, "bytes=200-300", upstream.requests[1].Header.Get("Range"))
 }
 
 func TestGrokVideoProviderOpenContentRejectsRedirectContentResponse(t *testing.T) {

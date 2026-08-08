@@ -75,6 +75,14 @@ func ProvideVideoCapabilityValidator(registry *VideoProviderRegistry) VideoCapab
 			catalog[name] = provider.Capabilities()
 		}
 	}
+	if _, registered := registry.Get(VideoProviderSeedance); registered {
+		catalog[VideoModelCapabilityKey(VideoProviderSeedance, "seedance-2.0")] = VideoProviderCapabilities{
+			VideoOperationGeneration: {
+				Text: true, FirstFrame: true, LastFrame: true, FirstAndLastFrame: true,
+				ReferenceImages: true, ReferenceVideos: true, Audio: true,
+			},
+		}
+	}
 	return catalog
 }
 

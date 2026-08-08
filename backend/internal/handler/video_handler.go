@@ -56,6 +56,7 @@ type VideoHandler struct {
 	fetcher     videoContentFetcher
 	legacy      legacyGrokVideoHandler
 	legacyRoute legacyGrokRouteGate
+	audit       *OpenAIGatewayHandler
 }
 
 func NewVideoHandler(
@@ -79,10 +80,14 @@ func newVideoHandler(
 	legacy legacyGrokVideoHandler,
 	legacyRoute legacyGrokRouteGate,
 ) *VideoHandler {
-	return &VideoHandler{
+	handler := &VideoHandler{
 		tasks: tasks, billing: billing, accounts: accounts, providers: providers,
 		fetcher: fetcher, legacy: legacy, legacyRoute: legacyRoute,
 	}
+	if openAI, ok := legacy.(*OpenAIGatewayHandler); ok {
+		handler.audit = openAI
+	}
+	return handler
 }
 
 func (h *VideoHandler) Generate(c *gin.Context) { h.submit(c, service.VideoOperationGeneration) }
@@ -128,6 +133,17 @@ func (h *VideoHandler) submit(c *gin.Context, operation service.VideoOperation) 
 	if err != nil {
 		videoSubmissionError(c, err)
 		return
+	}
+	if h.audit != nil {
+		moderationBody := service.ParseGrokMediaRequest(c.GetHeader("Content-Type"), body).ModerationBody()
+		if len(moderationBody) > 0 {
+			subject, _ := middleware.GetAuthSubjectFromContext(c)
+			decision := h.audit.checkSecurityAudit(c, nil, apiKey, subject, service.ContentModerationProtocolOpenAIImages, publicModel, moderationBody)
+			if decision != nil && !decision.AllowNextStage {
+				h.audit.openAISecurityAuditError(c, decision)
+				return
+			}
+		}
 	}
 
 	subscription, _ := middleware.GetSubscriptionFromContext(c)
@@ -276,7 +292,7 @@ func (h *VideoHandler) openProviderContent(c *gin.Context, task *service.VideoTa
 		return
 	}
 	ctx := service.WithGrokVideoContentRange(c.Request.Context(), c.GetHeader("Range"))
-	body, headers, length, err := provider.OpenContent(ctx, account, *task)
+	body, headers, length, status, err := openVideoProviderContent(ctx, provider, account, *task)
 	if err != nil {
 		videoSubmissionError(c, err)
 		return
@@ -286,16 +302,29 @@ func (h *VideoHandler) openProviderContent(c *gin.Context, task *service.VideoTa
 		return
 	}
 	defer func() { _ = body.Close() }()
+	if status != http.StatusOK && status != http.StatusPartialContent && status != http.StatusRequestedRangeNotSatisfiable {
+		videoError(c, http.StatusBadGateway, "upstream_error", "Video content upstream failed")
+		return
+	}
 	copyVideoContentHeaders(c, headers)
 	if length >= 0 && c.Writer.Header().Get("Content-Length") == "" {
 		c.Header("Content-Length", strconv.FormatInt(length, 10))
 	}
+	c.Status(status)
+	c.Writer.WriteHeaderNow()
+	_, _ = io.Copy(c.Writer, body)
+}
+
+func openVideoProviderContent(ctx context.Context, provider service.VideoProvider, account *service.Account, task service.VideoTask) (io.ReadCloser, http.Header, int64, int, error) {
+	if statusProvider, ok := provider.(service.VideoContentStatusProvider); ok {
+		return statusProvider.OpenContentWithStatus(ctx, account, task)
+	}
+	body, headers, length, err := provider.OpenContent(ctx, account, task)
 	status := http.StatusOK
-	if headers.Get("Content-Range") != "" {
+	if headers != nil && headers.Get("Content-Range") != "" {
 		status = http.StatusPartialContent
 	}
-	c.Status(status)
-	_, _ = io.Copy(c.Writer, body)
+	return body, headers, length, status, err
 }
 
 func videoOwnerAPIKey(c *gin.Context) (*service.APIKey, bool) {
@@ -410,15 +439,18 @@ func videoErrorDetails(err error) (int, string, string) {
 		return http.StatusRequestEntityTooLarge, "invalid_request_error", "Request body is too large"
 	case errors.Is(err, service.ErrVideoInvalidRequest), errors.Is(err, service.ErrVideoInvalidMedia),
 		errors.Is(err, service.ErrVideoTooManyAssets), errors.Is(err, service.ErrVideoTaskInvalidRequest),
-		errors.Is(err, service.ErrVideoIdempotencyConflict), errors.Is(err, service.ErrIdempotencyKeyInvalid):
+		errors.Is(err, service.ErrIdempotencyKeyInvalid):
 		return http.StatusBadRequest, "invalid_request_error", "Invalid video request"
+	case errors.Is(err, service.ErrVideoIdempotencyConflict):
+		return http.StatusConflict, "idempotency_conflict", "Idempotency key conflicts with an existing video request"
 	case errors.Is(err, service.ErrVideoUnsupportedCapability), errors.Is(err, service.ErrVideoGenerationNotAllowed),
 		errors.Is(err, service.ErrVideoProviderDisabled):
 		return http.StatusBadRequest, "unsupported_capability", "Unsupported video capability"
 	case errors.Is(err, service.ErrVideoPricingUnavailable), errors.Is(err, service.ErrVideoPricingInvalid):
 		return http.StatusServiceUnavailable, "video_pricing_unavailable", "Video pricing is unavailable"
-	case errors.Is(err, service.ErrVideoInsufficientBalance), errors.Is(err, service.ErrInsufficientBalance):
-		return http.StatusPaymentRequired, "insufficient_balance", "Insufficient balance"
+	case errors.Is(err, service.ErrVideoInsufficientBalance), errors.Is(err, service.ErrVideoSubscriptionQuotaExceeded),
+		errors.Is(err, service.ErrInsufficientBalance):
+		return http.StatusForbidden, "insufficient_balance", "Insufficient balance"
 	case errors.Is(err, service.ErrNoAvailableAccounts):
 		return http.StatusServiceUnavailable, "no_available_account", "No available video account"
 	case errors.Is(err, service.ErrVideoTaskNotFound):
@@ -449,13 +481,19 @@ func videoErrorDetails(err error) (int, string, string) {
 
 func videoBillingError(c *gin.Context, err error) {
 	if errors.Is(err, service.ErrInsufficientBalance) || errors.Is(err, service.ErrVideoInsufficientBalance) {
-		videoError(c, http.StatusPaymentRequired, "insufficient_balance", "Insufficient balance")
+		videoError(c, http.StatusForbidden, "insufficient_balance", "Insufficient balance")
 		return
 	}
-	if errors.Is(err, service.ErrGroupRPMExceeded) || errors.Is(err, service.ErrUserRPMExceeded) ||
-		errors.Is(err, service.ErrAPIKeyRateLimit5hExceeded) || errors.Is(err, service.ErrAPIKeyRateLimit1dExceeded) ||
-		errors.Is(err, service.ErrAPIKeyRateLimit7dExceeded) {
+	status, _, _, retryAfter := billingErrorDetails(err)
+	if retryAfter > 0 {
+		c.Header("Retry-After", strconv.Itoa(retryAfter))
+	}
+	if status == http.StatusTooManyRequests {
 		videoError(c, http.StatusTooManyRequests, "rate_limit_error", "Video request rate limit exceeded")
+		return
+	}
+	if status == http.StatusServiceUnavailable {
+		videoError(c, http.StatusServiceUnavailable, "upstream_error", "Video billing service is unavailable")
 		return
 	}
 	videoError(c, http.StatusForbidden, "insufficient_balance", "Video billing eligibility check failed")

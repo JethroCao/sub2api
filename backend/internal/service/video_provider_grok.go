@@ -94,13 +94,14 @@ func (p *GrokVideoProvider) Poll(ctx context.Context, account *Account, task Vid
 		return VideoPollResult{}, grokVideoProviderPollError(err)
 	}
 	upstreamStatus := strings.TrimSpace(gjson.GetBytes(body, "status").String())
+	resultURL, err := grokMediaSignedVideoContentURL(body, upstreamTaskID)
+	if err != nil {
+		return VideoPollResult{}, NewVideoProviderError(http.StatusBadGateway, "provider_contract_error", false, false, err)
+	}
 	result := VideoPollResult{
-		Status:         grokVideoTaskStatus(upstreamStatus),
-		UpstreamStatus: upstreamStatus,
-		ResultURL: firstNonEmpty(
-			strings.TrimSpace(gjson.GetBytes(body, "video.url").String()),
-			strings.TrimSpace(gjson.GetBytes(body, "url").String()),
-		),
+		Status:                grokVideoTaskStatus(upstreamStatus),
+		UpstreamStatus:        upstreamStatus,
+		ResultURL:             resultURL,
 		ResultContentType:     strings.TrimSpace(gjson.GetBytes(body, "video.content_type").String()),
 		ActualDurationSeconds: int(gjson.GetBytes(body, "video.duration").Int()),
 		Resolution:            strings.TrimSpace(gjson.GetBytes(body, "video.resolution").String()),
@@ -131,27 +132,32 @@ func grokVideoContentRange(ctx context.Context) string {
 }
 
 func (p *GrokVideoProvider) OpenContent(ctx context.Context, account *Account, task VideoTask) (io.ReadCloser, http.Header, int64, error) {
+	body, headers, length, _, err := p.OpenContentWithStatus(ctx, account, task)
+	return body, headers, length, err
+}
+
+func (p *GrokVideoProvider) OpenContentWithStatus(ctx context.Context, account *Account, task VideoTask) (io.ReadCloser, http.Header, int64, int, error) {
 	if task.UpstreamTaskID == nil || strings.TrimSpace(*task.UpstreamTaskID) == "" {
-		return nil, nil, 0, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, errors.New("grok video task ID is required"))
+		return nil, nil, 0, 0, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, errors.New("grok video task ID is required"))
 	}
 	upstreamTaskID := strings.TrimSpace(*task.UpstreamTaskID)
 	token, err := p.token(ctx, account)
 	if err != nil {
-		return nil, nil, 0, NewVideoProviderError(http.StatusUnauthorized, "upstream_authentication", false, false, err)
+		return nil, nil, 0, 0, NewVideoProviderError(http.StatusUnauthorized, "upstream_authentication", false, false, err)
 	}
 	statusBody, _, err := p.doJSONWithToken(WithHTTPUpstreamRedirectsDisabled(ctx), account, GrokMediaEndpointVideoStatus, upstreamTaskID, http.MethodGet, nil, token)
 	if err != nil {
-		return nil, nil, 0, grokVideoProviderPollError(err)
+		return nil, nil, 0, 0, grokVideoProviderPollError(err)
 	}
 	contentURL, err := grokMediaSignedVideoContentURL(statusBody, upstreamTaskID)
 	if err != nil {
-		return nil, nil, 0, NewVideoProviderError(http.StatusBadGateway, "provider_contract_error", false, false, err)
+		return nil, nil, 0, 0, NewVideoProviderError(http.StatusBadGateway, "provider_contract_error", false, false, err)
 	}
 	signedContent := contentURL != ""
 	if !signedContent {
 		contentURL, err = buildGrokMediaURL(account, p.cfg, GrokMediaEndpointVideoContent, upstreamTaskID)
 		if err != nil {
-			return nil, nil, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_unavailable", true, false, err)
+			return nil, nil, 0, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_unavailable", true, false, err)
 		}
 	}
 
@@ -159,7 +165,7 @@ func (p *GrokVideoProvider) OpenContent(ctx context.Context, account *Account, t
 	defer release()
 	request, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(upstreamCtx), http.MethodGet, contentURL, nil)
 	if err != nil {
-		return nil, nil, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_error", true, false, err)
+		return nil, nil, 0, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_error", true, false, err)
 	}
 	request.Header.Set("Accept", "*/*")
 	if rangeHeader := grokVideoContentRange(ctx); rangeHeader != "" {
@@ -174,11 +180,11 @@ func (p *GrokVideoProvider) OpenContent(ctx context.Context, account *Account, t
 	}
 	response, err := p.do(request, account)
 	if err != nil {
-		return nil, nil, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_timeout", true, false, err)
+		return nil, nil, 0, 0, NewVideoProviderError(http.StatusBadGateway, "upstream_timeout", true, false, err)
 	}
 	if response.StatusCode >= http.StatusMultipleChoices && response.StatusCode != http.StatusRequestedRangeNotSatisfiable {
 		body := readGrokVideoResponse(response)
-		return nil, nil, 0, grokVideoProviderHTTPError(response.StatusCode, body, false)
+		return nil, nil, 0, 0, grokVideoProviderHTTPError(response.StatusCode, body, false)
 	}
 	header := response.Header.Clone()
 	length := response.ContentLength
@@ -187,7 +193,7 @@ func (p *GrokVideoProvider) OpenContent(ctx context.Context, account *Account, t
 			length = parsed
 		}
 	}
-	return response.Body, header, length, nil
+	return response.Body, header, length, response.StatusCode, nil
 }
 
 func grokVideoEndpointForOperation(operation VideoOperation) (GrokMediaEndpoint, error) {
