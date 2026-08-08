@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -23,6 +24,7 @@ const (
 var (
 	ErrVideoGenerationNotAllowed = infraerrors.Forbidden("VIDEO_GENERATION_NOT_ALLOWED", "video generation is not allowed for this group")
 	ErrVideoServiceUnavailable   = infraerrors.ServiceUnavailable("VIDEO_SERVICE_UNAVAILABLE", "video submission service is unavailable")
+	ErrVideoProviderDisabled     = infraerrors.ServiceUnavailable("VIDEO_PROVIDER_DISABLED", "video provider is disabled")
 )
 
 type VideoCapabilityValidator interface {
@@ -53,6 +55,7 @@ type VideoTaskService struct {
 	capabilities       VideoCapabilityValidator
 	scheduler          VideoAccountScheduler
 	subscriptions      VideoSubscriptionWindowMaintainer
+	videoConfig        config.VideoConfig
 	now                func() time.Time
 	newSubmissionToken func() (string, error)
 }
@@ -66,7 +69,12 @@ func NewVideoTaskService(
 	capabilities VideoCapabilityValidator,
 	scheduler VideoAccountScheduler,
 	subscriptions VideoSubscriptionWindowMaintainer,
+	configs ...config.VideoConfig,
 ) *VideoTaskService {
+	videoConfig := config.VideoConfig{}
+	if len(configs) > 0 {
+		videoConfig = configs[0]
+	}
 	return &VideoTaskService{
 		submissions:        submissions,
 		tasks:              tasks,
@@ -75,6 +83,7 @@ func NewVideoTaskService(
 		capabilities:       capabilities,
 		scheduler:          scheduler,
 		subscriptions:      subscriptions,
+		videoConfig:        videoConfig,
 		now:                time.Now,
 		newSubmissionToken: newVideoSubmissionToken,
 	}
@@ -84,6 +93,9 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 	if s == nil || s.submissions == nil || s.tasks == nil || s.pricing == nil ||
 		s.providers == nil || s.capabilities == nil || s.scheduler == nil {
 		return nil, ErrVideoServiceUnavailable
+	}
+	if !s.submissionProviderEnabled(command.Provider) {
+		return nil, ErrVideoProviderDisabled
 	}
 
 	command, provider, idempotencyHash, requestHash, recoveryPayload, err := s.validateSubmitCommand(command)
@@ -236,6 +248,24 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 	task.RequestPayload = pollPayload.Bytes()
 	task.Version++
 	return s.refreshTaskOrFallback(ctx, task), nil
+}
+
+func (s *VideoTaskService) submissionProviderEnabled(provider string) bool {
+	if s == nil || !s.videoConfig.Enabled {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case PlatformGrok:
+		return s.videoConfig.GrokEnabled
+	case VideoProviderSeedance:
+		return s.videoConfig.SeedanceEnabled
+	case VideoProviderKling:
+		return s.videoConfig.KlingEnabled
+	default:
+		// Unknown providers still flow through canonical validation so callers get
+		// the existing invalid-provider response instead of a misleading flag error.
+		return true
+	}
 }
 
 func (s *VideoTaskService) GetOwned(ctx context.Context, requestID string, userID, apiKeyID int64) (*VideoTask, error) {

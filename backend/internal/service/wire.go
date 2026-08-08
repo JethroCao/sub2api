@@ -79,6 +79,24 @@ func ProvideVideoReconciler(
 	return NewVideoReconciler(repo, accounts, billing, providers, videoCfg)
 }
 
+func ProvideVideoTaskService(
+	submissions VideoSubmissionRepository,
+	tasks VideoTaskRepository,
+	pricing *VideoPricingService,
+	billing *VideoBillingService,
+	providers *VideoProviderRegistry,
+	capabilities VideoCapabilityValidator,
+	scheduler VideoAccountScheduler,
+	subscriptions VideoSubscriptionWindowMaintainer,
+	cfg *config.Config,
+) *VideoTaskService {
+	videoCfg := config.VideoConfig{}
+	if cfg != nil {
+		videoCfg = cfg.Video
+	}
+	return NewVideoTaskService(submissions, tasks, pricing, billing, providers, capabilities, scheduler, subscriptions, videoCfg)
+}
+
 func ProvideVideoRetention(repo VideoTaskRepository, cfg *config.Config) *VideoRetention {
 	videoCfg := config.VideoConfig{}
 	if cfg != nil {
@@ -750,6 +768,7 @@ var ProviderSet = wire.NewSet(
 	NewVideoPricingService,
 	NewVideoBillingService,
 	ProvideDurableVideoProviderRegistry,
+	ProvideVideoTaskService,
 	ProvideVideoReconciler,
 	ProvideVideoRetention,
 	ProvideVideoRuntime,

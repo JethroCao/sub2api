@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 	"github.com/zeromicro/go-zero/core/collection"
 )
@@ -23,9 +24,15 @@ func TestProviderSetRegistersVideoBillingService(t *testing.T) {
 }
 
 func TestProviderSetRegistersDurableVideoRuntime(t *testing.T) {
-	for _, provider := range []string{"ProvideDurableVideoProviderRegistry", "ProvideVideoReconciler", "ProvideVideoRetention", "ProvideVideoRuntime"} {
+	for _, provider := range []string{"ProvideDurableVideoProviderRegistry", "ProvideVideoTaskService", "ProvideVideoReconciler", "ProvideVideoRetention", "ProvideVideoRuntime"} {
 		require.True(t, providerSetRegisters(t, provider), "service.ProviderSet must register %s", provider)
 	}
+}
+
+func TestProvideVideoTaskServiceCopiesFailClosedProviderFlags(t *testing.T) {
+	cfg := &config.Config{Video: config.VideoConfig{GrokEnabled: true, SeedanceEnabled: false, KlingEnabled: true}}
+	service := ProvideVideoTaskService(nil, nil, nil, nil, nil, nil, nil, nil, cfg)
+	require.Equal(t, cfg.Video, service.videoConfig)
 }
 
 func TestProvideDurableVideoProviderRegistryKeepsKlingGated(t *testing.T) {

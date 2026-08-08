@@ -64,12 +64,65 @@ func TestVideoReconcilerRetryablePollUsesInjectedCappedBackoff(t *testing.T) {
 	h := newVideoReconcilerHarness(t)
 	h.task.PollAttempts = 50
 	h.provider.pollErr = NewVideoProviderError(http.StatusServiceUnavailable, "upstream_unavailable", true, false, nil)
-	h.reconciler.jitter = func(time.Duration) time.Duration { return 37 * time.Second }
+	h.reconciler.jitter = func(string, int, time.Duration) time.Duration { return 37 * time.Second }
 	require.NoError(t, h.reconciler.Process(context.Background(), h.task))
 	require.Equal(t, 1, h.repo.retryCalls)
 	require.WithinDuration(t, h.now.Add(37*time.Second), h.repo.retry.NextPollAt, time.Nanosecond)
 	require.True(t, h.repo.retry.IncrementPollAttempts)
 	require.Zero(t, h.repo.applyCalls)
+}
+
+func TestVideoReconcilerRetryJitterIsStableBoundedAndClamped(t *testing.T) {
+	h := newVideoReconcilerHarness(t)
+	h.reconciler.jitter = deterministicVideoRetryJitter
+
+	first := h.reconciler.retryDelay("vid_task_a", 3)
+	require.Equal(t, first, h.reconciler.retryDelay("vid_task_a", 3))
+	require.NotEqual(t, first, h.reconciler.retryDelay("vid_task_b", 3))
+	require.NotEqual(t, first, h.reconciler.retryDelay("vid_task_a", 4))
+	require.GreaterOrEqual(t, first, 5*time.Second)
+	require.LessOrEqual(t, first, 300*time.Second)
+
+	h.reconciler.jitter = func(string, int, time.Duration) time.Duration { return -time.Hour }
+	require.Equal(t, 5*time.Second, h.reconciler.retryDelay("vid_low", 0))
+	h.reconciler.jitter = func(string, int, time.Duration) time.Duration { return 24 * time.Hour }
+	require.Equal(t, 300*time.Second, h.reconciler.retryDelay("vid_high", 50))
+}
+
+func TestVideoReconcilerQueuedOrRunningAtPollLimitMovesToManualReviewWithoutRelease(t *testing.T) {
+	t.Run("already exhausted does not poll", func(t *testing.T) {
+		h := newVideoReconcilerHarness(t)
+		h.task.Status = VideoTaskQueued
+		h.task.PollAttempts = h.reconciler.config.MaxPollAttempts
+
+		require.NoError(t, h.reconciler.Process(context.Background(), h.task))
+		require.Zero(t, h.provider.pollCalls)
+		require.Equal(t, 1, h.repo.retryCalls)
+		require.Equal(t, VideoTaskUnknown, h.repo.retry.Status)
+		require.Equal(t, videoErrorPollAttemptsExhausted, h.repo.retry.Error.Code())
+		require.False(t, h.repo.retry.IncrementPollAttempts)
+		require.WithinDuration(t, h.now.Add(24*time.Hour), h.repo.retry.NextPollAt, time.Nanosecond)
+		require.Zero(t, h.repo.applyCalls)
+		require.Zero(t, h.billing.captureCalls)
+		require.Zero(t, h.billing.releaseCalls)
+	})
+
+	t.Run("last normal poll schedules review", func(t *testing.T) {
+		h := newVideoReconcilerHarness(t)
+		h.task.Status = VideoTaskRunning
+		h.task.PollAttempts = h.reconciler.config.MaxPollAttempts - 1
+		h.provider.pollResult = VideoPollResult{Status: VideoTaskRunning, UpstreamStatus: "processing"}
+
+		require.NoError(t, h.reconciler.Process(context.Background(), h.task))
+		require.Equal(t, 1, h.provider.pollCalls)
+		require.Equal(t, 1, h.repo.retryCalls)
+		require.Equal(t, VideoTaskUnknown, h.repo.retry.Status)
+		require.Equal(t, videoErrorPollAttemptsExhausted, h.repo.retry.Error.Code())
+		require.True(t, h.repo.retry.IncrementPollAttempts)
+		require.Zero(t, h.repo.applyCalls)
+		require.Zero(t, h.billing.captureCalls)
+		require.Zero(t, h.billing.releaseCalls)
+	})
 }
 
 func TestVideoReconcilerNonRetryablePollTerminalizesAndReleases(t *testing.T) {
@@ -154,6 +207,37 @@ func TestVideoReconcilerStoredAccountMismatchFailsClosed(t *testing.T) {
 	require.Equal(t, "STORED_ACCOUNT_MISMATCH", h.repo.retry.Error.Code())
 }
 
+func TestVideoReconcilerRouteIntegrityReviewNeverUsesPollExhaustionOrReleasesHold(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*videoReconcilerHarness)
+		code   string
+	}{
+		{name: "stored account mismatch", mutate: func(h *videoReconcilerHarness) { h.account.ID++ }, code: videoErrorStoredAccountMismatch},
+		{name: "provider registry missing", mutate: func(h *videoReconcilerHarness) {
+			registry, err := NewVideoProviderRegistry(&fakeVideoReconcileProvider{name: PlatformGrok})
+			require.NoError(t, err)
+			h.reconciler.providers = registry
+		}, code: videoErrorStoredProviderMissing},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newVideoReconcilerHarness(t)
+			h.task.PollAttempts = h.reconciler.config.MaxPollAttempts + 100
+			tt.mutate(h)
+
+			require.NoError(t, h.reconciler.Process(context.Background(), h.task))
+			require.Zero(t, h.provider.pollCalls)
+			require.Equal(t, 1, h.repo.retryCalls)
+			require.Equal(t, VideoTaskUnknown, h.repo.retry.Status)
+			require.Equal(t, tt.code, h.repo.retry.Error.Code())
+			require.False(t, h.repo.retry.IncrementPollAttempts)
+			require.Zero(t, h.repo.applyCalls)
+			require.Zero(t, h.billing.releaseCalls)
+		})
+	}
+}
+
 func TestVideoReconcilerUsesStoredGrokAccountWithoutSchedulerFailover(t *testing.T) {
 	h := newVideoReconcilerHarness(t)
 	h.task.Platform = PlatformGrok
@@ -184,6 +268,47 @@ func TestVideoReconcilerTerminalUnsettledReplaysStableCapture(t *testing.T) {
 	require.Equal(t, 1, h.billing.captureCalls)
 	require.Equal(t, 1, h.repo.settleCalls)
 	require.Zero(t, h.provider.pollCalls)
+}
+
+func TestVideoReconcilerPerSecondSettlementRequiresPositiveStoredDuration(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration *float64
+	}{
+		{name: "missing duration", duration: nil},
+		{name: "zero duration", duration: videoFloat64Pointer(0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newVideoReconcilerHarness(t)
+			h.task.Status = VideoTaskSucceeded
+			h.task.PricingUnit = videoPricingPerSecond
+			h.task.ResultDurationSeconds = tt.duration
+
+			require.NoError(t, h.reconciler.Process(context.Background(), h.task))
+			require.Zero(t, h.billing.captureCalls)
+			require.Zero(t, h.billing.releaseCalls)
+			require.Zero(t, h.repo.settleCalls)
+			require.Equal(t, 1, h.repo.retryCalls)
+			require.Equal(t, VideoTaskSucceeded, h.repo.retry.Status)
+			require.Equal(t, videoErrorSettlementSnapshot, h.repo.retry.Error.Code())
+			require.True(t, h.repo.retry.IncrementSettlementAttempts)
+			require.WithinDuration(t, h.now.Add(24*time.Hour), h.repo.retry.NextPollAt, time.Nanosecond)
+		})
+	}
+
+	t.Run("positive duration captures stored snapshot", func(t *testing.T) {
+		h := newVideoReconcilerHarness(t)
+		h.task.Status = VideoTaskSucceeded
+		h.task.PricingUnit = videoPricingPerSecond
+		h.task.UnitPrice = 0.25
+		h.task.ResultDurationSeconds = videoFloat64Pointer(4)
+
+		require.NoError(t, h.reconciler.Process(context.Background(), h.task))
+		require.Equal(t, []float64{1}, h.billing.capturedAmounts)
+		require.Equal(t, 1, h.repo.settleCalls)
+		require.Zero(t, h.repo.retryCalls)
+	})
 }
 
 func TestVideoReconcilerRenewsLeaseWhileProviderCallIsInFlight(t *testing.T) {
@@ -273,7 +398,7 @@ func newVideoReconcilerHarness(t *testing.T) *videoReconcilerHarness {
 		MaxPollAttempts: 720, UnknownReviewAfterHours: 24,
 	})
 	reconciler.now = func() time.Time { return now }
-	reconciler.jitter = func(d time.Duration) time.Duration { return d }
+	reconciler.jitter = func(_ string, _ int, d time.Duration) time.Duration { return d }
 	reconciler.renewInterval = time.Hour
 	return &videoReconcilerHarness{now: now, task: task, account: account, repo: repo, provider: provider, billing: billing, reconciler: reconciler}
 }
@@ -404,6 +529,7 @@ func (p *fakeVideoReconcileProvider) OpenContent(context.Context, *Account, Vide
 }
 
 func videoTimePointer(value time.Time) *time.Time { return &value }
+func videoFloat64Pointer(value float64) *float64  { return &value }
 func derefVideoString(value *string) string {
 	if value == nil {
 		return ""

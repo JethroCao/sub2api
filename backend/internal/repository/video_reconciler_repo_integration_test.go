@@ -65,6 +65,36 @@ func TestVideoReconcilerRepositoryRenewsOnlyLiveOwnedLease(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrVideoTaskLeaseConflict)
 }
 
+func TestVideoReconcilerRepositoryLeaseClockUsesDatabaseAuthority(t *testing.T) {
+	ctx := context.Background()
+	repoA := NewVideoTaskRepository(integrationDB)
+	repoB := NewVideoTaskRepository(integrationDB)
+	task := createDueVideoTask(t, repoA, "database-lease-clock")
+
+	var databaseNow time.Time
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow))
+	dueBeforeSlowBusinessClock := databaseNow.Add(-48 * time.Hour)
+	_, err := integrationDB.ExecContext(ctx, `UPDATE video_tasks SET next_poll_at = $2 WHERE request_id = $1`, task.RequestID, dueBeforeSlowBusinessClock)
+	require.NoError(t, err)
+
+	// The injected time controls only business due-ness. It must not shorten a
+	// lease or make another replica believe the live lease already expired.
+	slowBusinessClock := databaseNow.Add(-24 * time.Hour)
+	leased, err := repoA.LeaseDue(ctx, "worker-db-clock-a", 1, 2*time.Minute, slowBusinessClock)
+	require.NoError(t, err)
+	active := findLeasedVideoTask(t, leased, task.RequestID)
+	expiresAt := requireVideoTaskTime(t, active.LeaseExpiresAt)
+
+	var databaseAfterLease time.Time
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&databaseAfterLease))
+	require.True(t, expiresAt.After(databaseAfterLease.Add(90*time.Second)), "lease expiry must be based on PostgreSQL clock, got %s after %s", expiresAt, databaseAfterLease)
+	require.True(t, expiresAt.Before(databaseAfterLease.Add(150*time.Second)), "lease expiry must remain bounded by the requested duration")
+
+	other, err := repoB.LeaseDue(ctx, "worker-db-clock-b", 1, time.Minute, databaseAfterLease)
+	require.NoError(t, err)
+	require.Empty(t, other, "a second repository must not steal a DB-live lease despite application clock skew")
+}
+
 func TestVideoReconcilerRepositoryTerminalSettlementRequiresLiveOwnerAndClearsLease(t *testing.T) {
 	ctx := context.Background()
 	repo := NewVideoTaskRepository(integrationDB)
@@ -94,6 +124,34 @@ func TestVideoReconcilerRepositoryTerminalSettlementRequiresLiveOwnerAndClearsLe
 	require.Nil(t, stored.LeaseOwner)
 	require.Nil(t, stored.LeaseExpiresAt)
 	require.Nil(t, stored.NextPollAt)
+}
+
+func TestVideoReconcilerRepositoryFailedAndCancelledSettlementPreservesPollError(t *testing.T) {
+	for _, status := range []service.VideoTaskStatus{service.VideoTaskFailed, service.VideoTaskCancelled} {
+		t.Run(string(status), func(t *testing.T) {
+			ctx := context.Background()
+			repo := NewVideoTaskRepository(integrationDB)
+			task := createDueVideoTask(t, repo, "preserve-poll-error-"+string(status))
+			owner := "worker-preserve-" + string(status)
+			leased, err := repo.LeaseDue(ctx, owner, 1, time.Minute, time.Now().UTC())
+			require.NoError(t, err)
+			active := findLeasedVideoTask(t, leased, task.RequestID)
+			pollError := service.NewVideoTaskError("CONTENT_REJECTED", "", false)
+			terminal, err := repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
+				RequestID: active.RequestID, ExpectedVersion: active.Version, LeaseOwner: owner,
+				Status: status, Error: &pollError, NextPollAt: videoRepoTimePointer(time.Now().UTC()),
+			})
+			require.NoError(t, err)
+			require.NoError(t, repo.MarkSettled(ctx, service.MarkVideoSettledParams{
+				RequestID: terminal.RequestID, ExpectedVersion: terminal.Version, LeaseOwner: owner,
+				SettledAmount: 0, BillingStatus: "released", SettledAt: time.Now().UTC(),
+			}))
+			stored, err := repo.GetByRequestID(ctx, task.RequestID)
+			require.NoError(t, err)
+			require.Equal(t, "CONTENT_REJECTED", videoTaskStringValue(stored.LastErrorCode))
+			require.False(t, stored.LastErrorRetryable)
+		})
+	}
 }
 
 func TestVideoReconcilerRepositoryRecoveryAndRetryHonorLeaseVersion(t *testing.T) {
@@ -156,6 +214,32 @@ func TestVideoReconcilerRepositoryLeasesUnknownWithoutRecoveryTokenForReview(t *
 	require.Equal(t, service.VideoTaskUnknown, active.Status)
 	require.Nil(t, active.ProviderSubmissionToken)
 	require.Nil(t, active.UpstreamTaskID)
+}
+
+func TestVideoReconcilerRepositoryPollExhaustionPreservesAcceptedRouteAndHoldForReview(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	task := createDueVideoTask(t, repo, "poll-exhaustion-review")
+	leased, err := repo.LeaseDue(ctx, "worker-poll-review", 1, time.Minute, time.Now().UTC())
+	require.NoError(t, err)
+	active := findLeasedVideoTask(t, leased, task.RequestID)
+	nextReview := time.Now().UTC().Add(24 * time.Hour)
+	require.NoError(t, repo.ScheduleRetry(ctx, service.ScheduleVideoTaskRetryParams{
+		RequestID: active.RequestID, ExpectedVersion: active.Version, LeaseOwner: "worker-poll-review",
+		Status: service.VideoTaskUnknown, Error: service.NewVideoTaskError("POLL_ATTEMPTS_EXHAUSTED", "", false),
+		NextPollAt: nextReview, IncrementPollAttempts: true, UpdatedAt: time.Now().UTC(),
+	}))
+	stored, err := repo.GetByRequestID(ctx, task.RequestID)
+	require.NoError(t, err)
+	require.Equal(t, service.VideoTaskUnknown, stored.Status)
+	require.Equal(t, active.AccountID, stored.AccountID)
+	require.Equal(t, active.Provider, stored.Provider)
+	require.Equal(t, videoTaskStringValue(active.UpstreamTaskID), videoTaskStringValue(stored.UpstreamTaskID))
+	require.Equal(t, active.FrozenAmount, stored.FrozenAmount)
+	require.Nil(t, stored.SettledAt)
+	require.Nil(t, stored.SettledAmount)
+	require.Equal(t, "held", stored.BillingStatus)
+	require.Equal(t, "POLL_ATTEMPTS_EXHAUSTED", videoTaskStringValue(stored.LastErrorCode))
 }
 
 func TestVideoReconcilerRepositoryBillingReplayAfterCrashIsIdempotent(t *testing.T) {

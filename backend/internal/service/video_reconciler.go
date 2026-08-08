@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"hash/fnv"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,7 +47,7 @@ type VideoReconciler struct {
 	providers     *VideoProviderRegistry
 	config        config.VideoConfig
 	now           func() time.Time
-	jitter        func(time.Duration) time.Duration
+	jitter        func(string, int, time.Duration) time.Duration
 	leaseDuration time.Duration
 	renewInterval time.Duration
 }
@@ -63,7 +65,7 @@ func NewVideoReconciler(
 	}
 	return &VideoReconciler{
 		repo: repo, accounts: accounts, billing: billing, providers: providers, config: cfg,
-		now: time.Now, jitter: func(value time.Duration) time.Duration { return value },
+		now: time.Now, jitter: deterministicVideoRetryJitter,
 		leaseDuration: leaseDuration, renewInterval: leaseDuration / 3,
 	}
 }
@@ -153,7 +155,10 @@ func (r *VideoReconciler) recoverSubmission(ctx context.Context, task VideoTask)
 func (r *VideoReconciler) poll(ctx context.Context, task VideoTask) error {
 	account, provider, taskError := r.storedRoute(ctx, task)
 	if taskError.Code() != "" {
-		return r.schedulePollRetryOrFail(ctx, task, taskError)
+		return r.schedulePollReview(ctx, task, taskError, false)
+	}
+	if r.pollAttemptsExhausted(task.PollAttempts) {
+		return r.schedulePollReview(ctx, task, NewVideoTaskError(videoErrorPollAttemptsExhausted, "", false), false)
 	}
 	var result VideoPollResult
 	err := r.withLeaseRenewal(ctx, task, func(callCtx context.Context) error {
@@ -166,6 +171,9 @@ func (r *VideoReconciler) poll(ctx context.Context, task VideoTask) error {
 	}
 	if !validVideoPollTransitionStatus(result.Status) {
 		return r.handlePollError(ctx, task, NewVideoProviderError(502, "provider_contract_error", false, false, nil))
+	}
+	if !IsTerminalVideoTaskStatus(result.Status) && r.pollAttemptsExhausted(task.PollAttempts+1) {
+		return r.schedulePollReview(ctx, task, NewVideoTaskError(videoErrorPollAttemptsExhausted, "", false), true)
 	}
 
 	now := r.currentTime()
@@ -214,13 +222,27 @@ func (r *VideoReconciler) handlePollError(ctx context.Context, task VideoTask, e
 }
 
 func (r *VideoReconciler) schedulePollRetryOrFail(ctx context.Context, task VideoTask, taskError VideoTaskError) error {
-	if r.config.MaxPollAttempts <= 0 || task.PollAttempts+1 >= r.config.MaxPollAttempts {
-		return r.terminalizePollFailure(ctx, task, NewVideoTaskError(videoErrorPollAttemptsExhausted, "", false))
+	if r.pollAttemptsExhausted(task.PollAttempts + 1) {
+		return r.schedulePollReview(ctx, task, NewVideoTaskError(videoErrorPollAttemptsExhausted, "", false), true)
 	}
+	now := r.currentTime()
 	return r.repo.ScheduleRetry(ctx, ScheduleVideoTaskRetryParams{
 		RequestID: task.RequestID, ExpectedVersion: task.Version, LeaseOwner: valueOrEmptyVideoString(task.LeaseOwner),
-		Status: task.Status, Error: taskError, NextPollAt: r.currentTime().Add(r.retryDelay(task.PollAttempts)),
-		IncrementPollAttempts: true, UpdatedAt: r.currentTime(),
+		Status: task.Status, Error: taskError, NextPollAt: now.Add(r.retryDelay(task.RequestID, task.PollAttempts)),
+		IncrementPollAttempts: true, UpdatedAt: now,
+	})
+}
+
+func (r *VideoReconciler) pollAttemptsExhausted(attempts int) bool {
+	return r.config.MaxPollAttempts <= 0 || attempts >= r.config.MaxPollAttempts
+}
+
+func (r *VideoReconciler) schedulePollReview(ctx context.Context, task VideoTask, taskError VideoTaskError, incrementPoll bool) error {
+	now := r.currentTime()
+	return r.repo.ScheduleRetry(ctx, ScheduleVideoTaskRetryParams{
+		RequestID: task.RequestID, ExpectedVersion: task.Version, LeaseOwner: valueOrEmptyVideoString(task.LeaseOwner),
+		Status: VideoTaskUnknown, Error: taskError, NextPollAt: now.Add(r.reviewDelay()),
+		IncrementPollAttempts: incrementPoll, UpdatedAt: now,
 	})
 }
 
@@ -257,7 +279,7 @@ func (r *VideoReconciler) settle(ctx context.Context, task VideoTask) error {
 	case VideoTaskSucceeded:
 		amount, discrepancy, err := storedVideoSettlementAmount(task)
 		if err != nil {
-			return r.scheduleSettlementRetry(ctx, task, NewVideoTaskError(videoErrorSettlementSnapshot, "", true))
+			return r.scheduleSettlementReview(ctx, task, NewVideoTaskError(videoErrorSettlementSnapshot, "", false))
 		}
 		billingErr = r.withLeaseRenewal(ctx, task, func(callCtx context.Context) error {
 			return r.billing.Capture(callCtx, task, amount)
@@ -281,21 +303,34 @@ func (r *VideoReconciler) scheduleSettlementRetry(ctx context.Context, task Vide
 	now := r.currentTime()
 	return r.repo.ScheduleRetry(ctx, ScheduleVideoTaskRetryParams{
 		RequestID: task.RequestID, ExpectedVersion: task.Version, LeaseOwner: valueOrEmptyVideoString(task.LeaseOwner),
-		Status: task.Status, Error: taskError, NextPollAt: now.Add(r.retryDelay(task.SettlementAttempts)),
+		Status: task.Status, Error: taskError, NextPollAt: now.Add(r.retryDelay(task.RequestID, task.SettlementAttempts)),
+		IncrementSettlementAttempts: true, UpdatedAt: now,
+	})
+}
+
+func (r *VideoReconciler) scheduleSettlementReview(ctx context.Context, task VideoTask, taskError VideoTaskError) error {
+	now := r.currentTime()
+	return r.repo.ScheduleRetry(ctx, ScheduleVideoTaskRetryParams{
+		RequestID: task.RequestID, ExpectedVersion: task.Version, LeaseOwner: valueOrEmptyVideoString(task.LeaseOwner),
+		Status: task.Status, Error: taskError, NextPollAt: now.Add(r.reviewDelay()),
 		IncrementSettlementAttempts: true, UpdatedAt: now,
 	})
 }
 
 func (r *VideoReconciler) scheduleRecoveryReview(ctx context.Context, task VideoTask, taskError VideoTaskError) error {
 	now := r.currentTime()
-	delay := time.Duration(r.config.UnknownReviewAfterHours) * time.Hour
-	if delay <= 0 {
-		delay = 24 * time.Hour
-	}
 	return r.repo.ScheduleRetry(ctx, ScheduleVideoTaskRetryParams{
 		RequestID: task.RequestID, ExpectedVersion: task.Version, LeaseOwner: valueOrEmptyVideoString(task.LeaseOwner),
-		Status: VideoTaskUnknown, Error: taskError, NextPollAt: now.Add(delay), UpdatedAt: now,
+		Status: VideoTaskUnknown, Error: taskError, NextPollAt: now.Add(r.reviewDelay()), UpdatedAt: now,
 	})
+}
+
+func (r *VideoReconciler) reviewDelay() time.Duration {
+	delay := time.Duration(r.config.UnknownReviewAfterHours) * time.Hour
+	if delay <= 0 {
+		return 24 * time.Hour
+	}
+	return delay
 }
 
 func (r *VideoReconciler) storedRoute(ctx context.Context, task VideoTask) (*Account, VideoProvider, VideoTaskError) {
@@ -378,7 +413,7 @@ func (r *VideoReconciler) withLeaseRenewal(ctx context.Context, task VideoTask, 
 	}
 }
 
-func (r *VideoReconciler) retryDelay(attempt int) time.Duration {
+func (r *VideoReconciler) retryDelay(requestID string, attempt int) time.Duration {
 	base := time.Duration(r.config.RetryBaseSeconds) * time.Second
 	maximum := time.Duration(r.config.RetryMaxSeconds) * time.Second
 	if base <= 0 {
@@ -402,12 +437,29 @@ func (r *VideoReconciler) retryDelay(attempt int) time.Duration {
 		delay = maximum
 	}
 	if r.jitter != nil {
-		delay = r.jitter(delay)
+		delay = r.jitter(requestID, attempt, delay)
 	}
-	if delay < 0 {
-		return 0
+	if delay < base {
+		return base
+	}
+	if delay > maximum {
+		return maximum
 	}
 	return delay
+}
+
+func deterministicVideoRetryJitter(requestID string, attempt int, delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return delay
+	}
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(requestID))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(strconv.Itoa(attempt)))
+	// Spread each task/attempt deterministically across 80%-120% of the
+	// exponential delay, so process restarts do not synchronize retries.
+	unit := float64(hash.Sum64()>>11) / float64(uint64(1)<<53)
+	return time.Duration(float64(delay) * (0.8 + 0.4*unit))
 }
 
 func (r *VideoReconciler) pollInterval() time.Duration {
@@ -434,7 +486,7 @@ func storedVideoSettlementAmount(task VideoTask) (float64, bool, error) {
 	switch task.PricingUnit {
 	case videoPricingPerRequest:
 	case videoPricingPerSecond:
-		if task.ResultDurationSeconds == nil || *task.ResultDurationSeconds < 0 || math.IsNaN(*task.ResultDurationSeconds) || math.IsInf(*task.ResultDurationSeconds, 0) {
+		if task.ResultDurationSeconds == nil || *task.ResultDurationSeconds <= 0 || math.IsNaN(*task.ResultDurationSeconds) || math.IsInf(*task.ResultDurationSeconds, 0) {
 			return 0, false, ErrVideoTaskInvalidRequest
 		}
 		units = *task.ResultDurationSeconds

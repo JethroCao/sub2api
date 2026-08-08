@@ -11,8 +11,40 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVideoSubmitDisabledProviderStopsBeforeQuoteReserveScheduleOrUpstream(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform string
+		provider string
+	}{
+		{name: "grok", platform: PlatformGrok, provider: PlatformGrok},
+		{name: "seedance", platform: PlatformVideo, provider: VideoProviderSeedance},
+		{name: "kling", platform: PlatformVideo, provider: VideoProviderKling},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := newVideoSubmitHarness(t)
+			deps.service.videoConfig = config.VideoConfig{Enabled: true}
+			command := deps.command()
+			command.Platform = tt.platform
+			command.Provider = tt.provider
+			command.Group.Platform = tt.platform
+
+			_, err := deps.service.Submit(context.Background(), command)
+
+			require.ErrorIs(t, err, ErrVideoProviderDisabled)
+			require.Zero(t, deps.pricing.calls)
+			require.Zero(t, deps.submissions.reserveCalls)
+			require.Zero(t, deps.scheduler.selectCalls)
+			require.Zero(t, deps.provider.submitCalls)
+			require.Empty(t, deps.order)
+		})
+	}
+}
 
 func TestVideoSubmitRejectsUnsupportedBeforeHold(t *testing.T) {
 	deps := newVideoSubmitHarness(t)
@@ -29,6 +61,7 @@ func TestVideoSubmitRejectsUnsupportedBeforeHold(t *testing.T) {
 
 func TestVideoSubmitRejectsGrokBeforeQuoteOrHold(t *testing.T) {
 	deps := newVideoSubmitHarness(t)
+	deps.service.videoConfig.GrokEnabled = true
 	command := deps.command()
 	command.Group.Platform = PlatformGrok
 	command.Platform = PlatformGrok
@@ -622,6 +655,7 @@ func newVideoSubmitHarness(t *testing.T) *videoSubmitHarness {
 		h.capabilities,
 		h.scheduler,
 		h.subscriptions,
+		config.VideoConfig{Enabled: true, SeedanceEnabled: true},
 	)
 	h.service.now = func() time.Time { return h.now }
 	h.service.newSubmissionToken = func() (string, error) { return "submission-token-safe", nil }

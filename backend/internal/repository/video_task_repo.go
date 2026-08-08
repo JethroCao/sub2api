@@ -376,9 +376,10 @@ func (r *videoTaskRepository) LeaseDue(ctx context.Context, owner string, limit 
 	}
 	defer func() { _ = tx.Rollback() }()
 	rows, err := tx.QueryContext(ctx, `
-WITH due AS (
-    SELECT id
-    FROM video_tasks
+WITH db_clock AS MATERIALIZED (SELECT clock_timestamp() AS now),
+due AS (
+    SELECT video_tasks.id
+    FROM video_tasks, db_clock
     WHERE (
           (
               status IN ('succeeded', 'failed', 'cancelled')
@@ -398,16 +399,16 @@ WITH due AS (
               AND next_poll_at IS NOT NULL AND next_poll_at <= $3
           )
       )
-      AND (lease_expires_at IS NULL OR lease_expires_at <= $3)
+      AND (lease_expires_at IS NULL OR lease_expires_at <= db_clock.now)
     ORDER BY COALESCE(next_poll_at, finished_at, updated_at, created_at) ASC, id ASC
     LIMIT $2
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF video_tasks SKIP LOCKED
 )
 UPDATE video_tasks AS task
-SET lease_owner = $1, lease_expires_at = $4, updated_at = $3, version = task.version + 1
-FROM due
+SET lease_owner = $1, lease_expires_at = db_clock.now + $4::bigint * INTERVAL '1 microsecond', updated_at = $3, version = task.version + 1
+FROM due, db_clock
 WHERE task.id = due.id
-RETURNING `+prefixedVideoTaskColumns("task"), owner, limit, now, now.Add(lease))
+RETURNING `+prefixedVideoTaskColumns("task"), owner, limit, now, lease.Microseconds())
 	if err != nil {
 		return nil, err
 	}
@@ -604,7 +605,7 @@ WHERE request_id = $1 AND version = $2 AND lease_owner = $3
   AND lease_expires_at > clock_timestamp()
   AND (
       status = $4
-      OR (status = 'submitting' AND $4 = 'unknown')
+      OR (status IN ('submitting', 'submitted', 'queued', 'running') AND $4 = 'unknown')
   )`, params.RequestID, params.ExpectedVersion, params.LeaseOwner, params.Status,
 		params.NextPollAt, params.Error.Code(), params.Error.Message(), params.Error.Retryable(),
 		params.IncrementPollAttempts, params.IncrementSettlementAttempts, params.UpdatedAt)
@@ -684,8 +685,10 @@ func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.Ma
 UPDATE video_tasks
 SET settled_amount = ROUND($3::numeric, 8), billing_status = $4, billing_reference = $5,
     settlement_attempts = settlement_attempts + 1, settled_at = COALESCE(settled_at, $6),
-	last_error_code = NULLIF($8, ''), last_error_message = NULLIF($9, ''),
-	last_error_retryable = $10, next_poll_at = NULL,
+	last_error_code = CASE WHEN $8 = '' THEN last_error_code ELSE NULLIF($8, '') END,
+	last_error_message = CASE WHEN $8 = '' THEN last_error_message ELSE NULLIF($9, '') END,
+	last_error_retryable = CASE WHEN $8 = '' THEN last_error_retryable ELSE $10 END,
+	next_poll_at = NULL,
 	lease_owner = NULL, lease_expires_at = NULL,
 	version = version + 1, updated_at = $6
 WHERE request_id = $1 AND version = $2 AND status IN ('succeeded', 'failed', 'cancelled')
