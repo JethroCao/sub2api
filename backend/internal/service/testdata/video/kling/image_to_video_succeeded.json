@@ -1,0 +1,33 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "req_example",
+  "data": {
+    "task_id": "kling_task_example",
+    "task_status": "succeed",
+    "task_status_msg": "",
+    "task_info": {
+      "external_task_id": "submit_example"
+    },
+    "task_result": {
+      "videos": [
+        {
+          "id": "video_example",
+          "url": "https://cdn.example.com/video.mp4",
+          "watermark_url": "https://cdn.example.com/video-watermarked.mp4",
+          "duration": "5"
+        }
+      ]
+    },
+    "watermark_info": {
+      "enabled": false
+    },
+    "final_unit_deduction": "1",
+    "final_balance_deduction": {
+      "quota": "1",
+      "list_price": "1"
+    },
+    "created_at": 1800000000000,
+    "updated_at": 1800000005000
+  }
+}

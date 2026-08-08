@@ -795,7 +795,7 @@ func (r *videoSubmitTaskRepository) MarkSubmitted(ctx context.Context, params Ma
 	task.UpstreamStatus = videoSubmitStringPtr(params.UpstreamStatus)
 	task.NextPollAt = params.NextPollAt
 	task.SubmittedAt = &params.SubmittedAt
-	task.RequestPayload = nil
+	task.RequestPayload = params.RequestPayload.Bytes()
 	task.Version++
 	return r.markSubmittedErr
 }
@@ -965,7 +965,7 @@ func (p *videoSubmitProvider) Submit(_ context.Context, _ *Account, _ CanonicalV
 func (p *videoSubmitProvider) RecoverSubmission(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, bool, error) {
 	panic("unexpected recovery")
 }
-func (p *videoSubmitProvider) Poll(context.Context, *Account, string) (VideoPollResult, error) {
+func (p *videoSubmitProvider) Poll(context.Context, *Account, VideoTask) (VideoPollResult, error) {
 	panic("unexpected poll")
 }
 func (p *videoSubmitProvider) OpenContent(context.Context, *Account, VideoTask) (io.ReadCloser, http.Header, int64, error) {

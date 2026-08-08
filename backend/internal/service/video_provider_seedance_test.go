@@ -123,7 +123,8 @@ func TestSeedanceProviderSubmitUsesArkTaskAPI(t *testing.T) {
 // response shape.
 func TestSeedanceProviderPollMapsSucceeded(t *testing.T) {
 	p := newSeedanceProvider(fixtureHTTPUpstream(t, "testdata/video/seedance/get_succeeded.json"))
-	got, err := p.Poll(context.Background(), seedanceAccount(), "cgt-2026-example")
+	taskID := "cgt-2026-example"
+	got, err := p.Poll(context.Background(), seedanceAccount(), VideoTask{UpstreamTaskID: &taskID})
 	require.NoError(t, err)
 	require.Equal(t, VideoTaskSucceeded, got.Status)
 	require.Equal(t, "https://example.volces.com/result.mp4", got.ResultURL)
@@ -240,7 +241,8 @@ func TestSeedanceProviderPollMapsOfficialStatuses(t *testing.T) {
 				upstream = &seedanceFixtureUpstream{response: seedanceResponse(http.StatusOK, tt.body)}
 			}
 			p := newSeedanceProvider(upstream)
-			got, err := p.Poll(context.Background(), seedanceAccount(), "cgt-2026-example")
+			taskID := "cgt-2026-example"
+			got, err := p.Poll(context.Background(), seedanceAccount(), VideoTask{UpstreamTaskID: &taskID})
 			require.NoError(t, err)
 			require.Equal(t, tt.want, got.Status)
 		})
@@ -264,7 +266,8 @@ func TestSeedanceProviderRejectsMalformedResponsesAndClosesBodies(t *testing.T) 
 		{
 			name: "poll without status",
 			call: func(p *SeedanceVideoProvider) error {
-				_, err := p.Poll(context.Background(), seedanceAccount(), "cgt-2026-example")
+				taskID := "cgt-2026-example"
+				_, err := p.Poll(context.Background(), seedanceAccount(), VideoTask{UpstreamTaskID: &taskID})
 				return err
 			},
 		},
@@ -355,7 +358,8 @@ func TestSeedanceModelCapabilityCatalogIsExplicitAndFailClosed(t *testing.T) {
 }
 
 func TestSeedanceProviderPollRejectsEmptyTaskID(t *testing.T) {
-	_, err := newSeedanceProvider(fixtureHTTPUpstream(t, "testdata/video/seedance/get_queued.json")).Poll(context.Background(), seedanceAccount(), " ")
+	emptyTaskID := " "
+	_, err := newSeedanceProvider(fixtureHTTPUpstream(t, "testdata/video/seedance/get_queued.json")).Poll(context.Background(), seedanceAccount(), VideoTask{UpstreamTaskID: &emptyTaskID})
 	var providerErr VideoProviderError
 	require.ErrorAs(t, err, &providerErr)
 	require.Equal(t, "invalid_request", providerErr.Code)

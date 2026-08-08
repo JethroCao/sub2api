@@ -1,0 +1,14 @@
+{
+  "code": 0,
+  "message": "success",
+  "request_id": "req_example",
+  "data": {
+    "task_id": "kling_task_example",
+    "task_info": {
+      "external_task_id": "submit_example"
+    },
+    "task_status": "submitted",
+    "created_at": 1800000000000,
+    "updated_at": 1800000000000
+  }
+}

@@ -232,7 +232,8 @@ func TestGrokVideoProviderPollMapsUpstreamStatus(t *testing.T) {
 			upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, tt.body)}}
 			provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 
-			got, err := provider.Poll(context.Background(), grokAPIKeyAccount(), "up_123")
+			taskID := "up_123"
+			got, err := provider.Poll(context.Background(), grokAPIKeyAccount(), VideoTask{UpstreamTaskID: &taskID})
 
 			require.NoError(t, err)
 			require.Equal(t, tt.status, got.Status)
@@ -254,7 +255,8 @@ func TestGrokVideoProviderPollRejectsRedirectStatusResponse(t *testing.T) {
 	}}}
 	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 
-	_, err := provider.Poll(context.Background(), grokAPIKeyAccount(), "up_123")
+	taskID := "up_123"
+	_, err := provider.Poll(context.Background(), grokAPIKeyAccount(), VideoTask{UpstreamTaskID: &taskID})
 
 	var providerErr VideoProviderError
 	require.ErrorAs(t, err, &providerErr)

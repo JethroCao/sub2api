@@ -40,6 +40,25 @@ func TestMinimizedVideoPayloadAcceptsOnlyAllowlistedSnapshotFields(t *testing.T)
 	}
 }
 
+func TestMinimizedVideoPayloadAcceptsOnlyStrictKlingRouteMetadata(t *testing.T) {
+	for _, kind := range []string{klingTaskKindTextToVideo, klingTaskKindImageToVideo, klingTaskKindVideoExtend} {
+		payload, err := NewMinimizedVideoPayload(map[string]any{
+			"provider_task_kind": kind,
+			"video_id":           "video_example",
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, payload.Bytes())
+	}
+	for _, value := range []map[string]any{
+		{"provider_task_kind": "unknown"},
+		{"video_id": "https://example.com/video.mp4"},
+		{"video_id": ""},
+	} {
+		_, err := NewMinimizedVideoPayload(value)
+		require.ErrorIs(t, err, ErrVideoTaskUnsafePayload)
+	}
+}
+
 func TestMinimizedVideoPayloadRejectsEncodedUploadStrings(t *testing.T) {
 	encodedUpload := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xff}, 1024))
 	_, err := NewMinimizedVideoPayload(map[string]any{"prompt": encodedUpload})

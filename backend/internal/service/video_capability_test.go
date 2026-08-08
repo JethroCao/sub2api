@@ -34,7 +34,7 @@ func (p videoProviderRegistryStub) Submit(context.Context, *Account, CanonicalVi
 func (p videoProviderRegistryStub) RecoverSubmission(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, bool, error) {
 	return VideoSubmitResult{}, false, nil
 }
-func (p videoProviderRegistryStub) Poll(context.Context, *Account, string) (VideoPollResult, error) {
+func (p videoProviderRegistryStub) Poll(context.Context, *Account, VideoTask) (VideoPollResult, error) {
 	return VideoPollResult{}, nil
 }
 func (p videoProviderRegistryStub) OpenContent(context.Context, *Account, VideoTask) (io.ReadCloser, http.Header, int64, error) {

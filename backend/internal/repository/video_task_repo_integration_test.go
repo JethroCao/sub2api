@@ -674,6 +674,36 @@ func TestVideoTaskRepositoryMarkSubmittedClearsPayloadAndRejectsStaleVersion(t *
 	require.Empty(t, stored.RequestPayload)
 }
 
+func TestVideoTaskRepositoryMarkSubmittedRetainsOnlyKlingRouteHint(t *testing.T) {
+	ctx := context.Background()
+	repo := NewVideoTaskRepository(integrationDB)
+	params := videoTaskCreateParams(t, "kling-submit", "")
+	params.Provider = service.VideoProviderKling
+	task, _, err := repo.CreateOrGet(ctx, params)
+	require.NoError(t, err)
+	cleanupVideoTask(t, task.RequestID)
+
+	require.NoError(t, repo.MarkSubmitting(ctx, task.RequestID, task.Version, "submit-token-kling"))
+	pollPayload, err := service.NewMinimizedVideoPayload(map[string]any{
+		"provider_task_kind": "image2video",
+	})
+	require.NoError(t, err)
+	nextPoll := time.Now().Add(time.Minute).UTC()
+	require.NoError(t, repo.MarkSubmitted(ctx, service.MarkVideoSubmittedParams{
+		RequestID:       task.RequestID,
+		ExpectedVersion: task.Version + 1,
+		UpstreamTaskID:  "kling-task-accepted",
+		UpstreamStatus:  "submitted",
+		RequestPayload:  pollPayload,
+		NextPollAt:      &nextPoll,
+		SubmittedAt:     time.Now().UTC(),
+	}))
+
+	stored, err := repo.GetByRequestID(ctx, task.RequestID)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"provider_task_kind":"image2video"}`, string(stored.RequestPayload))
+}
+
 func TestVideoTaskRepositoryApplyPollResultUsesOptimisticVersion(t *testing.T) {
 	ctx := context.Background()
 	repo := NewVideoTaskRepository(integrationDB)

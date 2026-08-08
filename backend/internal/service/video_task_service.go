@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -212,11 +213,13 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 		nextPollAt = &next
 	}
 	submittedAt := s.currentTime()
+	pollPayload := minimizedVideoPollPayload(command.Provider, command.Request)
 	err = s.tasks.MarkSubmitted(ctx, MarkVideoSubmittedParams{
 		RequestID:       task.RequestID,
 		ExpectedVersion: task.Version,
 		UpstreamTaskID:  strings.TrimSpace(result.UpstreamTaskID),
 		UpstreamStatus:  strings.TrimSpace(result.UpstreamStatus),
+		RequestPayload:  pollPayload,
 		NextPollAt:      nextPollAt,
 		SubmittedAt:     submittedAt,
 	})
@@ -230,7 +233,7 @@ func (s *VideoTaskService) Submit(ctx context.Context, command VideoSubmitComman
 	}
 	task.NextPollAt = nextPollAt
 	task.SubmittedAt = &submittedAt
-	task.RequestPayload = nil
+	task.RequestPayload = pollPayload.Bytes()
 	task.Version++
 	return s.refreshTaskOrFallback(ctx, task), nil
 }
@@ -615,6 +618,12 @@ func canonicalVideoProviderOptions(provider string, raw json.RawMessage) (json.R
 				return nil, ErrVideoInvalidRequest
 			}
 			canonical[name] = decoded
+		case videoProviderOptionNumber:
+			var decoded float64
+			if err := json.Unmarshal(value, &decoded); err != nil || math.IsNaN(decoded) || math.IsInf(decoded, 0) {
+				return nil, ErrVideoInvalidRequest
+			}
+			canonical[name] = decoded
 		default:
 			return nil, ErrVideoInvalidRequest
 		}
@@ -657,6 +666,13 @@ func hashCanonicalVideoRequest(request CanonicalVideoRequest) (string, error) {
 
 func minimizedVideoRecoveryPayload(provider string, request CanonicalVideoRequest) MinimizedVideoPayload {
 	payload := make(map[string]any)
+	if provider == VideoProviderKling {
+		kind, err := klingProviderTaskKind(request)
+		if err != nil {
+			return MinimizedVideoPayload{}
+		}
+		addSafeVideoRecoveryField(payload, "provider_task_kind", kind)
+	}
 	addSafeVideoRecoveryField(payload, "prompt", request.Prompt)
 	if request.DurationSeconds > 0 {
 		addSafeVideoRecoveryField(payload, "duration_seconds", request.DurationSeconds)
@@ -677,6 +693,11 @@ func minimizedVideoRecoveryPayload(provider string, request CanonicalVideoReques
 	if raw := request.ProviderOptions[provider]; len(raw) > 0 {
 		var options map[string]any
 		if json.Unmarshal(raw, &options) == nil {
+			if provider == VideoProviderKling {
+				if value, ok := options["video_id"]; ok {
+					addSafeVideoRecoveryField(payload, "video_id", value)
+				}
+			}
 			for _, name := range []string{"seed", "watermark", "camera_fixed"} {
 				if value, ok := options[name]; ok {
 					addSafeVideoRecoveryField(payload, name, value)
@@ -689,6 +710,24 @@ func minimizedVideoRecoveryPayload(provider string, request CanonicalVideoReques
 		return MinimizedVideoPayload{}
 	}
 	return minimized
+}
+
+// minimizedVideoPollPayload retains only the routing discriminator needed to
+// query an accepted asynchronous task. Submission recovery data, including
+// prompts, assets, and provider video IDs, must not outlive acceptance.
+func minimizedVideoPollPayload(provider string, request CanonicalVideoRequest) MinimizedVideoPayload {
+	if provider != VideoProviderKling {
+		return MinimizedVideoPayload{}
+	}
+	kind, err := klingProviderTaskKind(request)
+	if err != nil {
+		return MinimizedVideoPayload{}
+	}
+	payload, err := NewMinimizedVideoPayload(map[string]any{"provider_task_kind": kind})
+	if err != nil {
+		return MinimizedVideoPayload{}
+	}
+	return payload
 }
 
 func addSafeVideoRecoveryAsset(payload map[string]any, field string, assets []VideoAsset) {

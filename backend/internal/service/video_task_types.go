@@ -265,6 +265,7 @@ type MarkVideoSubmittedParams struct {
 	ExpectedVersion int64
 	UpstreamTaskID  string
 	UpstreamStatus  string
+	RequestPayload  MinimizedVideoPayload
 	NextPollAt      *time.Time
 	SubmittedAt     time.Time
 }
@@ -364,6 +365,16 @@ func isAllowlistedVideoPayload(value any) bool {
 		case "input_image_ref", "input_video_ref", "first_frame_ref", "last_frame_ref", "source_task_id":
 			ref, ok := value.(string)
 			if !ok || len(ref) == 0 || len(ref) > 512 || strings.ContainsAny(ref, "?&#") || isUnsafeVideoPayloadString(key, ref) {
+				return false
+			}
+		case "video_id":
+			ref, ok := value.(string)
+			if !ok || !klingOpaqueIDPattern.MatchString(ref) || isUnsafeVideoPayloadString(key, ref) {
+				return false
+			}
+		case "provider_task_kind":
+			kind, ok := value.(string)
+			if !ok || (kind != klingTaskKindTextToVideo && kind != klingTaskKindImageToVideo && kind != klingTaskKindVideoExtend) {
 				return false
 			}
 		case "resolution", "aspect_ratio", "audio_mode", "status", "from_status", "to_status",

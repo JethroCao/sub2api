@@ -80,8 +80,11 @@ func (p *SeedanceVideoProvider) RecoverSubmission(context.Context, *Account, Can
 	return VideoSubmitResult{}, false, nil
 }
 
-func (p *SeedanceVideoProvider) Poll(ctx context.Context, account *Account, upstreamTaskID string) (VideoPollResult, error) {
-	upstreamTaskID = strings.TrimSpace(upstreamTaskID)
+func (p *SeedanceVideoProvider) Poll(ctx context.Context, account *Account, task VideoTask) (VideoPollResult, error) {
+	upstreamTaskID := ""
+	if task.UpstreamTaskID != nil {
+		upstreamTaskID = strings.TrimSpace(*task.UpstreamTaskID)
+	}
 	if upstreamTaskID == "" {
 		return VideoPollResult{}, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, errors.New("seedance task ID is required"))
 	}

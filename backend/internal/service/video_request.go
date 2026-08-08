@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -457,6 +458,7 @@ const (
 	videoProviderOptionInteger videoProviderOptionKind = iota + 1
 	videoProviderOptionBoolean
 	videoProviderOptionString
+	videoProviderOptionNumber
 )
 
 func videoProviderOptionSchema(provider string) (map[string]videoProviderOptionKind, bool) {
@@ -467,6 +469,15 @@ func videoProviderOptionSchema(provider string) (map[string]videoProviderOptionK
 			"watermark":         videoProviderOptionBoolean,
 			"return_last_frame": videoProviderOptionBoolean,
 			"service_tier":      videoProviderOptionString,
+		}, true
+	case VideoProviderKling:
+		return map[string]videoProviderOptionKind{
+			"video_id":        videoProviderOptionString,
+			"negative_prompt": videoProviderOptionString,
+			"mode":            videoProviderOptionString,
+			"sound":           videoProviderOptionString,
+			"cfg_scale":       videoProviderOptionNumber,
+			"watermark":       videoProviderOptionBoolean,
 		}, true
 	default:
 		// New namespaces and keys must be added here only after their adapter
@@ -486,6 +497,9 @@ func isValidVideoProviderOption(kind videoProviderOptionKind, raw json.RawMessag
 	case videoProviderOptionString:
 		var value *string
 		return json.Unmarshal(raw, &value) == nil && value != nil && !containsVideoCredential(*value)
+	case videoProviderOptionNumber:
+		var value *float64
+		return json.Unmarshal(raw, &value) == nil && value != nil && !math.IsNaN(*value) && !math.IsInf(*value, 0)
 	default:
 		return false
 	}

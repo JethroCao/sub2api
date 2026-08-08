@@ -81,8 +81,11 @@ func (p *GrokVideoProvider) RecoverSubmission(context.Context, *Account, Canonic
 	return VideoSubmitResult{}, false, nil
 }
 
-func (p *GrokVideoProvider) Poll(ctx context.Context, account *Account, upstreamTaskID string) (VideoPollResult, error) {
-	upstreamTaskID = strings.TrimSpace(upstreamTaskID)
+func (p *GrokVideoProvider) Poll(ctx context.Context, account *Account, task VideoTask) (VideoPollResult, error) {
+	upstreamTaskID := ""
+	if task.UpstreamTaskID != nil {
+		upstreamTaskID = strings.TrimSpace(*task.UpstreamTaskID)
+	}
 	if upstreamTaskID == "" {
 		return VideoPollResult{}, NewVideoProviderError(http.StatusBadRequest, "invalid_request", false, false, errors.New("grok video task ID is required"))
 	}

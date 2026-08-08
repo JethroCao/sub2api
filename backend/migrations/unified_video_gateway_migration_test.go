@@ -80,3 +80,16 @@ func TestUnifiedVideoIdempotencyScopeMigration(t *testing.T) {
 	require.NotContains(t, sql, "DELETE FROM video_tasks")
 	require.NotContains(t, sql, "UPDATE video_tasks")
 }
+
+func TestKlingVideoPollRouteHintMigrationRetainsOnlyStrictDiscriminator(t *testing.T) {
+	migration, err := FS.ReadFile("201_kling_video_poll_route_hint.sql")
+	require.NoError(t, err)
+	sql := string(migration)
+	require.Contains(t, sql, "DROP CONSTRAINT video_tasks_upstream_payload_cleared")
+	require.Contains(t, sql, "provider = 'kling'")
+	require.Contains(t, sql, "request_payload = jsonb_build_object")
+	require.Contains(t, sql, "'text2video', 'image2video'")
+	require.Contains(t, sql, "'video-extend'")
+	require.NotContains(t, sql, "prompt")
+	require.NotContains(t, sql, "video_id")
+}

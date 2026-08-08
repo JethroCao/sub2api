@@ -90,7 +90,7 @@ type VideoProvider interface {
 	Capabilities() VideoProviderCapabilities
 	Submit(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, error)
 	RecoverSubmission(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, bool, error)
-	Poll(context.Context, *Account, string) (VideoPollResult, error)
+	Poll(context.Context, *Account, VideoTask) (VideoPollResult, error)
 	OpenContent(context.Context, *Account, VideoTask) (io.ReadCloser, http.Header, int64, error)
 }
 

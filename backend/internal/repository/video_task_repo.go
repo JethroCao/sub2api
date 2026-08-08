@@ -228,11 +228,11 @@ func (r *videoTaskRepository) MarkSubmitted(ctx context.Context, params service.
 	result, err := tx.ExecContext(ctx, `
 UPDATE video_tasks
 SET status = 'submitted', upstream_task_id = $3, upstream_status = NULLIF($4, ''),
-    request_payload = NULL, next_poll_at = $5, submitted_at = COALESCE(submitted_at, $6),
+    request_payload = $5, next_poll_at = $6, submitted_at = COALESCE(submitted_at, $7),
     last_error_code = NULL, last_error_message = NULL, last_error_retryable = FALSE,
-    version = version + 1, updated_at = $6
+    version = version + 1, updated_at = $7
 WHERE request_id = $1 AND version = $2 AND status = 'submitting'`, params.RequestID, params.ExpectedVersion,
-		params.UpstreamTaskID, params.UpstreamStatus, params.NextPollAt, params.SubmittedAt)
+		params.UpstreamTaskID, params.UpstreamStatus, videoPayloadSQLValue(params.RequestPayload), params.NextPollAt, params.SubmittedAt)
 	if err != nil {
 		return err
 	}
