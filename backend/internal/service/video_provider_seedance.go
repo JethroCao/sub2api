@@ -76,7 +76,7 @@ func (p *SeedanceVideoProvider) Submit(ctx context.Context, account *Account, re
 // RecoverSubmission does not issue an Ark list query: the verified task API
 // has no server-side submission-token field to correlate safely. Reporting no
 // match prevents ambiguous sent submissions from being charged twice.
-func (p *SeedanceVideoProvider) RecoverSubmission(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, bool, error) {
+func (p *SeedanceVideoProvider) RecoverSubmission(context.Context, *Account, VideoTask, string) (VideoSubmitResult, bool, error) {
 	return VideoSubmitResult{}, false, nil
 }
 

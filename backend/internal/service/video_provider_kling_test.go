@@ -389,28 +389,74 @@ func TestNormalizeVideoRequestAcceptsOnlyKlingProviderOptionAllowlist(t *testing
 	require.ErrorIs(t, err, ErrVideoInvalidRequest)
 }
 
-func TestKlingProviderRecoverSubmissionUsesExternalTaskID(t *testing.T) {
+func TestKlingProviderRecoveryContractGateDoesNotQueryUpstream(t *testing.T) {
 	upstream := newKlingFixtureUpstream(t, "testdata/video/kling/image_to_video_succeeded.json")
-	request := CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "kling-3.0", FirstFrame: []VideoAsset{{URL: "https://example.com/first.png"}}}
-	got, found, err := newTestKlingProvider(upstream, newKlingFixedClock(time.Unix(1_800_000_000, 0))).RecoverSubmission(context.Background(), klingAccount(), request, "submit_example")
+	task := klingPollTask(VideoOperationGeneration, klingTaskKindImageToVideo, "kling_task_example")
+	got, found, err := newTestKlingProvider(upstream, newKlingFixedClock(time.Unix(1_800_000_000, 0))).RecoverSubmission(context.Background(), klingAccount(), task, "submit_example")
 	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, "kling_task_example", got.UpstreamTaskID)
-	require.Equal(t, VideoTaskSucceeded, got.Status)
-	req, _ := upstream.lastRequest(t)
-	require.Equal(t, "/v1/videos/image2video/submit_example", req.URL.Path)
-}
-
-func TestKlingProviderRecoverSubmissionRejectsMismatchedExternalTaskID(t *testing.T) {
-	upstream := newKlingFixtureUpstream(t, "testdata/video/kling/text_to_video_succeeded.json")
-	got, found, err := newTestKlingProvider(upstream, newKlingFixedClock(time.Unix(1_800_000_000, 0))).RecoverSubmission(context.Background(), klingAccount(), CanonicalVideoRequest{Operation: VideoOperationGeneration, Model: "kling-3.0", Prompt: "text"}, "different")
-	var providerErr VideoProviderError
-	require.ErrorAs(t, err, &providerErr)
-	require.Equal(t, "provider_contract_error", providerErr.Code)
-	require.True(t, providerErr.Retryable)
-	require.False(t, providerErr.Ambiguous)
 	require.False(t, found)
 	require.Zero(t, got)
+	require.Empty(t, upstream.requests)
+}
+
+func TestKlingRecoveryRouteUsesOnlyPersistedHintAfterAssetRedaction(t *testing.T) {
+	tests := []struct {
+		name    string
+		request CanonicalVideoRequest
+		kind    string
+		want    string
+	}{
+		{
+			name: "data image generation",
+			request: CanonicalVideoRequest{
+				Operation:  VideoOperationGeneration,
+				FirstFrame: []VideoAsset{{URL: "data:image/png;base64,aW1hZ2U="}},
+			},
+			kind: klingTaskKindImageToVideo,
+			want: klingImageToVideoPath,
+		},
+		{
+			name: "signed source extension",
+			request: CanonicalVideoRequest{
+				Operation:       VideoOperationExtension,
+				ReferenceVideos: []VideoAsset{{URL: "https://cdn.example.com/source.mp4?signature=private&expires=1800000000"}},
+				ProviderOptions: map[string]json.RawMessage{VideoProviderKling: json.RawMessage(`{"video_id":"source_video_example"}`)},
+			},
+			kind: klingTaskKindVideoExtend,
+			want: klingVideoExtendPath,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recoveryPayload := minimizedVideoRecoveryPayload(VideoProviderKling, tt.request)
+			require.NotContains(t, string(recoveryPayload.Bytes()), "data:image")
+			require.NotContains(t, string(recoveryPayload.Bytes()), "signature")
+			acceptedPayload := minimizedVideoPollPayload(VideoProviderKling, tt.request)
+			require.JSONEq(t, `{"provider_task_kind":"`+tt.kind+`"}`, string(acceptedPayload.Bytes()))
+
+			for _, payload := range []MinimizedVideoPayload{recoveryPayload, acceptedPayload} {
+				restored := VideoTask{Operation: string(tt.request.Operation), RequestPayload: payload.Bytes()}
+				kind, err := klingTaskKindFromDurableTask(restored)
+				require.NoError(t, err)
+				require.Equal(t, tt.want, klingPathForTaskKind(kind))
+			}
+		})
+	}
+}
+
+func TestKlingRecoveryRouteFailsClosedOnMissingMalformedOrConflictingHint(t *testing.T) {
+	tests := []VideoTask{
+		{Operation: string(VideoOperationGeneration)},
+		{Operation: string(VideoOperationGeneration), RequestPayload: []byte(`{`)},
+		{Operation: string(VideoOperationGeneration), RequestPayload: []byte(`{}`)},
+		{Operation: string(VideoOperationGeneration), RequestPayload: []byte(`{"provider_task_kind":"unknown"}`)},
+		{Operation: string(VideoOperationExtension), RequestPayload: []byte(`{"provider_task_kind":"image2video"}`)},
+	}
+	for _, task := range tests {
+		kind, err := klingTaskKindFromDurableTask(task)
+		require.Error(t, err)
+		require.Empty(t, kind)
+	}
 }
 
 func TestKlingProviderRejectsUnsafeAccountBaseURLAndResolvedDestination(t *testing.T) {

@@ -90,6 +90,11 @@ func TestKlingVideoPollRouteHintMigrationRetainsOnlyStrictDiscriminator(t *testi
 	require.Contains(t, sql, "request_payload = jsonb_build_object")
 	require.Contains(t, sql, "'text2video', 'image2video'")
 	require.Contains(t, sql, "'video-extend'")
+	require.Contains(t, sql, "COMMENT ON COLUMN video_tasks.request_payload")
+	require.Contains(t, sql, "submitting")
+	require.Contains(t, sql, "accepted Kling")
+	require.Contains(t, sql, "provider_task_kind")
+	require.Contains(t, sql, "other accepted tasks store NULL")
 	require.NotContains(t, sql, "prompt")
 	require.NotContains(t, sql, "video_id")
 }

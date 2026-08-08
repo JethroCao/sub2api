@@ -20,3 +20,6 @@ ALTER TABLE video_tasks
             )
         )
     );
+
+COMMENT ON COLUMN video_tasks.request_payload IS
+    'While submitting, stores the minimized recovery snapshot; accepted Kling tasks store only provider_task_kind; other accepted tasks store NULL.';

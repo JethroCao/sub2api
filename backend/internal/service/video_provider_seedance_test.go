@@ -327,7 +327,7 @@ func TestSeedanceProviderClassifiesSubmissionFailures(t *testing.T) {
 // query without a verified Ark-side submission-token field.
 func TestSeedanceProviderDoesNotRecoverAmbiguousSubmission(t *testing.T) {
 	upstream := fixtureHTTPUpstream(t, "testdata/video/seedance/create_success.json")
-	got, found, err := newSeedanceProvider(upstream).RecoverSubmission(context.Background(), seedanceAccount(), CanonicalVideoRequest{}, "submit-token")
+	got, found, err := newSeedanceProvider(upstream).RecoverSubmission(context.Background(), seedanceAccount(), VideoTask{}, "submit-token")
 	require.NoError(t, err)
 	require.False(t, found)
 	require.Zero(t, got)

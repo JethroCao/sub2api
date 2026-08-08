@@ -31,7 +31,7 @@ func (p videoProviderRegistryStub) Capabilities() VideoProviderCapabilities {
 func (p videoProviderRegistryStub) Submit(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, error) {
 	return VideoSubmitResult{}, nil
 }
-func (p videoProviderRegistryStub) RecoverSubmission(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, bool, error) {
+func (p videoProviderRegistryStub) RecoverSubmission(context.Context, *Account, VideoTask, string) (VideoSubmitResult, bool, error) {
 	return VideoSubmitResult{}, false, nil
 }
 func (p videoProviderRegistryStub) Poll(context.Context, *Account, VideoTask) (VideoPollResult, error) {

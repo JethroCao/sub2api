@@ -105,40 +105,11 @@ func (p *KlingVideoProvider) Submit(ctx context.Context, account *Account, reque
 	}, nil
 }
 
-func (p *KlingVideoProvider) RecoverSubmission(ctx context.Context, account *Account, request CanonicalVideoRequest, submissionToken string) (VideoSubmitResult, bool, error) {
-	kind, err := klingProviderTaskKind(request)
-	if err != nil {
-		if errors.Is(err, errKlingUnsupportedCapability) {
-			return VideoSubmitResult{}, false, NewVideoProviderError(http.StatusBadRequest, "unsupported_capability", false, false, err)
-		}
-		return VideoSubmitResult{}, false, klingRequestError(err)
-	}
-	submissionToken = strings.TrimSpace(submissionToken)
-	if !klingOpaqueIDPattern.MatchString(submissionToken) {
-		return VideoSubmitResult{}, false, klingRequestError(errors.New("kling submission token is invalid"))
-	}
-	body, statusCode, err := p.doJSON(ctx, account, http.MethodGet, klingPathForTaskKind(kind)+"/"+url.PathEscape(submissionToken), nil)
-	if err != nil {
-		return VideoSubmitResult{}, false, klingPollError(err)
-	}
-	if statusCode == http.StatusNotFound {
-		return VideoSubmitResult{}, false, nil
-	}
-	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return VideoSubmitResult{}, false, klingPollHTTPError(statusCode)
-	}
-	response, err := decodeKlingTaskResponse(body)
-	if err != nil || strings.TrimSpace(response.Data.TaskID) == "" || strings.TrimSpace(response.Data.TaskStatus) == "" {
-		return VideoSubmitResult{}, false, NewVideoProviderError(http.StatusBadGateway, "provider_contract_error", true, false, errors.New("kling recovery response is invalid"))
-	}
-	if strings.TrimSpace(response.Data.TaskInfo.ExternalTaskID) != submissionToken {
-		return VideoSubmitResult{}, false, NewVideoProviderError(http.StatusBadGateway, "provider_contract_error", true, false, errors.New("kling recovery response has mismatched external task ID"))
-	}
-	return VideoSubmitResult{
-		UpstreamTaskID: strings.TrimSpace(response.Data.TaskID),
-		Status:         klingVideoTaskStatus(response.Data.TaskStatus),
-		UpstreamStatus: strings.TrimSpace(response.Data.TaskStatus),
-	}, true, nil
+// RecoverSubmission remains disabled until authenticated paid-task fixtures
+// prove the external_task_id query semantics. Public documentation alone is
+// not sufficient to make an ambiguity-recovery request safe.
+func (p *KlingVideoProvider) RecoverSubmission(context.Context, *Account, VideoTask, string) (VideoSubmitResult, bool, error) {
+	return VideoSubmitResult{}, false, nil
 }
 
 func (p *KlingVideoProvider) Poll(ctx context.Context, account *Account, task VideoTask) (VideoPollResult, error) {

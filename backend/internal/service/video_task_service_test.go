@@ -962,7 +962,7 @@ func (p *videoSubmitProvider) Submit(_ context.Context, _ *Account, _ CanonicalV
 	}
 	return p.submitResult, p.submitErr
 }
-func (p *videoSubmitProvider) RecoverSubmission(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, bool, error) {
+func (p *videoSubmitProvider) RecoverSubmission(context.Context, *Account, VideoTask, string) (VideoSubmitResult, bool, error) {
 	panic("unexpected recovery")
 }
 func (p *videoSubmitProvider) Poll(context.Context, *Account, VideoTask) (VideoPollResult, error) {

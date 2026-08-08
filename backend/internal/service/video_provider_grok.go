@@ -77,7 +77,7 @@ func (p *GrokVideoProvider) Submit(ctx context.Context, account *Account, reques
 // RecoverSubmission intentionally does not query upstream: xAI has no
 // verified client-token recovery endpoint. Returning found=false leaves an
 // ambiguous submission unknown for manual review instead of resubmitting it.
-func (p *GrokVideoProvider) RecoverSubmission(context.Context, *Account, CanonicalVideoRequest, string) (VideoSubmitResult, bool, error) {
+func (p *GrokVideoProvider) RecoverSubmission(context.Context, *Account, VideoTask, string) (VideoSubmitResult, bool, error) {
 	return VideoSubmitResult{}, false, nil
 }
 

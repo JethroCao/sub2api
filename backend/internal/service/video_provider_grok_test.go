@@ -280,7 +280,7 @@ func TestGrokVideoProviderClassifiesFailoverAndDoesNotRecoverAmbiguousSubmission
 	require.True(t, providerErr.Retryable)
 	require.False(t, providerErr.Ambiguous)
 
-	recovered, found, recoverErr := provider.RecoverSubmission(context.Background(), grokAPIKeyAccount(), CanonicalVideoRequest{}, "submit-token")
+	recovered, found, recoverErr := provider.RecoverSubmission(context.Background(), grokAPIKeyAccount(), VideoTask{}, "submit-token")
 	require.NoError(t, recoverErr)
 	require.False(t, found)
 	require.Zero(t, recovered)
