@@ -123,7 +123,7 @@ func TestVideoTaskRepositoryMarkSettledUsesCanonicalNumericCap(t *testing.T) {
 		require.Greater(t, noisy, 0.3)
 		err := repo.MarkSettled(ctx, service.MarkVideoSettledParams{
 			RequestID: task.RequestID, ExpectedVersion: task.Version,
-			SettledAmount: noisy, BillingStatus: "settled",
+			LeaseOwner: videoTaskStringValue(task.LeaseOwner), SettledAmount: noisy, BillingStatus: "settled",
 		})
 		require.NoError(t, err)
 		var canonical bool
@@ -135,7 +135,7 @@ func TestVideoTaskRepositoryMarkSettledUsesCanonicalNumericCap(t *testing.T) {
 		task := createTerminalVideoTaskWithExactHold(t, repo, "settle-rounded-over", "0.30000000")
 		err := repo.MarkSettled(ctx, service.MarkVideoSettledParams{
 			RequestID: task.RequestID, ExpectedVersion: task.Version,
-			SettledAmount: 0.300000005, BillingStatus: "settled",
+			LeaseOwner: videoTaskStringValue(task.LeaseOwner), SettledAmount: 0.300000005, BillingStatus: "settled",
 		})
 		require.ErrorIs(t, err, service.ErrVideoFinalCostExceedsHold)
 		assertVideoTaskSettlementUnchanged(t, task.RequestID, task.Version)
@@ -147,7 +147,7 @@ func TestVideoTaskRepositoryMarkSettledUsesCanonicalNumericCap(t *testing.T) {
 		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT frozen_amount FROM video_tasks WHERE request_id = $1`, task.RequestID).Scan(&floatRoundTrip))
 		err := repo.MarkSettled(ctx, service.MarkVideoSettledParams{
 			RequestID: task.RequestID, ExpectedVersion: task.Version,
-			SettledAmount: floatRoundTrip, BillingStatus: "settled",
+			LeaseOwner: videoTaskStringValue(task.LeaseOwner), SettledAmount: floatRoundTrip, BillingStatus: "settled",
 		})
 		require.ErrorIs(t, err, service.ErrVideoFinalCostExceedsHold)
 		assertVideoTaskSettlementUnchanged(t, task.RequestID, task.Version)
@@ -160,10 +160,15 @@ func createTerminalVideoTaskWithExactHold(t *testing.T, repo service.VideoTaskRe
 	require.NoError(t, err)
 	cleanupVideoTask(t, task.RequestID)
 	_, err = integrationDB.ExecContext(context.Background(), `
-		UPDATE video_tasks SET status = 'succeeded', frozen_amount = $2::numeric WHERE request_id = $1
+		UPDATE video_tasks SET status = 'succeeded', frozen_amount = $2::numeric,
+		       next_poll_at = clock_timestamp() WHERE request_id = $1
 	`, task.RequestID, hold)
 	require.NoError(t, err)
-	return task
+	owner := "worker-settle-" + label
+	leased, err := repo.LeaseDue(context.Background(), owner, 1, time.Minute, time.Now().UTC().Add(time.Second))
+	require.NoError(t, err)
+	leasedTask := findLeasedVideoTask(t, leased, task.RequestID)
+	return &leasedTask
 }
 
 func assertVideoTaskSettlementUnchanged(t *testing.T, requestID string, version int64) {

@@ -379,18 +379,27 @@ func (r *videoTaskRepository) LeaseDue(ctx context.Context, owner string, limit 
 WITH due AS (
     SELECT id
     FROM video_tasks
-    WHERE status IN ('created', 'submitting', 'submitted', 'queued', 'running', 'unknown')
-      AND (
-          (upstream_task_id IS NOT NULL AND upstream_task_id <> '')
-          OR (status = 'unknown' AND provider_submission_token IS NOT NULL)
-          OR (status = 'created' AND account_id = 0 AND upstream_model = ''
-              AND provider_submission_token IS NULL AND upstream_task_id IS NULL)
-          OR (status = 'submitting' AND account_id > 0 AND upstream_model <> ''
-              AND provider_submission_token IS NOT NULL AND upstream_task_id IS NULL)
+    WHERE (
+          (
+              status IN ('succeeded', 'failed', 'cancelled')
+              AND settled_at IS NULL
+              AND COALESCE(next_poll_at, finished_at, updated_at, created_at) <= $3
+          )
+          OR (
+              status IN ('created', 'submitting', 'submitted', 'queued', 'running', 'unknown')
+              AND (
+                  (upstream_task_id IS NOT NULL AND upstream_task_id <> '')
+                  OR status = 'unknown'
+                  OR (status = 'created' AND account_id = 0 AND upstream_model = ''
+                      AND provider_submission_token IS NULL AND upstream_task_id IS NULL)
+                  OR (status = 'submitting' AND account_id > 0 AND upstream_model <> ''
+                      AND provider_submission_token IS NOT NULL AND upstream_task_id IS NULL)
+              )
+              AND next_poll_at IS NOT NULL AND next_poll_at <= $3
+          )
       )
-      AND next_poll_at IS NOT NULL AND next_poll_at <= $3
       AND (lease_expires_at IS NULL OR lease_expires_at <= $3)
-    ORDER BY next_poll_at ASC, id ASC
+    ORDER BY COALESCE(next_poll_at, finished_at, updated_at, created_at) ASC, id ASC
     LIMIT $2
     FOR UPDATE SKIP LOCKED
 )
@@ -412,13 +421,50 @@ RETURNING `+prefixedVideoTaskColumns("task"), owner, limit, now, now.Add(lease))
 	return tasks, nil
 }
 
-func (r *videoTaskRepository) ApplyPollResult(ctx context.Context, params service.ApplyVideoPollResultParams) error {
+func (r *videoTaskRepository) RenewLease(ctx context.Context, params service.RenewVideoTaskLeaseParams) error {
 	if err := validateVideoRequestID(params.RequestID); err != nil {
 		return err
 	}
+	if params.ExpectedVersion < 0 || strings.TrimSpace(params.LeaseOwner) == "" || params.LeaseDuration <= 0 {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	if params.UpdatedAt.IsZero() {
+		params.UpdatedAt = time.Now().UTC()
+	}
+	result, err := r.db.ExecContext(ctx, `
+UPDATE video_tasks
+SET lease_expires_at = clock_timestamp() + $4::interval, updated_at = $5
+WHERE request_id = $1 AND version = $2 AND lease_owner = $3
+  AND lease_expires_at > clock_timestamp()`, params.RequestID, params.ExpectedVersion,
+		params.LeaseOwner, params.LeaseDuration.String(), params.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 1 {
+		return nil
+	}
+	var version int64
+	var owner sql.NullString
+	if err := r.db.QueryRowContext(ctx, `SELECT version, lease_owner FROM video_tasks WHERE request_id = $1`, params.RequestID).Scan(&version, &owner); err != nil {
+		return translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
+	}
+	if version != params.ExpectedVersion {
+		return service.ErrVideoTaskVersionConflict
+	}
+	return service.ErrVideoTaskLeaseConflict
+}
+
+func (r *videoTaskRepository) ApplyPollResult(ctx context.Context, params service.ApplyVideoPollResultParams) (*service.VideoTask, error) {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(params.LeaseOwner) == "" || !service.IsVideoTaskStatus(params.Status) ||
 		(params.ResultDurationSeconds != nil && !isFiniteNonNegativeVideoAmount(*params.ResultDurationSeconds)) {
-		return service.ErrVideoTaskInvalidRequest
+		return nil, service.ErrVideoTaskInvalidRequest
 	}
 	if params.UpdatedAt.IsZero() {
 		params.UpdatedAt = time.Now().UTC()
@@ -427,9 +473,13 @@ func (r *videoTaskRepository) ApplyPollResult(ctx context.Context, params servic
 		finished := params.UpdatedAt
 		params.FinishedAt = &finished
 	}
+	if service.IsTerminalVideoTaskStatus(params.Status) && params.NextPollAt == nil {
+		next := params.UpdatedAt
+		params.NextPollAt = &next
+	}
 	tx, err := r.begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var current service.VideoTaskStatus
@@ -441,16 +491,16 @@ func (r *videoTaskRepository) ApplyPollResult(ctx context.Context, params servic
 		SELECT status, version, lease_owner, lease_expires_at, clock_timestamp()
 		FROM video_tasks WHERE request_id = $1 FOR UPDATE`, params.RequestID).
 		Scan(&current, &version, &leaseOwner, &leaseExpiresAt, &databaseNow); err != nil {
-		return translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
+		return nil, translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
 	}
 	if version != params.ExpectedVersion {
-		return service.ErrVideoTaskVersionConflict
+		return nil, service.ErrVideoTaskVersionConflict
 	}
 	if !leaseOwner.Valid || leaseOwner.String != params.LeaseOwner || !leaseExpiresAt.Valid || !leaseExpiresAt.Time.After(databaseNow) {
-		return service.ErrVideoTaskLeaseConflict
+		return nil, service.ErrVideoTaskLeaseConflict
 	}
 	if !service.CanApplyVideoPollStatus(current, params.Status) {
-		return service.ErrVideoTaskInvalidTransition
+		return nil, service.ErrVideoTaskInvalidTransition
 	}
 	var errorCode, errorMessage any
 	errorRetryable := false
@@ -459,19 +509,105 @@ func (r *videoTaskRepository) ApplyPollResult(ctx context.Context, params servic
 		errorMessage = nullableString(params.Error.Message())
 		errorRetryable = params.Error.Retryable()
 	}
-	result, err := tx.ExecContext(ctx, `
+	terminal := service.IsTerminalVideoTaskStatus(params.Status)
+	updated, err := scanVideoTask(tx.QueryRowContext(ctx, `
 UPDATE video_tasks
 SET status = $3, upstream_status = NULLIF($4, ''), next_poll_at = $5,
     result_url = $6, result_url_expires_at = $7, result_content_type = $8,
     result_duration_seconds = $9, result_width = $10, result_height = $11,
     last_error_code = $12, last_error_message = $13, last_error_retryable = $14,
     started_at = COALESCE(started_at, $15), finished_at = COALESCE(finished_at, $16),
-    poll_attempts = poll_attempts + 1, lease_owner = NULL, lease_expires_at = NULL,
+    poll_attempts = poll_attempts + 1,
+    lease_owner = CASE WHEN $19 THEN lease_owner ELSE NULL END,
+    lease_expires_at = CASE WHEN $19 THEN lease_expires_at ELSE NULL END,
     version = version + 1, updated_at = $17
-WHERE request_id = $1 AND version = $2 AND lease_owner = $18 AND lease_expires_at > clock_timestamp()`, params.RequestID, params.ExpectedVersion, params.Status,
+WHERE request_id = $1 AND version = $2 AND lease_owner = $18 AND lease_expires_at > clock_timestamp()
+RETURNING `+videoTaskColumns, params.RequestID, params.ExpectedVersion, params.Status,
 		params.UpstreamStatus, params.NextPollAt, params.ResultURL, params.ResultURLExpiresAt,
 		params.ResultContentType, params.ResultDurationSeconds, params.ResultWidth, params.ResultHeight,
-		errorCode, errorMessage, errorRetryable, params.StartedAt, params.FinishedAt, params.UpdatedAt, params.LeaseOwner)
+		errorCode, errorMessage, errorRetryable, params.StartedAt, params.FinishedAt, params.UpdatedAt, params.LeaseOwner, terminal))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, service.ErrVideoTaskLeaseConflict
+		}
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func (r *videoTaskRepository) ApplyRecoveredSubmission(ctx context.Context, params service.RecoverVideoSubmissionParams) (*service.VideoTask, error) {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
+		return nil, err
+	}
+	if params.ExpectedVersion < 0 || strings.TrimSpace(params.LeaseOwner) == "" ||
+		strings.TrimSpace(params.UpstreamTaskID) == "" || params.UpstreamTaskID == params.RequestID {
+		return nil, service.ErrVideoTaskInvalidRequest
+	}
+	if params.SubmittedAt.IsZero() {
+		params.SubmittedAt = time.Now().UTC()
+	}
+	if params.UpdatedAt.IsZero() {
+		params.UpdatedAt = params.SubmittedAt
+	}
+	if params.NextPollAt == nil {
+		next := params.UpdatedAt
+		params.NextPollAt = &next
+	}
+	updated, err := scanVideoTask(r.db.QueryRowContext(ctx, `
+UPDATE video_tasks
+SET status = 'submitted', upstream_task_id = $4, upstream_status = NULLIF($5, ''),
+    provider_submission_token = NULL, request_payload = NULL, next_poll_at = $6,
+    submitted_at = COALESCE(submitted_at, $7), last_error_code = NULL,
+    last_error_message = NULL, last_error_retryable = FALSE,
+    lease_owner = NULL, lease_expires_at = NULL,
+    version = version + 1, updated_at = $8
+WHERE request_id = $1 AND version = $2 AND lease_owner = $3
+  AND lease_expires_at > clock_timestamp()
+  AND status IN ('submitting', 'unknown')
+  AND upstream_task_id IS NULL AND provider_submission_token IS NOT NULL
+RETURNING `+videoTaskColumns, params.RequestID, params.ExpectedVersion, params.LeaseOwner,
+		strings.TrimSpace(params.UpstreamTaskID), params.UpstreamStatus, params.NextPollAt,
+		params.SubmittedAt, params.UpdatedAt))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, r.videoLeaseMutationConflict(ctx, params.RequestID, params.ExpectedVersion, params.LeaseOwner)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func (r *videoTaskRepository) ScheduleRetry(ctx context.Context, params service.ScheduleVideoTaskRetryParams) error {
+	if err := validateVideoRequestID(params.RequestID); err != nil {
+		return err
+	}
+	if params.ExpectedVersion < 0 || strings.TrimSpace(params.LeaseOwner) == "" ||
+		!service.IsVideoTaskStatus(params.Status) || params.NextPollAt.IsZero() {
+		return service.ErrVideoTaskInvalidRequest
+	}
+	if params.UpdatedAt.IsZero() {
+		params.UpdatedAt = time.Now().UTC()
+	}
+	result, err := r.db.ExecContext(ctx, `
+UPDATE video_tasks
+SET status = $4, next_poll_at = $5,
+    last_error_code = NULLIF($6, ''), last_error_message = NULLIF($7, ''),
+    last_error_retryable = $8,
+    poll_attempts = poll_attempts + CASE WHEN $9 THEN 1 ELSE 0 END,
+    settlement_attempts = settlement_attempts + CASE WHEN $10 THEN 1 ELSE 0 END,
+    lease_owner = NULL, lease_expires_at = NULL,
+    version = version + 1, updated_at = $11
+WHERE request_id = $1 AND version = $2 AND lease_owner = $3
+  AND lease_expires_at > clock_timestamp()
+  AND (
+      status = $4
+      OR (status = 'submitting' AND $4 = 'unknown')
+  )`, params.RequestID, params.ExpectedVersion, params.LeaseOwner, params.Status,
+		params.NextPollAt, params.Error.Code(), params.Error.Message(), params.Error.Retryable(),
+		params.IncrementPollAttempts, params.IncrementSettlementAttempts, params.UpdatedAt)
 	if err != nil {
 		return err
 	}
@@ -479,17 +615,33 @@ WHERE request_id = $1 AND version = $2 AND lease_owner = $18 AND lease_expires_a
 	if err != nil {
 		return err
 	}
-	if affected != 1 {
+	if affected == 1 {
+		return nil
+	}
+	return r.videoLeaseMutationConflict(ctx, params.RequestID, params.ExpectedVersion, params.LeaseOwner)
+}
+
+func (r *videoTaskRepository) videoLeaseMutationConflict(ctx context.Context, requestID string, expectedVersion int64, owner string) error {
+	var version int64
+	var currentOwner sql.NullString
+	if err := r.db.QueryRowContext(ctx, `SELECT version, lease_owner FROM video_tasks WHERE request_id = $1`, requestID).Scan(&version, &currentOwner); err != nil {
+		return translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
+	}
+	if version != expectedVersion {
+		return service.ErrVideoTaskVersionConflict
+	}
+	if !currentOwner.Valid || currentOwner.String != owner {
 		return service.ErrVideoTaskLeaseConflict
 	}
-	return tx.Commit()
+	return service.ErrVideoTaskInvalidTransition
 }
 
 func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.MarkVideoSettledParams) error {
 	if err := validateVideoRequestID(params.RequestID); err != nil {
 		return err
 	}
-	if !isFiniteNonNegativeVideoAmount(params.SettledAmount) || strings.TrimSpace(params.BillingStatus) == "" {
+	if !isFiniteNonNegativeVideoAmount(params.SettledAmount) || strings.TrimSpace(params.BillingStatus) == "" ||
+		strings.TrimSpace(params.LeaseOwner) == "" {
 		return service.ErrVideoTaskInvalidRequest
 	}
 	if params.SettledAt.IsZero() {
@@ -503,11 +655,17 @@ func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.Ma
 	var status service.VideoTaskStatus
 	var version int64
 	var settledAt sql.NullTime
+	var leaseOwner sql.NullString
+	var leaseExpiresAt sql.NullTime
+	var databaseNow time.Time
 	var withinHold bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT status, version, settled_at, ROUND($2::numeric, 8) <= frozen_amount
+		SELECT status, version, settled_at, lease_owner, lease_expires_at,
+		       clock_timestamp(), ROUND($2::numeric, 8) <= frozen_amount
 		FROM video_tasks WHERE request_id = $1 FOR UPDATE
-	`, params.RequestID, params.SettledAmount).Scan(&status, &version, &settledAt, &withinHold); err != nil {
+	`, params.RequestID, params.SettledAmount).Scan(
+		&status, &version, &settledAt, &leaseOwner, &leaseExpiresAt, &databaseNow, &withinHold,
+	); err != nil {
 		return translatePersistenceError(err, service.ErrVideoTaskNotFound, nil)
 	}
 	if version != params.ExpectedVersion {
@@ -516,19 +674,34 @@ func (r *videoTaskRepository) MarkSettled(ctx context.Context, params service.Ma
 	if !service.IsTerminalVideoTaskStatus(status) || settledAt.Valid {
 		return service.ErrVideoTaskInvalidTransition
 	}
+	if !leaseOwner.Valid || leaseOwner.String != params.LeaseOwner || !leaseExpiresAt.Valid || !leaseExpiresAt.Time.After(databaseNow) {
+		return service.ErrVideoTaskLeaseConflict
+	}
 	if !withinHold {
 		return service.ErrVideoFinalCostExceedsHold
 	}
-	_, err = tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 UPDATE video_tasks
 SET settled_amount = ROUND($3::numeric, 8), billing_status = $4, billing_reference = $5,
     settlement_attempts = settlement_attempts + 1, settled_at = COALESCE(settled_at, $6),
-    version = version + 1, updated_at = $6
+	last_error_code = NULLIF($8, ''), last_error_message = NULLIF($9, ''),
+	last_error_retryable = $10, next_poll_at = NULL,
+	lease_owner = NULL, lease_expires_at = NULL,
+	version = version + 1, updated_at = $6
 WHERE request_id = $1 AND version = $2 AND status IN ('succeeded', 'failed', 'cancelled')
-  AND settled_amount IS NULL AND settled_at IS NULL`, params.RequestID, params.ExpectedVersion,
-		params.SettledAmount, params.BillingStatus, params.BillingReference, params.SettledAt)
+	AND settled_amount IS NULL AND settled_at IS NULL AND lease_owner = $7
+	AND lease_expires_at > clock_timestamp()`, params.RequestID, params.ExpectedVersion,
+		params.SettledAmount, params.BillingStatus, params.BillingReference, params.SettledAt,
+		params.LeaseOwner, params.Error.Code(), params.Error.Message(), params.Error.Retryable())
 	if err != nil {
 		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return service.ErrVideoTaskLeaseConflict
 	}
 	return tx.Commit()
 }
@@ -562,6 +735,63 @@ WHERE request_id = $1 AND lease_owner = $2`, requestID, owner, now)
 		return service.ErrVideoTaskNotFound
 	}
 	return service.ErrVideoTaskLeaseConflict
+}
+
+func (r *videoTaskRepository) ClearExpiredMetadata(ctx context.Context, params service.ClearVideoTaskMetadataParams) (int, error) {
+	if params.Now.IsZero() || params.RetentionBefore.IsZero() || params.RetentionBefore.After(params.Now) {
+		return 0, service.ErrVideoTaskInvalidRequest
+	}
+	if params.Limit <= 0 {
+		params.Limit = 100
+	}
+	if params.Limit > 1000 {
+		params.Limit = 1000
+	}
+	result, err := r.db.ExecContext(ctx, `
+WITH expired AS (
+    SELECT id
+    FROM video_tasks
+    WHERE status IN ('succeeded', 'failed', 'cancelled')
+      AND settled_at IS NOT NULL
+      AND (
+          (result_url_expires_at IS NOT NULL AND result_url_expires_at <= $1)
+          OR (
+              COALESCE(finished_at, updated_at) <= $2
+              AND (
+                  result_url IS NOT NULL OR result_url_expires_at IS NOT NULL
+                  OR result_content_type IS NOT NULL OR result_duration_seconds IS NOT NULL
+                  OR result_width IS NOT NULL OR result_height IS NOT NULL
+                  OR request_payload IS NOT NULL
+              )
+          )
+      )
+    ORDER BY COALESCE(finished_at, updated_at), id
+    LIMIT $3
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE video_tasks AS task
+SET result_url = CASE
+        WHEN task.result_url_expires_at <= $1 OR COALESCE(task.finished_at, task.updated_at) <= $2 THEN NULL
+        ELSE task.result_url END,
+    result_url_expires_at = CASE
+        WHEN task.result_url_expires_at <= $1 OR COALESCE(task.finished_at, task.updated_at) <= $2 THEN NULL
+        ELSE task.result_url_expires_at END,
+    result_content_type = CASE WHEN COALESCE(task.finished_at, task.updated_at) <= $2 THEN NULL ELSE task.result_content_type END,
+    result_duration_seconds = CASE WHEN COALESCE(task.finished_at, task.updated_at) <= $2 THEN NULL ELSE task.result_duration_seconds END,
+    result_width = CASE WHEN COALESCE(task.finished_at, task.updated_at) <= $2 THEN NULL ELSE task.result_width END,
+    result_height = CASE WHEN COALESCE(task.finished_at, task.updated_at) <= $2 THEN NULL ELSE task.result_height END,
+    request_payload = CASE WHEN COALESCE(task.finished_at, task.updated_at) <= $2 THEN NULL ELSE task.request_payload END,
+    version = task.version + 1, updated_at = $1
+FROM expired
+WHERE task.id = expired.id`, params.Now, params.RetentionBefore, params.Limit)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func (r *videoTaskRepository) AppendEvent(ctx context.Context, event service.VideoTaskEvent) error {

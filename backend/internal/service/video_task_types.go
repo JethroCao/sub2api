@@ -289,13 +289,58 @@ type ApplyVideoPollResultParams struct {
 	UpdatedAt             time.Time
 }
 
+// RecoverVideoSubmissionParams atomically records proof that an ambiguous
+// submission exists upstream. It is accepted only from a live, owner/version
+// checked lease and never invokes a new submission.
+type RecoverVideoSubmissionParams struct {
+	RequestID       string
+	ExpectedVersion int64
+	LeaseOwner      string
+	UpstreamTaskID  string
+	UpstreamStatus  string
+	NextPollAt      *time.Time
+	SubmittedAt     time.Time
+	UpdatedAt       time.Time
+}
+
+// ScheduleVideoTaskRetry releases a live lease while retaining the accepted
+// route, hold, and safe recovery state. Status may move submitting to unknown;
+// every other retry must preserve the current durable status.
+type ScheduleVideoTaskRetryParams struct {
+	RequestID                   string
+	ExpectedVersion             int64
+	LeaseOwner                  string
+	Status                      VideoTaskStatus
+	Error                       VideoTaskError
+	NextPollAt                  time.Time
+	IncrementPollAttempts       bool
+	IncrementSettlementAttempts bool
+	UpdatedAt                   time.Time
+}
+
+type RenewVideoTaskLeaseParams struct {
+	RequestID       string
+	ExpectedVersion int64
+	LeaseOwner      string
+	LeaseDuration   time.Duration
+	UpdatedAt       time.Time
+}
+
 type MarkVideoSettledParams struct {
 	RequestID        string
 	ExpectedVersion  int64
+	LeaseOwner       string
 	SettledAmount    float64
 	BillingStatus    string
 	BillingReference *string
+	Error            VideoTaskError
 	SettledAt        time.Time
+}
+
+type ClearVideoTaskMetadataParams struct {
+	Now             time.Time
+	RetentionBefore time.Time
+	Limit           int
 }
 
 type VideoTaskEvent struct {

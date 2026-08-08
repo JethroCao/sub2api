@@ -714,7 +714,7 @@ func TestVideoTaskRepositoryApplyPollResultUsesOptimisticVersion(t *testing.T) {
 	leasedTask := findLeasedVideoTask(t, leased, task.RequestID)
 
 	nextPoll := time.Now().Add(2 * time.Minute).UTC()
-	err = repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
+	_, err = repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
 		RequestID:       task.RequestID,
 		ExpectedVersion: leasedTask.Version,
 		LeaseOwner:      "poll-worker",
@@ -724,7 +724,7 @@ func TestVideoTaskRepositoryApplyPollResultUsesOptimisticVersion(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
+	_, err = repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
 		RequestID:       task.RequestID,
 		ExpectedVersion: leasedTask.Version,
 		LeaseOwner:      "poll-worker",
@@ -747,7 +747,7 @@ func TestVideoTaskRepositoryApplyPollResultRejectsExpiredOwnedLease(t *testing.T
 		WHERE request_id = $1`, task.RequestID)
 	require.NoError(t, err)
 
-	err = repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
+	_, err = repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
 		RequestID:       task.RequestID,
 		ExpectedVersion: leasedTask.Version,
 		LeaseOwner:      "expired-worker",
@@ -773,7 +773,8 @@ func TestVideoTaskRepositoryRejectsMalformedRequestIDsAtEveryEntryPoint(t *testi
 		},
 		"mark submission unknown": func() error { return repo.MarkSubmissionUnknown(ctx, malformed, 0, taskError) },
 		"apply poll result": func() error {
-			return repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{RequestID: malformed, LeaseOwner: "worker", Status: service.VideoTaskRunning})
+			_, err := repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{RequestID: malformed, LeaseOwner: "worker", Status: service.VideoTaskRunning})
+			return err
 		},
 		"mark settled": func() error {
 			return repo.MarkSettled(ctx, service.MarkVideoSettledParams{RequestID: malformed, BillingStatus: "settled"})
@@ -834,6 +835,7 @@ func TestVideoTaskRepositoryRejectsNonFiniteAmountsAndPrematureSettlement(t *tes
 	err = repo.MarkSettled(ctx, service.MarkVideoSettledParams{
 		RequestID:       task.RequestID,
 		ExpectedVersion: task.Version,
+		LeaseOwner:      "not-leased",
 		SettledAmount:   0.1,
 		BillingStatus:   "settled",
 	})
@@ -843,18 +845,18 @@ func TestVideoTaskRepositoryRejectsNonFiniteAmountsAndPrematureSettlement(t *tes
 	leased, err := repo.LeaseDue(ctx, "settlement-worker", 1, time.Minute, time.Now().UTC())
 	require.NoError(t, err)
 	leasedTask := findLeasedVideoTask(t, leased, terminal.RequestID)
-	require.NoError(t, repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
+	terminal, err = repo.ApplyPollResult(ctx, service.ApplyVideoPollResultParams{
 		RequestID:       terminal.RequestID,
 		ExpectedVersion: leasedTask.Version,
 		LeaseOwner:      "settlement-worker",
 		Status:          service.VideoTaskSucceeded,
 		UpstreamStatus:  "completed",
-	}))
-	terminal, err = repo.GetByRequestID(ctx, terminal.RequestID)
+	})
 	require.NoError(t, err)
 	require.NoError(t, repo.MarkSettled(ctx, service.MarkVideoSettledParams{
 		RequestID:       terminal.RequestID,
 		ExpectedVersion: terminal.Version,
+		LeaseOwner:      "settlement-worker",
 		SettledAmount:   0.5,
 		BillingStatus:   "settled",
 	}))
@@ -863,6 +865,7 @@ func TestVideoTaskRepositoryRejectsNonFiniteAmountsAndPrematureSettlement(t *tes
 	err = repo.MarkSettled(ctx, service.MarkVideoSettledParams{
 		RequestID:       terminal.RequestID,
 		ExpectedVersion: terminal.Version,
+		LeaseOwner:      "settlement-worker",
 		SettledAmount:   0.4,
 		BillingStatus:   "settled",
 	})

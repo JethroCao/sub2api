@@ -40,6 +40,71 @@ func TestLoadServerTimingConfig(t *testing.T) {
 	})
 }
 
+func TestConfigVideoDefaultsAreFailClosed(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Video.Enabled)
+	require.False(t, cfg.Video.GrokEnabled)
+	require.False(t, cfg.Video.SeedanceEnabled)
+	require.False(t, cfg.Video.KlingEnabled)
+	require.Equal(t, 2, cfg.Video.WorkerCount)
+	require.Equal(t, 60, cfg.Video.LeaseSeconds)
+	require.Equal(t, 10, cfg.Video.PollIntervalSeconds)
+	require.Equal(t, 5, cfg.Video.RetryBaseSeconds)
+	require.Equal(t, 300, cfg.Video.RetryMaxSeconds)
+	require.Equal(t, 720, cfg.Video.MaxPollAttempts)
+	require.Equal(t, 24, cfg.Video.UnknownReviewAfterHours)
+	require.Equal(t, 30, cfg.Video.ResultMetadataRetentionDays)
+}
+
+func TestConfigVideoParsesExplicitValues(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("VIDEO_ENABLED", "true")
+	t.Setenv("VIDEO_SEEDANCE_ENABLED", "true")
+	t.Setenv("VIDEO_WORKER_COUNT", "4")
+	t.Setenv("VIDEO_LEASE_SECONDS", "90")
+	t.Setenv("VIDEO_POLL_INTERVAL_SECONDS", "15")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Video.Enabled)
+	require.True(t, cfg.Video.SeedanceEnabled)
+	require.Equal(t, 4, cfg.Video.WorkerCount)
+	require.Equal(t, 90, cfg.Video.LeaseSeconds)
+	require.Equal(t, 15, cfg.Video.PollIntervalSeconds)
+}
+
+func TestConfigVideoValidation(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	base, err := Load()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{name: "negative worker count", mutate: func(c *Config) { c.Video.WorkerCount = -1 }, wantErr: "video.worker_count"},
+		{name: "enabled zero workers", mutate: func(c *Config) { c.Video.Enabled = true; c.Video.WorkerCount = 0 }, wantErr: "video.worker_count"},
+		{name: "negative lease", mutate: func(c *Config) { c.Video.LeaseSeconds = -1 }, wantErr: "video.lease_seconds"},
+		{name: "lease shorter than poll", mutate: func(c *Config) { c.Video.Enabled = true; c.Video.LeaseSeconds = 9; c.Video.PollIntervalSeconds = 10 }, wantErr: "video.lease_seconds"},
+		{name: "negative poll", mutate: func(c *Config) { c.Video.PollIntervalSeconds = -1 }, wantErr: "video.poll_interval_seconds"},
+		{name: "negative retry base", mutate: func(c *Config) { c.Video.RetryBaseSeconds = -1 }, wantErr: "video.retry_base_seconds"},
+		{name: "negative retry max", mutate: func(c *Config) { c.Video.RetryMaxSeconds = -1 }, wantErr: "video.retry_max_seconds"},
+		{name: "retry range inverted", mutate: func(c *Config) { c.Video.RetryBaseSeconds = 6; c.Video.RetryMaxSeconds = 5 }, wantErr: "video.retry_max_seconds"},
+		{name: "negative max polls", mutate: func(c *Config) { c.Video.MaxPollAttempts = -1 }, wantErr: "video.max_poll_attempts"},
+		{name: "negative unknown review", mutate: func(c *Config) { c.Video.UnknownReviewAfterHours = -1 }, wantErr: "video.unknown_review_after_hours"},
+		{name: "negative retention", mutate: func(c *Config) { c.Video.ResultMetadataRetentionDays = -1 }, wantErr: "video.result_metadata_retention_days"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := *base
+			tt.mutate(&cfg)
+			require.ErrorContains(t, cfg.Validate(), tt.wantErr)
+		})
+	}
+}
+
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("REDIS_USERNAME", "app-user")

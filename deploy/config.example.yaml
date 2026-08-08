@@ -1271,6 +1271,26 @@ update:
   proxy_url: ""
 
 # =============================================================================
+# Distributed Video Reconciliation (分布式视频任务协调)
+# =============================================================================
+# 所有开关默认关闭。provider 开关只控制新任务受理；video.enabled 开启后，后台
+# worker 会继续处理数据库中已经受理的任务，不会换号或重新调度。
+video:
+  enabled: false
+  grok_enabled: false
+  seedance_enabled: false
+  # Kling 直连适配仍受已认证付费契约门控，保持关闭。
+  kling_enabled: false
+  worker_count: 2
+  lease_seconds: 60
+  poll_interval_seconds: 10
+  retry_base_seconds: 5
+  retry_max_seconds: 300
+  max_poll_attempts: 720
+  unknown_review_after_hours: 24
+  result_metadata_retention_days: 30
+
+# =============================================================================
 # Image Storage (异步图片任务结果对象存储)
 # =============================================================================
 # 长耗时生图套 Cloudflare 会 524 超时，异步图片任务接口（/v1/images/generations/async

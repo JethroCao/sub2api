@@ -22,6 +22,23 @@ func TestProviderSetRegistersVideoBillingService(t *testing.T) {
 	require.True(t, providerSetRegisters(t, "NewVideoBillingService"), "service.ProviderSet must provide VideoBillingService to future Wire consumers")
 }
 
+func TestProviderSetRegistersDurableVideoRuntime(t *testing.T) {
+	for _, provider := range []string{"ProvideDurableVideoProviderRegistry", "ProvideVideoReconciler", "ProvideVideoRetention", "ProvideVideoRuntime"} {
+		require.True(t, providerSetRegisters(t, provider), "service.ProviderSet must register %s", provider)
+	}
+}
+
+func TestProvideDurableVideoProviderRegistryKeepsKlingGated(t *testing.T) {
+	registry, err := ProvideDurableVideoProviderRegistry(nil, nil)
+	require.NoError(t, err)
+	_, hasGrok := registry.Get(PlatformGrok)
+	_, hasSeedance := registry.Get(VideoProviderSeedance)
+	_, hasKling := registry.Get(VideoProviderKling)
+	require.True(t, hasGrok)
+	require.True(t, hasSeedance)
+	require.False(t, hasKling, "Kling must remain unregistered until authenticated paid recovery fixtures exist")
+}
+
 func providerSetRegisters(t *testing.T, providerName string) bool {
 	t.Helper()
 	_, testFile, _, ok := runtime.Caller(0)

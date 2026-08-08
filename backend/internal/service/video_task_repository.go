@@ -21,9 +21,13 @@ type VideoTaskRepository interface {
 	MarkSubmissionUnknownAt(context.Context, MarkVideoSubmissionUnknownParams) error
 	ReleaseAndMarkSubmissionFailed(context.Context, ReleaseAndFailVideoSubmissionParams) (*VideoTask, error)
 	LeaseDue(context.Context, string, int, time.Duration, time.Time) ([]VideoTask, error)
-	ApplyPollResult(context.Context, ApplyVideoPollResultParams) error
+	RenewLease(context.Context, RenewVideoTaskLeaseParams) error
+	ApplyPollResult(context.Context, ApplyVideoPollResultParams) (*VideoTask, error)
+	ApplyRecoveredSubmission(context.Context, RecoverVideoSubmissionParams) (*VideoTask, error)
+	ScheduleRetry(context.Context, ScheduleVideoTaskRetryParams) error
 	MarkSettled(context.Context, MarkVideoSettledParams) error
 	ReleaseLease(context.Context, string, string, time.Time) error
+	ClearExpiredMetadata(context.Context, ClearVideoTaskMetadataParams) (int, error)
 	AppendEvent(context.Context, VideoTaskEvent) error
 	ListAdmin(context.Context, VideoTaskListQuery) ([]VideoTask, int, error)
 }

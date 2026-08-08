@@ -56,6 +56,37 @@ func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo Acco
 	return svc
 }
 
+// ProvideDurableVideoProviderRegistry contains only providers whose recovery
+// contract is safe for distributed workers. Kling remains deliberately gated.
+func ProvideDurableVideoProviderRegistry(openAIGateway *OpenAIGatewayService, upstream HTTPUpstream) (*VideoProviderRegistry, error) {
+	return NewVideoProviderRegistry(
+		openAIGateway.GrokVideoProvider(),
+		NewSeedanceVideoProvider(upstream),
+	)
+}
+
+func ProvideVideoReconciler(
+	repo VideoTaskRepository,
+	accounts AccountRepository,
+	billing *VideoBillingService,
+	providers *VideoProviderRegistry,
+	cfg *config.Config,
+) *VideoReconciler {
+	videoCfg := config.VideoConfig{}
+	if cfg != nil {
+		videoCfg = cfg.Video
+	}
+	return NewVideoReconciler(repo, accounts, billing, providers, videoCfg)
+}
+
+func ProvideVideoRetention(repo VideoTaskRepository, cfg *config.Config) *VideoRetention {
+	videoCfg := config.VideoConfig{}
+	if cfg != nil {
+		videoCfg = cfg.Video
+	}
+	return NewVideoRetention(repo, videoCfg)
+}
+
 // ProvideOpenAIOAuthService creates OpenAIOAuthService with privacy/account enrichment support.
 func ProvideOpenAIOAuthService(
 	proxyRepo ProxyRepository,
@@ -718,6 +749,10 @@ var ProviderSet = wire.NewSet(
 	NewBatchImageDownloadService,
 	NewVideoPricingService,
 	NewVideoBillingService,
+	ProvideDurableVideoProviderRegistry,
+	ProvideVideoReconciler,
+	ProvideVideoRetention,
+	ProvideVideoRuntime,
 	ProvideBatchImageCleanupService,
 	ProvideBatchImageWorkerRuntime,
 	wire.Bind(new(AccountRuntimeBlocker), new(*OpenAIGatewayService)),

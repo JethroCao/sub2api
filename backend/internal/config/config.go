@@ -100,6 +100,25 @@ type Config struct {
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
+	Video                   VideoConfig                   `mapstructure:"video"`
+}
+
+// VideoConfig controls the distributed video reconciliation runtime. Every
+// switch is fail-closed by default; provider switches gate new submissions,
+// while an enabled runtime continues reconciling already accepted tasks.
+type VideoConfig struct {
+	Enabled                     bool `mapstructure:"enabled"`
+	GrokEnabled                 bool `mapstructure:"grok_enabled"`
+	SeedanceEnabled             bool `mapstructure:"seedance_enabled"`
+	KlingEnabled                bool `mapstructure:"kling_enabled"`
+	WorkerCount                 int  `mapstructure:"worker_count"`
+	LeaseSeconds                int  `mapstructure:"lease_seconds"`
+	PollIntervalSeconds         int  `mapstructure:"poll_interval_seconds"`
+	RetryBaseSeconds            int  `mapstructure:"retry_base_seconds"`
+	RetryMaxSeconds             int  `mapstructure:"retry_max_seconds"`
+	MaxPollAttempts             int  `mapstructure:"max_poll_attempts"`
+	UnknownReviewAfterHours     int  `mapstructure:"unknown_review_after_hours"`
+	ResultMetadataRetentionDays int  `mapstructure:"result_metadata_retention_days"`
 }
 
 type LogConfig struct {
@@ -2159,6 +2178,20 @@ func setDefaults() {
 	viper.SetDefault("image_storage.secret_access_key", "")
 	viper.SetDefault("image_storage.public_base_url", "")
 
+	// Distributed video gateway. All feature flags remain opt-in.
+	viper.SetDefault("video.enabled", false)
+	viper.SetDefault("video.grok_enabled", false)
+	viper.SetDefault("video.seedance_enabled", false)
+	viper.SetDefault("video.kling_enabled", false)
+	viper.SetDefault("video.worker_count", 2)
+	viper.SetDefault("video.lease_seconds", 60)
+	viper.SetDefault("video.poll_interval_seconds", 10)
+	viper.SetDefault("video.retry_base_seconds", 5)
+	viper.SetDefault("video.retry_max_seconds", 300)
+	viper.SetDefault("video.max_poll_attempts", 720)
+	viper.SetDefault("video.unknown_review_after_hours", 24)
+	viper.SetDefault("video.result_metadata_retention_days", 30)
+
 	// Ops (vNext)
 	viper.SetDefault("ops.enabled", true)
 	viper.SetDefault("ops.use_preaggregated_tables", true)
@@ -2535,6 +2568,41 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if c.Video.WorkerCount < 0 {
+		return fmt.Errorf("video.worker_count must be non-negative")
+	}
+	if c.Video.LeaseSeconds < 0 {
+		return fmt.Errorf("video.lease_seconds must be non-negative")
+	}
+	if c.Video.PollIntervalSeconds < 0 {
+		return fmt.Errorf("video.poll_interval_seconds must be non-negative")
+	}
+	if c.Video.RetryBaseSeconds < 0 {
+		return fmt.Errorf("video.retry_base_seconds must be non-negative")
+	}
+	if c.Video.RetryMaxSeconds < 0 {
+		return fmt.Errorf("video.retry_max_seconds must be non-negative")
+	}
+	if c.Video.MaxPollAttempts < 0 {
+		return fmt.Errorf("video.max_poll_attempts must be non-negative")
+	}
+	if c.Video.UnknownReviewAfterHours < 0 {
+		return fmt.Errorf("video.unknown_review_after_hours must be non-negative")
+	}
+	if c.Video.ResultMetadataRetentionDays < 0 {
+		return fmt.Errorf("video.result_metadata_retention_days must be non-negative")
+	}
+	if c.Video.RetryMaxSeconds < c.Video.RetryBaseSeconds {
+		return fmt.Errorf("video.retry_max_seconds must be greater than or equal to video.retry_base_seconds")
+	}
+	if c.Video.Enabled {
+		if c.Video.WorkerCount == 0 {
+			return fmt.Errorf("video.worker_count must be positive when video.enabled=true")
+		}
+		if c.Video.LeaseSeconds == 0 || c.Video.LeaseSeconds < c.Video.PollIntervalSeconds {
+			return fmt.Errorf("video.lease_seconds must be positive and at least video.poll_interval_seconds when video.enabled=true")
+		}
+	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)
