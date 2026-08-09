@@ -882,6 +882,7 @@ export default {
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         grok: 'Grok',
+        video: '视频',
         composite: 'Composite',
       },
       saving: '保存中...',
@@ -992,7 +993,59 @@ export default {
         modeHint:
           '视频按秒计费：费用 = 每秒价格 × 时长（1-15 秒，未指定默认 8 秒）。默认叠加当前分组有效倍率；开启独立倍率后改用视频独立倍率。',
         finalPricePreview: '最终每秒价格预览',
-        notConfigured: '未配置'
+        notConfigured: '未配置',
+        allowVideoGeneration: '允许当前分组生成视频',
+        permissionHint: '此权限与图片生成权限完全独立。',
+        rulesTitle: '视频定价规则',
+        rulesHint: '客户单价为最终价，不再叠加分组费率倍数。保存时服务端会再次校验全部规则。',
+        addRule: '添加规则',
+        removeRule: '删除规则',
+        empty: '尚未配置定价规则。',
+        noAuthoritativeModels: '当前分组没有已启用的 Video 账号提供权威模型能力。',
+        missingCoverageTitle: '缺少已启用的定价覆盖',
+        missingCoverageItem: '{external_model} / {operation}',
+        externalModel: '外部模型',
+        operation: '操作',
+        resolution: '分辨率',
+        anyResolution: '任意分辨率 (*)',
+        audioMode: '音频模式',
+        unit: '计费单位',
+        customerUnitPrice: '客户单价（USD）',
+        upstreamUnitCost: '上游单位成本（可选）',
+        unknownCost: '未知',
+        enabled: '启用',
+        customerPreview: '客户价：5 秒 {five} · 10 秒 {ten}',
+        marginPreview: '毛利：5 秒 {five} · 10 秒 {ten}',
+        operations: {
+          generation: '生成',
+          edit: '编辑',
+          extension: '延长'
+        },
+        audioModes: {
+          any: '任意音频模式',
+          withAudio: '带音频',
+          withoutAudio: '不带音频'
+        },
+        units: {
+          perRequest: '按请求',
+          perOutputSecond: '按输出秒数'
+        },
+        createPartialSuccess: '分组已创建，但视频定价未保存：{reason}。新分组仍保留，可继续检查。',
+        updatePartialSuccess: '分组已更新，但视频定价未保存：{reason}。已重新加载保存后的分组。',
+        duplicatePartialSuccess: '分组已复制，但视频定价复制失败：{reason}。新分组已保留并重新加载。',
+        errors: {
+          validation: '保存前请修正高亮的视频定价规则和缺失覆盖。',
+          row: '此规则包含无效值、不支持的能力或重复维度。',
+          invalidRule: '请检查模型、操作、维度与非负价格。',
+          overlap: '两条规则的模型、操作、分辨率和音频模式完全相同。',
+          coverageIncomplete: '每个已启用的模型能力都需要一条已启用的 * / 任意音频覆盖规则。',
+          conflict: '保存期间定价已变更，请检查规则后重试。',
+          idempotencyRequired: '无法建立安全重试键，请重新保存。',
+          stepUpTotpRequired: '修改视频定价前请先为管理员启用 TOTP。',
+          stepUpSessionRequired: '请使用管理员会话登录后修改视频定价。',
+          loadFailed: '无法加载视频定价或权威账号能力。',
+          generic: '无法保存视频定价，请检查规则后重试。'
+        }
       },
       webSearchPricing: {
         title: 'Codex 网页搜索计费',

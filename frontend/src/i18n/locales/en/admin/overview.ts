@@ -949,6 +949,7 @@ export default {
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         grok: 'Grok',
+        video: 'Video',
         composite: 'Composite',
       },
       deleteConfirm:
@@ -995,7 +996,59 @@ export default {
         modeHint:
           'Videos are billed per second: per-second price × duration (1-15s, default 8s). By default the current effective group multiplier applies; independent mode uses the video multiplier instead.',
         finalPricePreview: 'Final per-second price preview',
-        notConfigured: 'Not configured'
+        notConfigured: 'Not configured',
+        allowVideoGeneration: 'Allow video generation for this group',
+        permissionHint: 'This permission is independent from image generation access.',
+        rulesTitle: 'Video pricing rules',
+        rulesHint: 'Customer unit price is final and is not multiplied by the group rate. The server validates all rules again when saved.',
+        addRule: 'Add rule',
+        removeRule: 'Remove rule',
+        empty: 'No pricing rules yet.',
+        noAuthoritativeModels: 'No enabled Video account exposes an authoritative model capability for this group.',
+        missingCoverageTitle: 'Missing enabled pricing coverage',
+        missingCoverageItem: '{external_model} / {operation}',
+        externalModel: 'External model',
+        operation: 'Operation',
+        resolution: 'Resolution',
+        anyResolution: 'Any resolution (*)',
+        audioMode: 'Audio mode',
+        unit: 'Billing unit',
+        customerUnitPrice: 'Customer unit price (USD)',
+        upstreamUnitCost: 'Upstream unit cost (optional)',
+        unknownCost: 'Unknown',
+        enabled: 'Enabled',
+        customerPreview: 'Customer: 5s {five} · 10s {ten}',
+        marginPreview: 'Margin: 5s {five} · 10s {ten}',
+        operations: {
+          generation: 'Generation',
+          edit: 'Edit',
+          extension: 'Extension'
+        },
+        audioModes: {
+          any: 'Any audio mode',
+          withAudio: 'With audio',
+          withoutAudio: 'Without audio'
+        },
+        units: {
+          perRequest: 'Per request',
+          perOutputSecond: 'Per output second'
+        },
+        createPartialSuccess: 'The group was created, but video pricing was not saved: {reason}. The new group remains available for review.',
+        updatePartialSuccess: 'The group was updated, but video pricing was not saved: {reason}. Reloaded the saved group.',
+        duplicatePartialSuccess: 'The group was duplicated, but video pricing could not be copied: {reason}. The new group was kept and reloaded.',
+        errors: {
+          validation: 'Fix the highlighted video pricing rules and missing coverage before saving.',
+          row: 'This rule has an invalid value, unsupported capability, or duplicate dimensions.',
+          invalidRule: 'Check the model, operation, dimensions, and non-negative prices.',
+          overlap: 'Two rules have the same model, operation, resolution, and audio mode.',
+          coverageIncomplete: 'Every enabled model capability needs an enabled * / any coverage rule.',
+          conflict: 'Pricing changed during this save. Review the rules and try again.',
+          idempotencyRequired: 'A safe retry key could not be established. Try saving again.',
+          stepUpTotpRequired: 'Enable administrator TOTP before changing video pricing.',
+          stepUpSessionRequired: 'Sign in with an administrator session to change video pricing.',
+          loadFailed: 'Video pricing or authoritative account capabilities could not be loaded.',
+          generic: 'Video pricing could not be saved. Review the rules and try again.'
+        }
       },
       webSearchPricing: {
         title: 'Codex Web Search Pricing',

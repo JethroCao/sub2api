@@ -8,7 +8,10 @@ import GroupsView from '@/views/admin/GroupsView.vue'
 const {
   listGroups,
   duplicateGroup,
+  listVideoPricingRules,
+  replaceVideoPricingRules,
   getModelsListCandidates,
+  getLiveCapability,
   getUsageSummary,
   getCapacitySummary,
   showSuccess,
@@ -16,7 +19,10 @@ const {
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   duplicateGroup: vi.fn(),
+  listVideoPricingRules: vi.fn(),
+  replaceVideoPricingRules: vi.fn(),
   getModelsListCandidates: vi.fn(),
+  getLiveCapability: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   showSuccess: vi.fn(),
@@ -28,7 +34,10 @@ vi.mock('@/api/admin', () => ({
     groups: {
       list: listGroups,
       duplicate: duplicateGroup,
+      listVideoPricingRules,
+      replaceVideoPricingRules,
       getModelsListCandidates,
+      getLiveCapability,
       getUsageSummary,
       getCapacitySummary,
       getAll: vi.fn(),
@@ -77,6 +86,7 @@ const sourceGroup: AdminGroup = {
   weekly_limit_usd: null,
   monthly_limit_usd: null,
   allow_image_generation: false,
+  allow_video_generation: false,
   allow_batch_image_generation: false,
   image_rate_independent: false,
   image_rate_multiplier: 1,
@@ -150,6 +160,8 @@ function mountView() {
         GroupCapacityBadge: true,
         GroupRateMultipliersModal: true,
         GroupRPMOverridesModal: true,
+        VideoPricingRulesEditor: true,
+        TotpStepUpDialog: true,
         VueDraggable: true
       }
     }
@@ -163,7 +175,10 @@ describe('GroupsView duplicate action', () => {
     for (const fn of [
       listGroups,
       duplicateGroup,
+      listVideoPricingRules,
+      replaceVideoPricingRules,
       getModelsListCandidates,
+      getLiveCapability,
       getUsageSummary,
       getCapacitySummary,
       showSuccess,
@@ -185,7 +200,21 @@ describe('GroupsView duplicate action', () => {
       name: 'Primary (Copy)',
       status: 'inactive'
     })
+    listVideoPricingRules.mockResolvedValue([{
+      id: 9,
+      group_id: 42,
+      external_model: 'seedance-2.0',
+      operation: 'generation',
+      resolution: '*',
+      audio_mode: 'any',
+      unit: 'per_output_second',
+      unit_price: 0.1,
+      upstream_unit_cost: null,
+      enabled: true
+    }])
+    replaceVideoPricingRules.mockResolvedValue([])
     getModelsListCandidates.mockResolvedValue([])
+    getLiveCapability.mockResolvedValue({ supported: false })
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
   })
@@ -203,6 +232,18 @@ describe('GroupsView duplicate action', () => {
 
     expect(duplicateGroup).toHaveBeenCalledTimes(1)
     expect(duplicateGroup).toHaveBeenCalledWith(42)
+    expect(listVideoPricingRules).toHaveBeenCalledWith(42)
+    expect(replaceVideoPricingRules).toHaveBeenCalledTimes(1)
+    expect(replaceVideoPricingRules).toHaveBeenCalledWith(43, [{
+      external_model: 'seedance-2.0',
+      operation: 'generation',
+      resolution: '*',
+      audio_mode: 'any',
+      unit: 'per_output_second',
+      unit_price: 0.1,
+      upstream_unit_cost: null,
+      enabled: true
+    }])
     expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess')
     expect(listGroups).toHaveBeenCalledTimes(2)
     wrapper.unmount()
@@ -239,7 +280,7 @@ describe('GroupsView duplicate action', () => {
     await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
     await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('duplicate failed')
+    expect(showError).toHaveBeenCalledWith('admin.groups.duplicateFailed')
     expect(wrapper.get('[data-testid="group-duplicate"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
@@ -263,6 +304,47 @@ describe('GroupsView duplicate action', () => {
     expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess')
     expect(showError).toHaveBeenCalledWith('admin.groups.failedToLoad')
     expect(showError).not.toHaveBeenCalledWith('admin.groups.duplicateFailed')
+    wrapper.unmount()
+  })
+
+  it('keeps and reloads the duplicate while reporting localized partial success when pricing copy fails', async () => {
+    replaceVideoPricingRules.mockRejectedValueOnce({
+      status: 400,
+      code: 'VIDEO_PRICING_RULE_INVALID',
+      message: 'raw backend detail with secret=do-not-show'
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
+    await flushPromises()
+
+    expect(duplicateGroup).toHaveBeenCalledTimes(1)
+    expect(replaceVideoPricingRules).toHaveBeenCalledTimes(1)
+    expect(listGroups).toHaveBeenCalledTimes(2)
+    expect(showSuccess).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('admin.groups.videoPricing.duplicatePartialSuccess')
+    expect(showError).not.toHaveBeenCalledWith(expect.stringContaining('secret'))
+    wrapper.unmount()
+  })
+
+  it('waits for the new group ID before reading and replacing source pricing', async () => {
+    let resolveDuplicate!: (value: AdminGroup) => void
+    duplicateGroup.mockImplementationOnce(
+      () => new Promise<AdminGroup>((resolve) => { resolveDuplicate = resolve })
+    )
+    const wrapper = mountView()
+    await flushPromises()
+
+    void wrapper.get('[data-testid="group-duplicate"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(listVideoPricingRules).not.toHaveBeenCalled()
+    expect(replaceVideoPricingRules).not.toHaveBeenCalled()
+
+    resolveDuplicate({ ...sourceGroup, id: 43, name: 'Primary (Copy)', status: 'inactive' })
+    await flushPromises()
+    expect(listVideoPricingRules).toHaveBeenCalledWith(42)
+    expect(replaceVideoPricingRules).toHaveBeenCalledWith(43, expect.any(Array))
     wrapper.unmount()
   })
 })

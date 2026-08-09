@@ -533,6 +533,8 @@ export interface Group {
   monthly_limit_usd: number | null
   // 图片生成计费配置
   allow_image_generation: boolean
+  // 视频生成权限与图片生成权限完全独立
+  allow_video_generation: boolean
   allow_batch_image_generation: boolean
   image_rate_independent: boolean
   image_rate_multiplier: number
@@ -733,6 +735,7 @@ export interface CreateGroupRequest {
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
   allow_image_generation?: boolean
+  allow_video_generation?: boolean
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
@@ -788,6 +791,7 @@ export interface UpdateGroupRequest {
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
   allow_image_generation?: boolean
+  allow_video_generation?: boolean
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
@@ -834,6 +838,31 @@ export interface UpdateGroupRequest {
 
 export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video'
 export type VideoProvider = 'seedance' | 'kling'
+export type VideoPricingOperation = 'generation' | 'edit' | 'extension'
+export type VideoPricingResolution = '*' | '480p' | '720p' | '1080p'
+export type VideoPricingAudioMode = 'any' | 'with_audio' | 'without_audio'
+export type VideoPricingUnit = 'per_request' | 'per_output_second'
+
+export interface VideoPricingRuleInput {
+  external_model: string
+  operation: VideoPricingOperation
+  resolution: VideoPricingResolution
+  audio_mode: VideoPricingAudioMode
+  unit: VideoPricingUnit
+  unit_price: number
+  upstream_unit_cost: number | null
+  enabled: boolean
+}
+
+export interface VideoPricingRule extends VideoPricingRuleInput {
+  id: number
+  group_id: number
+}
+
+export interface VideoPricingCapability {
+  external_model: string
+  operation: VideoPricingOperation
+}
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'

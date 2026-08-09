@@ -1013,7 +1013,33 @@
           </p>
         </div>
 
-        <!-- 视频生成计费配置（仅 Grok 平台） -->
+        <div
+          v-if="supportsVideoPermissionPlatform(createForm.platform)"
+          class="border-t pt-4"
+        >
+          <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <input
+              v-model="createForm.allow_video_generation"
+              type="checkbox"
+              data-testid="create-allow-video-generation"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            {{ t('admin.groups.videoPricing.allowVideoGeneration') }}
+          </label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.groups.videoPricing.permissionHint') }}
+          </p>
+        </div>
+
+        <VideoPricingRulesEditor
+          v-if="createForm.platform === 'video'"
+          ref="createVideoPricingEditorRef"
+          v-model="createVideoPricingRules"
+          :capabilities="createVideoPricingCapabilities"
+          class="border-t pt-4"
+        />
+
+        <!-- 旧 Grok 分辨率价格兼容配置 -->
         <div
           v-if="supportsVideoPricingPlatform(createForm.platform)"
           class="border-t pt-4"
@@ -2618,7 +2644,33 @@
           </p>
         </div>
 
-        <!-- 视频生成计费配置（仅 Grok 平台） -->
+        <div
+          v-if="supportsVideoPermissionPlatform(editForm.platform)"
+          class="border-t pt-4"
+        >
+          <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <input
+              v-model="editForm.allow_video_generation"
+              type="checkbox"
+              data-testid="edit-allow-video-generation"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            {{ t('admin.groups.videoPricing.allowVideoGeneration') }}
+          </label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.groups.videoPricing.permissionHint') }}
+          </p>
+        </div>
+
+        <VideoPricingRulesEditor
+          v-if="editForm.platform === 'video'"
+          ref="editVideoPricingEditorRef"
+          v-model="editVideoPricingRules"
+          :capabilities="editVideoPricingCapabilities"
+          class="border-t pt-4"
+        />
+
+        <!-- 旧 Grok 分辨率价格兼容配置 -->
         <div
           v-if="supportsVideoPricingPlatform(editForm.platform)"
           class="border-t pt-4"
@@ -4139,6 +4191,7 @@
       @close="showRPMOverridesModal = false"
       @success="loadGroups"
     />
+    <TotpStepUpDialog :controller="videoPricingStepUp" />
   </AppLayout>
 </template>
 
@@ -4157,6 +4210,9 @@ import type {
   CompositeRouteMatchType,
   GroupPlatform,
   SubscriptionType,
+  Account,
+  VideoPricingCapability,
+  VideoPricingRuleInput,
 } from "@/types";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
@@ -4173,11 +4229,13 @@ import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipl
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
+import VideoPricingRulesEditor from "@/components/admin/group/VideoPricingRulesEditor.vue";
+import TotpStepUpDialog from "@/components/auth/TotpStepUpDialog.vue";
 import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
-import { extractApiErrorMessage } from "@/utils/apiError";
 import { useKeyedDebouncedSearch } from "@/composables/useKeyedDebouncedSearch";
 import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
+import { useStepUp } from "@/composables/useStepUp";
 import {
   createDefaultMessagesDispatchFormState,
   messagesDispatchConfigToFormState,
@@ -4219,10 +4277,16 @@ import {
   supportsVideoPricingPlatform,
   videoPricingI18nKey,
 } from "./groupsImagePricing";
+import {
+  deriveAuthoritativeVideoCapabilities,
+  videoPricingErrorI18nKey,
+  videoPricingRulesForReplacement,
+} from "./groupsVideoPricing";
 
 const { t } = useI18n();
 const appStore = useAppStore();
 const onboardingStore = useOnboardingStore();
+const videoPricingStepUp = useStepUp();
 
 const ALWAYS_VISIBLE_COLUMNS = new Set(["name", "actions"]);
 // Default hidden columns (hidden on first load / after schema bumps).
@@ -4404,6 +4468,7 @@ const platformOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
+  { value: "video", label: "Video" },
   { value: "composite", label: "Composite" },
 ]);
 
@@ -4414,6 +4479,7 @@ const platformFilterOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
+  { value: "video", label: "Video" },
   { value: "composite", label: "Composite" },
 ]);
 
@@ -4423,6 +4489,7 @@ const compositeRoutePlatformOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
+  { value: "video", label: "Video" },
 ]);
 
 const compositeRouteEndpointOptions = computed(() => [
@@ -4636,6 +4703,13 @@ const sortSubmitting = ref(false);
 const editingGroup = ref<AdminGroup | null>(null);
 const deletingGroup = ref<AdminGroup | null>(null);
 const duplicatingGroupIds = reactive(new Set<number>());
+type VideoPricingEditorExpose = { validate: () => boolean };
+const createVideoPricingEditorRef = ref<VideoPricingEditorExpose | null>(null);
+const editVideoPricingEditorRef = ref<VideoPricingEditorExpose | null>(null);
+const createVideoPricingRules = ref<VideoPricingRuleInput[]>([]);
+const editVideoPricingRules = ref<VideoPricingRuleInput[]>([]);
+const createVideoPricingCapabilities = ref<VideoPricingCapability[]>([]);
+const editVideoPricingCapabilities = ref<VideoPricingCapability[]>([]);
 const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
@@ -4705,6 +4779,7 @@ const createForm = reactive({
   monthly_limit_usd: null as number | null,
   // 图片生成计费配置
   allow_image_generation: false,
+  allow_video_generation: false,
   allow_batch_image_generation: false,
   image_rate_independent: false,
   image_rate_multiplier: 1,
@@ -5059,6 +5134,7 @@ const editForm = reactive({
   monthly_limit_usd: null as number | null,
   // 图片生成计费配置
   allow_image_generation: false,
+  allow_video_generation: false,
   allow_batch_image_generation: false,
   image_rate_independent: false,
   image_rate_multiplier: 1,
@@ -5139,6 +5215,66 @@ type VideoPricingFormState = {
   video_price_480p: number | string | null;
   video_price_720p: number | string | null;
   video_price_1080p: number | string | null;
+};
+
+const supportsVideoPermissionPlatform = (platform: GroupPlatform) =>
+  platform === "video" || platform === "grok" || platform === "composite";
+
+const loadActiveVideoAccountsForGroups = async (groupIDs: number[]): Promise<Account[]> => {
+  const accounts = new Map<number, Account>();
+  for (const groupID of groupIDs) {
+    let page = 1;
+    let pages = 1;
+    do {
+      const response = await adminAPI.accounts.list(page, 100, {
+        platform: "video",
+        status: "active",
+        group: String(groupID),
+      });
+      for (const account of response.items || []) accounts.set(account.id, account);
+      pages = Math.max(1, Number(response.pages) || 1);
+      page += 1;
+    } while (page <= pages);
+  }
+  return [...accounts.values()];
+};
+
+let createVideoCapabilitiesRequest = 0;
+const refreshCreateVideoCapabilities = async () => {
+  const request = ++createVideoCapabilitiesRequest;
+  if (createForm.platform !== "video" || createForm.copy_accounts_from_group_ids.length === 0) {
+    createVideoPricingCapabilities.value = [];
+    return;
+  }
+  try {
+    const accounts = await loadActiveVideoAccountsForGroups(createForm.copy_accounts_from_group_ids);
+    if (request === createVideoCapabilitiesRequest) {
+      createVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accounts);
+    }
+  } catch {
+    if (request === createVideoCapabilitiesRequest) createVideoPricingCapabilities.value = [];
+  }
+};
+
+const loadEditVideoPricing = async (groupID: number) => {
+  try {
+    const [rules, accounts] = await Promise.all([
+      adminAPI.groups.listVideoPricingRules(groupID),
+      loadActiveVideoAccountsForGroups([groupID]),
+    ]);
+    editVideoPricingRules.value = videoPricingRulesForReplacement(rules);
+    editVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accounts);
+  } catch {
+    editVideoPricingRules.value = [];
+    editVideoPricingCapabilities.value = [];
+    appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
+  }
+};
+
+const saveVideoPricingRules = async (groupID: number, rules: VideoPricingRuleInput[]) => {
+  await videoPricingStepUp.run(() =>
+    adminAPI.groups.replaceVideoPricingRules(groupID, videoPricingRulesForReplacement(rules)),
+  );
 };
 
 const imagePricingTiers = [
@@ -5510,6 +5646,7 @@ const closeCreateModal = () => {
   createForm.weekly_limit_usd = null;
   createForm.monthly_limit_usd = null;
   createForm.allow_image_generation = false;
+  createForm.allow_video_generation = false;
   createForm.allow_batch_image_generation = false;
   createForm.image_rate_independent = false;
   createForm.image_rate_multiplier = 1;
@@ -5544,6 +5681,8 @@ const closeCreateModal = () => {
   createForm.rpm_limit = 0;
   createForm.max_reasoning_effort = "";
   createForm.reasoning_effort_mappings = [];
+  createVideoPricingRules.value = [];
+  createVideoPricingCapabilities.value = [];
   createReasoningEffortPolicyRef.value?.resetValidation();
   resetModelsListState(createModelsListState);
   createModelRoutingRules.value = [];
@@ -5606,7 +5745,12 @@ const handleCreateGroup = async () => {
   if (!validateProfitControlForm(createForm)) {
     return;
   }
+  if (createForm.platform === "video" && !createVideoPricingEditorRef.value?.validate()) {
+    appStore.showError(t("admin.groups.videoPricing.errors.validation"));
+    return;
+  }
   submitting.value = true;
+  let createdGroup: AdminGroup | null = null;
   try {
     // 构建请求数据，包含模型路由配置
     const requestData = {
@@ -5687,7 +5831,10 @@ const handleCreateGroup = async () => {
     requestData.peak_rate_multiplier = normalizeRateMultiplier(
       createForm.peak_rate_multiplier,
     );
-    await adminAPI.groups.create(requestData);
+    createdGroup = await adminAPI.groups.create(requestData);
+    if (createForm.platform === "video") {
+      await saveVideoPricingRules(createdGroup.id, createVideoPricingRules.value);
+    }
     appStore.showSuccess(t("admin.groups.groupCreated"));
     closeCreateModal();
     loadGroups();
@@ -5695,11 +5842,16 @@ const handleCreateGroup = async () => {
     if (onboardingStore.isCurrentStep('[data-tour="group-form-submit"]')) {
       onboardingStore.nextStep(500);
     }
-  } catch (error: any) {
-    appStore.showError(
-      error.response?.data?.detail || t("admin.groups.failedToCreate"),
-    );
-    console.error("Error creating group:", error);
+  } catch (error: unknown) {
+    if (createdGroup) {
+      appStore.showError(t("admin.groups.videoPricing.createPartialSuccess", {
+        reason: t(videoPricingErrorI18nKey(error)),
+      }));
+      closeCreateModal();
+      await loadGroups();
+    } else {
+      appStore.showError(t("admin.groups.failedToCreate"));
+    }
     // Don't advance tour on error
   } finally {
     submitting.value = false;
@@ -5719,6 +5871,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.weekly_limit_usd = group.weekly_limit_usd;
   editForm.monthly_limit_usd = group.monthly_limit_usd;
   editForm.allow_image_generation = group.allow_image_generation ?? false;
+  editForm.allow_video_generation = group.allow_video_generation ?? false;
   editForm.allow_batch_image_generation =
     group.allow_batch_image_generation ?? false;
   editForm.image_rate_independent = group.image_rate_independent ?? false;
@@ -5782,6 +5935,11 @@ const handleEdit = async (group: AdminGroup) => {
     group.platform,
   );
   resetModelsListState(editModelsListState, group.models_list_config);
+  editVideoPricingRules.value = [];
+  editVideoPricingCapabilities.value = [];
+  if (group.platform === "video") {
+    await loadEditVideoPricing(group.id);
+  }
   // 加载模型路由规则（异步加载账号名称）
   editModelRoutingRules.value = await convertApiFormatToRoutingRules(
     group.model_routing,
@@ -5814,6 +5972,9 @@ const closeEditModal = () => {
   editForm.video_price_480p = null;
   editForm.video_price_720p = null;
   editForm.video_price_1080p = null;
+  editForm.allow_video_generation = false;
+  editVideoPricingRules.value = [];
+  editVideoPricingCapabilities.value = [];
   editForm.web_search_price_per_call = null;
   resetMessagesDispatchFormState(editForm);
   editForm.allow_live = false;
@@ -5836,8 +5997,13 @@ const handleUpdateGroup = async () => {
   if (!validateProfitControlForm(editForm)) {
     return;
   }
+  if (editForm.platform === "video" && !editVideoPricingEditorRef.value?.validate()) {
+    appStore.showError(t("admin.groups.videoPricing.errors.validation"));
+    return;
+  }
 
   submitting.value = true;
+  let groupUpdated = false;
   try {
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
@@ -5927,14 +6093,23 @@ const handleUpdateGroup = async () => {
       editForm.peak_rate_multiplier,
     );
     await adminAPI.groups.update(editingGroup.value.id, payload);
+    groupUpdated = true;
+    if (editForm.platform === "video") {
+      await saveVideoPricingRules(editingGroup.value.id, editVideoPricingRules.value);
+    }
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();
     loadGroups();
-  } catch (error: any) {
-    appStore.showError(
-      error.response?.data?.detail || t("admin.groups.failedToUpdate"),
-    );
-    console.error("Error updating group:", error);
+  } catch (error: unknown) {
+    if (groupUpdated) {
+      appStore.showError(t("admin.groups.videoPricing.updatePartialSuccess", {
+        reason: t(videoPricingErrorI18nKey(error)),
+      }));
+      closeEditModal();
+      await loadGroups();
+    } else {
+      appStore.showError(t("admin.groups.failedToUpdate"));
+    }
   } finally {
     submitting.value = false;
   }
@@ -5980,14 +6155,24 @@ const handleDuplicate = async (group: AdminGroup) => {
   duplicatingGroupIds.add(group.id);
   try {
     const duplicate = await adminAPI.groups.duplicate(group.id);
-    appStore.showSuccess(
-      t("admin.groups.duplicateSuccess", { name: duplicate.name }),
-    );
+    let pricingCopied = false;
+    try {
+      const sourceRules = await adminAPI.groups.listVideoPricingRules(group.id);
+      await saveVideoPricingRules(duplicate.id, videoPricingRulesForReplacement(sourceRules));
+      pricingCopied = true;
+    } catch (error: unknown) {
+      appStore.showError(t("admin.groups.videoPricing.duplicatePartialSuccess", {
+        reason: t(videoPricingErrorI18nKey(error)),
+      }));
+    }
+    if (pricingCopied) {
+      appStore.showSuccess(
+        t("admin.groups.duplicateSuccess", { name: duplicate.name }),
+      );
+    }
     await loadGroups();
-  } catch (error: unknown) {
-    appStore.showError(
-      extractApiErrorMessage(error, t("admin.groups.duplicateFailed")),
-    );
+  } catch {
+    appStore.showError(t("admin.groups.duplicateFailed"));
   } finally {
     duplicatingGroupIds.delete(group.id);
   }
@@ -6255,6 +6440,13 @@ watch(
       createForm.require_privacy_set = false;
     }
     resetDisabledBatchImagePricing(createForm);
+    if (newVal !== "video") {
+      createForm.allow_video_generation = newVal === "grok" || newVal === "composite"
+        ? createForm.allow_video_generation
+        : false;
+      createVideoPricingRules.value = [];
+      createVideoPricingCapabilities.value = [];
+    }
     resetModelsListState(createModelsListState);
     loadModelsListCandidates("create", 0, newVal);
   },
@@ -6272,6 +6464,11 @@ watch(
   () => {
     resetDisabledBatchImagePricing(createForm);
   },
+);
+
+watch(
+  () => [...createForm.copy_accounts_from_group_ids],
+  () => { void refreshCreateVideoCapabilities(); },
 );
 
 watch(
@@ -6303,6 +6500,13 @@ watch(
       editForm.require_privacy_set = false;
     }
     resetDisabledBatchImagePricing(editForm);
+    if (newVal !== "video") {
+      editForm.allow_video_generation = newVal === "grok" || newVal === "composite"
+        ? editForm.allow_video_generation
+        : false;
+      editVideoPricingRules.value = [];
+      editVideoPricingCapabilities.value = [];
+    }
     if (editingGroup.value) {
       resetModelsListState(editModelsListState, editForm.platform === editingGroup.value.platform ? editingGroup.value.models_list_config : undefined);
       loadModelsListCandidates("edit", editingGroup.value.id, newVal);
