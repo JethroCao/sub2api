@@ -4745,7 +4745,8 @@ const createVideoPricingCapabilitiesLoadState = ref<VideoPricingLoadState>("read
 const editVideoPricingRulesLoadState = ref<VideoPricingLoadState>("idle");
 const editVideoPricingCapabilitiesLoadState = ref<VideoPricingLoadState>("idle");
 let createVideoPricingLoadEpoch = 0;
-let editVideoPricingLoadEpoch = 0;
+let editVideoPricingRulesLoadEpoch = 0;
+let editVideoPricingCapabilitiesLoadEpoch = 0;
 const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
@@ -5345,7 +5346,11 @@ const retryCreateVideoPricing = async () => {
   await refreshCreateVideoCapabilities();
 };
 
-const loadEditVideoPricing = async (groupID: number, requestEpoch: number): Promise<boolean> => {
+const loadEditVideoPricing = async (
+  groupID: number,
+  rulesRequestEpoch: number,
+  capabilitiesRequestEpoch: number,
+): Promise<boolean> => {
   const capabilityGroupIDs = editVideoCapabilityGroupIDs(groupID);
   const sourceKey = videoCapabilitySourceKey(capabilityGroupIDs);
   editVideoPricingRulesLoadState.value = "pending";
@@ -5354,42 +5359,49 @@ const loadEditVideoPricing = async (groupID: number, requestEpoch: number): Prom
     adminAPI.groups.listVideoPricingRules(groupID),
     loadActiveVideoAccountsForGroups(capabilityGroupIDs),
   ]);
+  const rulesRequestIsCurrent =
+    rulesRequestEpoch === editVideoPricingRulesLoadEpoch
+    && editingGroup.value?.id === groupID;
+  const capabilitiesRequestIsCurrent =
+    capabilitiesRequestEpoch === editVideoPricingCapabilitiesLoadEpoch
+    && editingGroup.value?.id === groupID
+    && sourceKey === videoCapabilitySourceKey(editVideoCapabilityGroupIDs(groupID));
+  if (rulesRequestIsCurrent) {
+    if (rulesResult.status === "fulfilled") {
+      editVideoPricingRules.value = videoPricingRulesForReplacement(rulesResult.value);
+      editVideoPricingRulesLoadState.value = "ready";
+    } else {
+      editVideoPricingRulesLoadState.value = "failed";
+    }
+  }
+  if (capabilitiesRequestIsCurrent) {
+    if (accountsResult.status === "fulfilled") {
+      editVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accountsResult.value);
+      editVideoPricingCapabilitiesLoadState.value = "ready";
+    } else {
+      editVideoPricingCapabilitiesLoadState.value = "failed";
+    }
+  }
   if (
-    requestEpoch !== editVideoPricingLoadEpoch ||
-    editingGroup.value?.id !== groupID ||
-    sourceKey !== videoCapabilitySourceKey(editVideoCapabilityGroupIDs(groupID))
+    (rulesRequestIsCurrent && rulesResult.status === "rejected")
+    || (capabilitiesRequestIsCurrent && accountsResult.status === "rejected")
   ) {
-    return false;
-  }
-  if (rulesResult.status === "fulfilled") {
-    editVideoPricingRules.value = videoPricingRulesForReplacement(rulesResult.value);
-    editVideoPricingRulesLoadState.value = "ready";
-  } else {
-    editVideoPricingRulesLoadState.value = "failed";
-  }
-  if (accountsResult.status === "fulfilled") {
-    editVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accountsResult.value);
-    editVideoPricingCapabilitiesLoadState.value = "ready";
-  } else {
-    editVideoPricingCapabilitiesLoadState.value = "failed";
-  }
-  if (editVideoPricingLoadFailed.value) {
     appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
   }
-  return true;
+  return rulesRequestIsCurrent && capabilitiesRequestIsCurrent;
 };
 
 const refreshEditVideoCapabilities = async (): Promise<boolean> => {
   const groupID = editingGroup.value?.id;
   if (!groupID || editForm.platform !== "video") return false;
-  const requestEpoch = ++editVideoPricingLoadEpoch;
+  const requestEpoch = ++editVideoPricingCapabilitiesLoadEpoch;
   const capabilityGroupIDs = editVideoCapabilityGroupIDs(groupID);
   const sourceKey = videoCapabilitySourceKey(capabilityGroupIDs);
   editVideoPricingCapabilitiesLoadState.value = "pending";
   try {
     const accounts = await loadActiveVideoAccountsForGroups(capabilityGroupIDs);
     if (
-      requestEpoch !== editVideoPricingLoadEpoch
+      requestEpoch !== editVideoPricingCapabilitiesLoadEpoch
       || editingGroup.value?.id !== groupID
       || sourceKey !== videoCapabilitySourceKey(editVideoCapabilityGroupIDs(groupID))
     ) {
@@ -5399,7 +5411,7 @@ const refreshEditVideoCapabilities = async (): Promise<boolean> => {
     editVideoPricingCapabilitiesLoadState.value = "ready";
   } catch {
     if (
-      requestEpoch !== editVideoPricingLoadEpoch
+      requestEpoch !== editVideoPricingCapabilitiesLoadEpoch
       || editingGroup.value?.id !== groupID
       || sourceKey !== videoCapabilitySourceKey(editVideoCapabilityGroupIDs(groupID))
     ) {
@@ -5413,8 +5425,13 @@ const refreshEditVideoCapabilities = async (): Promise<boolean> => {
 
 const retryEditVideoPricing = async () => {
   if (!editingGroup.value || editForm.platform !== "video") return;
-  const requestEpoch = ++editVideoPricingLoadEpoch;
-  await loadEditVideoPricing(editingGroup.value.id, requestEpoch);
+  const rulesRequestEpoch = ++editVideoPricingRulesLoadEpoch;
+  const capabilitiesRequestEpoch = ++editVideoPricingCapabilitiesLoadEpoch;
+  await loadEditVideoPricing(
+    editingGroup.value.id,
+    rulesRequestEpoch,
+    capabilitiesRequestEpoch,
+  );
 };
 
 const saveVideoPricingRules = async (groupID: number, rules: VideoPricingRuleInput[]) => {
@@ -6011,7 +6028,8 @@ const handleCreateGroup = async () => {
 };
 
 const handleEdit = async (group: AdminGroup) => {
-  const requestEpoch = ++editVideoPricingLoadEpoch;
+  const rulesRequestEpoch = ++editVideoPricingRulesLoadEpoch;
+  const capabilitiesRequestEpoch = ++editVideoPricingCapabilitiesLoadEpoch;
   editingGroup.value = group;
   editForm.name = group.name;
   editForm.description = group.description || "";
@@ -6093,7 +6111,11 @@ const handleEdit = async (group: AdminGroup) => {
   editVideoPricingRulesLoadState.value = group.platform === "video" ? "idle" : "ready";
   editVideoPricingCapabilitiesLoadState.value = group.platform === "video" ? "idle" : "ready";
   if (group.platform === "video") {
-    const isCurrentEdit = await loadEditVideoPricing(group.id, requestEpoch);
+    const isCurrentEdit = await loadEditVideoPricing(
+      group.id,
+      rulesRequestEpoch,
+      capabilitiesRequestEpoch,
+    );
     if (!isCurrentEdit) return;
   }
   // 加载模型路由规则（异步加载账号名称）
@@ -6105,7 +6127,8 @@ const handleEdit = async (group: AdminGroup) => {
 };
 
 const closeEditModal = () => {
-  editVideoPricingLoadEpoch += 1;
+  editVideoPricingRulesLoadEpoch += 1;
+  editVideoPricingCapabilitiesLoadEpoch += 1;
   editModelRoutingRules.value.forEach((rule) => {
     accountSearchRunner.clearKey(getEditRuleSearchKey(rule));
   });

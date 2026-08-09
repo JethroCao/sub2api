@@ -547,6 +547,81 @@ describe('GroupsView video pricing safety and permissions', () => {
     wrapper.unmount()
   })
 
+  it('finishes a full edit retry after a copy-source capability refresh supersedes its capability read', async () => {
+    const sourceGroup = { ...videoGroup, id: 84, name: 'Video source', account_count: 1 }
+    listGroups.mockResolvedValueOnce({
+      items: [videoGroup, sourceGroup], total: 2, page: 1, page_size: 20, pages: 1
+    })
+    const retryRules = deferred<typeof pricingRule[]>()
+    const staleRetryAccounts = deferred<Awaited<ReturnType<typeof listAccounts>>>()
+    let ruleCalls = 0
+    let targetAccountCalls = 0
+    listVideoPricingRules.mockImplementation(() => {
+      ruleCalls += 1
+      return ruleCalls === 1 ? Promise.resolve([pricingRule]) : retryRules.promise
+    })
+    listAccounts.mockImplementation((_page, _pageSize, filters) => {
+      if (filters.group === '42') {
+        targetAccountCalls += 1
+        if (targetAccountCalls === 1) {
+          return Promise.reject(new Error('initial target accounts unavailable'))
+        }
+        return staleRetryAccounts.promise
+      }
+      return Promise.resolve({
+        items: [{
+          id: 84,
+          name: 'Replacement source',
+          platform: 'video',
+          type: 'apikey',
+          status: 'active',
+          video_provider: 'seedance',
+          video_capabilities: ['generation'],
+          extra: { model_mapping: { 'seedance-source': 'endpoint-source' } }
+        }],
+        total: 1,
+        page: 1,
+        page_size: 100,
+        pages: 1
+      })
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+
+    expect(wrapper.get('[data-testid="retry-edit-video-pricing"]').exists()).toBe(true)
+    void wrapper.get('[data-testid="retry-edit-video-pricing"]').trigger('click')
+    await flushPromises()
+    await findCopySourceSelect(wrapper, '#edit-group-form', 84).setValue('84')
+    await flushPromises()
+
+    expect(wrapper.get('button[form="edit-group-form"]').attributes('disabled')).toBeDefined()
+    retryRules.resolve([{ ...pricingRule, external_model: 'seedance-retried' }])
+    staleRetryAccounts.resolve({
+      items: [{
+        id: 42,
+        name: 'Stale target',
+        platform: 'video',
+        type: 'apikey',
+        status: 'active',
+        video_provider: 'seedance',
+        video_capabilities: ['generation'],
+        extra: { model_mapping: { 'seedance-stale': 'endpoint-stale' } }
+      }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+      pages: 1
+    })
+    await flushPromises()
+
+    expect(wrapper.get('button[form="edit-group-form"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="retry-edit-video-pricing"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="video-editor"]').text()).toBe('seedance-retried')
+    wrapper.unmount()
+  })
+
   it('ignores a late group-A retry after group B becomes the active edit', async () => {
     const groupB = { ...videoGroup, id: 84, name: 'Video group B' }
     const groupBRule = {
