@@ -200,8 +200,7 @@ const accessKey = ref('')
 const secretKey = ref('')
 const baseUrl = ref('')
 const baseUrlTouched = ref(false)
-const providerChanged = ref(false)
-const initialProvider = props.provider
+const providerMetadataDirty = ref(false)
 let nextMappingID = 1
 const mappings = ref<Array<{ id: number; from: string; to: string }>>([])
 
@@ -234,12 +233,12 @@ const knownCapabilityTags = new Set([
   'generation', 'last_frame', 'reference_images', 'reference_videos', 'text'
 ])
 const safeCapabilityTags = computed(() => Array.from(new Set(
-  (providerChanged.value ? [] : props.capabilityTags)
+  (providerMetadataDirty.value ? [] : props.capabilityTags)
     .filter(tag => typeof tag === 'string' && knownCapabilityTags.has(tag))
 )))
 const controlCapabilityTags = computed(() => Array.from(new Set([
   ...safeCapabilityTags.value,
-  ...(providerChanged.value ? [] : disabledCapabilities.value)
+  ...(providerMetadataDirty.value ? [] : disabledCapabilities.value)
 ])).filter(tag => knownCapabilityTags.has(tag)))
 
 const currentCredentials = () => {
@@ -280,7 +279,7 @@ const handleCredentialInput = (
 }
 const emitExtra = () => emit('update:extra', {
   model_mapping: mappingObject(),
-  ...(disabledCapabilities.value.length > 0
+  ...(disabledCapabilities.value.length > 0 || props.mode === 'edit'
     ? { video_disabled_capabilities: [...disabledCapabilities.value] }
     : {})
 })
@@ -291,12 +290,15 @@ const handleProviderChange = (value: string | number | boolean | null) => {
   accessKey.value = ''
   secretKey.value = ''
   baseUrl.value = ''
-  baseUrlTouched.value = false
-  providerChanged.value = value !== initialProvider
+  baseUrlTouched.value = props.mode === 'edit'
+  if (value !== props.provider) providerMetadataDirty.value = true
   mappings.value = []
   emit('update:provider', value)
-  emit('update:credentials', {})
-  emit('update:extra', { model_mapping: {} })
+  emitCredentials()
+  emit('update:extra', {
+    model_mapping: {},
+    ...(props.mode === 'edit' ? { video_disabled_capabilities: [] } : {})
+  })
 }
 
 const addMapping = () => mappings.value.push({ id: nextMappingID++, from: '', to: '' })
@@ -311,7 +313,9 @@ const toggleCapability = (capability: string, event: Event) => {
     : disabledCapabilities.value.filter(value => value !== capability)
   emit('update:extra', {
     model_mapping: mappingObject(),
-    ...(next.length > 0 ? { video_disabled_capabilities: next } : {})
+    ...(next.length > 0 || props.mode === 'edit'
+      ? { video_disabled_capabilities: next }
+      : {})
   })
 }
 </script>

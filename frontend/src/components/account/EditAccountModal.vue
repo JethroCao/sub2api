@@ -4430,13 +4430,19 @@ const handleSubmit = async () => {
         return
       }
       updatePayload.credentials = credentials
-      updatePayload.extra = buildVideoExtra({
+      const extra = buildVideoExtra({
         provider: videoProvider.value,
         modelMapping: videoExtra.value.model_mapping,
         disabledCapabilities: Array.isArray(videoExtra.value.video_disabled_capabilities)
           ? videoExtra.value.video_disabled_capabilities
           : []
       })
+      if (Object.prototype.hasOwnProperty.call(videoExtra.value, 'video_disabled_capabilities') &&
+          Array.isArray(videoExtra.value.video_disabled_capabilities) &&
+          videoExtra.value.video_disabled_capabilities.length === 0) {
+        extra.video_disabled_capabilities = []
+      }
+      updatePayload.extra = extra
     }
 
     // For apikey type, handle credentials update

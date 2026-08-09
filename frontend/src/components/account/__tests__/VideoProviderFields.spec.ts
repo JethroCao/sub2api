@@ -89,6 +89,27 @@ describe('VideoProviderFields', () => {
     expect(wrapper.emitted('update:extra')?.at(-1)?.[0]).toEqual({ model_mapping: {} })
   })
 
+  it('explicitly clears the stored base URL on edit provider switch without empty secrets', async () => {
+    const wrapper = mount(VideoProviderFields, {
+      props: {
+        mode: 'edit',
+        provider: 'seedance',
+        credentials: { base_url: 'https://ark.example.com' },
+        credentialStatus: { has_api_key: true },
+        extra: { model_mapping: { 'seedance-2.0': 'ep-seedance' } }
+      }
+    })
+
+    wrapper.getComponent(Select).vm.$emit('update:modelValue', 'kling')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('update:credentials')?.at(-1)?.[0]).toEqual({ base_url: '' })
+    expect(wrapper.emitted('update:extra')?.at(-1)?.[0]).toEqual({
+      model_mapping: {},
+      video_disabled_capabilities: []
+    })
+  })
+
   it('renders capability badges and disable controls only for API-derived tags', () => {
     const dormant = mount(VideoProviderFields, {
       props: {
@@ -134,11 +155,12 @@ describe('VideoProviderFields', () => {
     expect(control.element.checked).toBe(true)
     await control.setValue(false)
     expect(wrapper.emitted('update:extra')?.at(-1)?.[0]).toEqual({
-      model_mapping: { 'seedance-2.0': 'ep-seedance' }
+      model_mapping: { 'seedance-2.0': 'ep-seedance' },
+      video_disabled_capabilities: []
     })
   })
 
-  it('drops stale Seedance capability tags after switching to Kling', async () => {
+  it('keeps API capability metadata hidden after switching providers and back', async () => {
     const wrapper = mount(VideoProviderFields, {
       props: {
         mode: 'edit',
@@ -152,6 +174,12 @@ describe('VideoProviderFields', () => {
     expect(wrapper.find('[data-testid="video-capability-generation"]').exists()).toBe(true)
     wrapper.getComponent(Select).vm.$emit('update:modelValue', 'kling')
     await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="video-capability-generation"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-disable-generation"]').exists()).toBe(false)
+
+    await wrapper.setProps({ provider: 'kling' })
+    wrapper.getComponent(Select).vm.$emit('update:modelValue', 'seedance')
+    await wrapper.setProps({ provider: 'seedance' })
     expect(wrapper.find('[data-testid="video-capability-generation"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="video-disable-generation"]').exists()).toBe(false)
   })

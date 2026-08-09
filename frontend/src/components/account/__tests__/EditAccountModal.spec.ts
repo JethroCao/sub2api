@@ -1381,7 +1381,35 @@ describe('EditAccountModal', () => {
 
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toEqual({
       video_provider: 'seedance',
-      model_mapping: { 'seedance-2.0': 'ep-seedance' }
+      model_mapping: { 'seedance-2.0': 'ep-seedance' },
+      video_disabled_capabilities: []
+    })
+  })
+
+  it('clears the old base URL while switching Video provider without empty old-provider secrets', async () => {
+    const account = buildVideoAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="video-provider"]').setValue('kling')
+    await wrapper.get('[data-testid="video-access-key"]').setValue('new-kling-access')
+    await wrapper.get('[data-testid="video-secret-key"]').setValue('new-kling-secret')
+    await wrapper.get('[data-testid="video-add-mapping"]').trigger('click')
+    await wrapper.get('[data-testid="video-mapping-from-0"]').setValue('kling-3.0')
+    await wrapper.get('[data-testid="video-mapping-to-0"]').setValue('kling-v3')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toEqual({
+      access_key: 'new-kling-access',
+      secret_key: 'new-kling-secret',
+      base_url: ''
+    })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toEqual({
+      video_provider: 'kling',
+      model_mapping: { 'kling-3.0': 'kling-v3' },
+      video_disabled_capabilities: []
     })
   })
 

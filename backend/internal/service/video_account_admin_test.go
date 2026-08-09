@@ -239,6 +239,91 @@ func TestNormalizeVideoAccountAdminUpdateExplicitEmptyBaseURLClearsStoredValue(t
 	require.Equal(t, map[string]any{"api_key": "old-key"}, credentials)
 }
 
+func TestNormalizeVideoAccountAdminUpdateExplicitEmptyDisabledCapabilitiesClearsStoredValue(t *testing.T) {
+	existing := &Account{
+		Platform:    PlatformVideo,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Credentials: map[string]any{"api_key": "old-key"},
+		Extra: map[string]any{
+			"video_provider":              VideoProviderSeedance,
+			"model_mapping":               map[string]any{"seedance-2.0": "endpoint-id"},
+			"video_disabled_capabilities": []any{"audio"},
+		},
+	}
+
+	_, extra, err := NormalizeVideoAccountAdminUpdate(
+		existing,
+		nil,
+		map[string]any{"video_disabled_capabilities": []any{}},
+		"",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{}, extra[VideoDisabledCapabilitiesExtraKey])
+}
+
+func TestNormalizeVideoAccountAdminUpdateProviderSwitchClearsBaseURLAndPrunesOldSecrets(t *testing.T) {
+	tests := []struct {
+		name                string
+		existingProvider    string
+		existingCredentials map[string]any
+		incomingProvider    string
+		incomingCredentials map[string]any
+		incomingMapping     map[string]any
+		wantCredentials     map[string]any
+	}{
+		{
+			name:                "seedance to kling",
+			existingProvider:    VideoProviderSeedance,
+			existingCredentials: map[string]any{"api_key": "old-seedance", "base_url": "https://old.example.com"},
+			incomingProvider:    VideoProviderKling,
+			incomingCredentials: map[string]any{"access_key": "new-access", "secret_key": "new-secret", "base_url": ""},
+			incomingMapping:     map[string]any{"kling-3.0": "kling-v3"},
+			wantCredentials:     map[string]any{"access_key": "new-access", "secret_key": "new-secret"},
+		},
+		{
+			name:                "kling to seedance",
+			existingProvider:    VideoProviderKling,
+			existingCredentials: map[string]any{"access_key": "old-access", "secret_key": "old-secret", "base_url": "https://old.example.com"},
+			incomingProvider:    VideoProviderSeedance,
+			incomingCredentials: map[string]any{"api_key": "new-seedance", "base_url": ""},
+			incomingMapping:     map[string]any{"seedance-2.0": "endpoint-id"},
+			wantCredentials:     map[string]any{"api_key": "new-seedance"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := &Account{
+				Platform:    PlatformVideo,
+				Type:        AccountTypeAPIKey,
+				Status:      StatusActive,
+				Credentials: tt.existingCredentials,
+				Extra: map[string]any{
+					VideoProviderExtraKey:     tt.existingProvider,
+					VideoModelMappingExtraKey: map[string]any{"old-model": "old-endpoint"},
+				},
+			}
+
+			credentials, extra, err := NormalizeVideoAccountAdminUpdate(
+				existing,
+				tt.incomingCredentials,
+				map[string]any{
+					VideoProviderExtraKey:     tt.incomingProvider,
+					VideoModelMappingExtraKey: tt.incomingMapping,
+				},
+				"",
+			)
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantCredentials, credentials)
+			require.Equal(t, tt.incomingProvider, extra[VideoProviderExtraKey])
+			require.Equal(t, tt.incomingMapping, extra[VideoModelMappingExtraKey])
+		})
+	}
+}
+
 func TestNormalizeVideoAccountAdminUpdateSecretClearingRequiresExplicitInactive(t *testing.T) {
 	existing := &Account{
 		Platform: PlatformVideo,
