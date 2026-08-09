@@ -504,3 +504,67 @@ describe('CreateAccountModal OpenAI custom instructions', () => {
     expect(wrapper.text()).toContain('admin.accounts.openai.customInstructionsMaxBytes')
   })
 })
+
+describe('CreateAccountModal Video accounts', () => {
+  beforeEach(() => {
+    createAccountMock.mockReset().mockResolvedValue({ id: 84, platform: 'video', type: 'apikey' })
+    probeUpstreamBillingMock.mockReset().mockResolvedValue({})
+    showErrorMock.mockReset()
+  })
+
+  it('forces API-key type and sends Seedance fields in the backend-owned locations', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Video')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Seedance account')
+    await wrapper.get('[data-testid="video-api-key"]').setValue('ark-key')
+    await wrapper.get('[data-testid="video-base-url"]').setValue('https://ark.example.com')
+    await wrapper.get('[data-testid="video-add-mapping"]').trigger('click')
+    await wrapper.get('[data-testid="video-mapping-from-0"]').setValue('seedance-2.0')
+    await wrapper.get('[data-testid="video-mapping-to-0"]').setValue('ep-seedance')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]).toMatchObject({
+      platform: 'video',
+      type: 'apikey',
+      credentials: { api_key: 'ark-key', base_url: 'https://ark.example.com' },
+      extra: {
+        video_provider: 'seedance',
+        model_mapping: { 'seedance-2.0': 'ep-seedance' }
+      }
+    })
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).not.toHaveProperty('model_mapping')
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).not.toHaveProperty('access_key')
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).not.toHaveProperty('secret_key')
+  })
+
+  it('clears Seedance secrets and mapping before creating a Kling account', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Video')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Kling account')
+    await wrapper.get('[data-testid="video-api-key"]').setValue('must-not-leak')
+    await wrapper.get('[data-testid="video-add-mapping"]').trigger('click')
+    await wrapper.get('[data-testid="video-mapping-from-0"]').setValue('old-model')
+    await wrapper.get('[data-testid="video-mapping-to-0"]').setValue('old-endpoint')
+
+    await wrapper.get('[data-testid="video-provider"]').setValue('kling')
+    expect(wrapper.find('[data-testid="video-api-key"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="video-access-key"]').setValue('kling-ak')
+    await wrapper.get('[data-testid="video-secret-key"]').setValue('kling-sk')
+    await wrapper.get('[data-testid="video-add-mapping"]').trigger('click')
+    await wrapper.get('[data-testid="video-mapping-from-0"]').setValue('kling-3.0')
+    await wrapper.get('[data-testid="video-mapping-to-0"]').setValue('kling-v3')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload.credentials).toEqual({ access_key: 'kling-ak', secret_key: 'kling-sk' })
+    expect(payload.credentials).not.toHaveProperty('api_key')
+    expect(payload.extra).toEqual({
+      video_provider: 'kling',
+      model_mapping: { 'kling-3.0': 'kling-v3' }
+    })
+  })
+})

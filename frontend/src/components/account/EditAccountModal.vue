@@ -26,8 +26,19 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <VideoProviderFields
+        v-if="account.platform === 'video'"
+        :key="account.id"
+        v-model:provider="videoProvider"
+        v-model:credentials="videoCredentials"
+        v-model:extra="videoExtra"
+        mode="edit"
+        :credential-status="account.credentials_status || {}"
+        :capability-tags="videoCapabilityTags"
+      />
+
       <!-- API Key fields (only for apikey type) -->
-      <div v-if="account.type === 'apikey'" class="space-y-4">
+      <div v-if="account.type === 'apikey' && account.platform !== 'video'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -1228,7 +1239,7 @@
       </div>
 
       <!-- Temp Unschedulable Rules -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div v-if="account.platform !== 'video'" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.title') }}</label>
@@ -1460,7 +1471,7 @@
             }}
           </p>
           <div
-            v-if="account?.type === 'apikey'"
+            v-if="account?.type === 'apikey' && account.platform !== 'video'"
             class="mt-3 flex items-center justify-between gap-3"
           >
             <div class="min-w-0">
@@ -1804,7 +1815,7 @@
       </div>
 
       <div
-        v-if="account?.type === 'apikey'"
+        v-if="account?.type === 'apikey' && account.platform !== 'video'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div>
@@ -1948,7 +1959,7 @@
       </div>
       <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
       <div
-        v-else-if="account?.type === 'apikey' || account?.type === 'bedrock'"
+        v-else-if="(account?.type === 'apikey' || account?.type === 'bedrock') && account.platform !== 'video'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2793,7 +2804,8 @@ import type {
   OpenAIJSONSchemaMode,
   OpenAIImageInputMode,
   OpenAIEndpointCapability,
-  OllamaCloudUsageState
+  OllamaCloudUsageState,
+  VideoProvider
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -2808,6 +2820,7 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
+import VideoProviderFields from '@/components/account/VideoProviderFields.vue'
 import {
   applyAntigravityProjectID,
   applyHeaderOverride,
@@ -2817,6 +2830,9 @@ import {
   readPlanType,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
+  buildVideoCredentials,
+  buildVideoExtra,
+  isValidVideoBaseURL,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
@@ -2898,6 +2914,12 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+const videoProvider = ref<VideoProvider>('seedance')
+const initialVideoProvider = ref<VideoProvider | null>(null)
+const videoCredentials = ref<Record<string, unknown>>({})
+const videoExtra = ref<Record<string, unknown>>({ model_mapping: {} })
+const videoCapabilityTags = ref<string[]>([])
+const videoMetadataInvalid = ref(false)
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -3493,6 +3515,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load intercept warmup requests setting (applies to all account types)
   const credentials = newAccount.credentials as Record<string, unknown> | undefined
+  videoProvider.value = 'seedance'
+  initialVideoProvider.value = null
+  videoCredentials.value = {}
+  videoExtra.value = { model_mapping: {} }
+  videoCapabilityTags.value = []
+  videoMetadataInvalid.value = false
   interceptWarmupRequests.value = credentials?.intercept_warmup_requests === true
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
@@ -3509,6 +3537,41 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = false
   allowOverages.value = false
 	const extra = newAccount.extra as Record<string, unknown> | undefined
+	if (newAccount.platform === 'video') {
+    const providers = new Set(['seedance', 'kling'])
+    const topProvider = newAccount.video_provider
+    const extraProvider = extra?.video_provider
+    const mapping = extra?.model_mapping
+    const disabled = extra?.video_disabled_capabilities
+    const capabilities = newAccount.video_capabilities
+    const credentialKeys = new Set(['api_key', 'access_key', 'secret_key', 'base_url'])
+    const extraKeys = new Set(['video_provider', 'model_mapping', 'video_disabled_capabilities'])
+    const knownCapabilities = new Set([
+      'audio', 'edit', 'extension', 'first_and_last_frame', 'first_frame',
+      'generation', 'last_frame', 'reference_images', 'reference_videos', 'text'
+    ])
+    const validProvider = typeof topProvider === 'string' && providers.has(topProvider) && topProvider === extraProvider
+    const validMapping = Boolean(mapping) && typeof mapping === 'object' && !Array.isArray(mapping) &&
+      Object.keys(mapping as object).length > 0 && Object.entries(mapping as Record<string, unknown>).every(([from, to]) =>
+        from.trim().length > 0 && !from.includes('*') && typeof to === 'string' && to.trim().length > 0 && !to.includes('*'))
+    const validDisabled = disabled === undefined || (Array.isArray(disabled) && disabled.every(value => typeof value === 'string' && knownCapabilities.has(value)))
+    const validCapabilities = capabilities === undefined || (Array.isArray(capabilities) && capabilities.every(value => knownCapabilities.has(value)))
+    const validCredentials = (!credentials || Object.keys(credentials).every(key => credentialKeys.has(key))) &&
+      (credentials?.base_url === undefined || typeof credentials.base_url === 'string')
+    const validExtraKeys = Boolean(extra) && Object.keys(extra || {}).every(key => extraKeys.has(key))
+    videoMetadataInvalid.value = newAccount.type !== 'apikey' || !validProvider || !validMapping ||
+      !validDisabled || !validCapabilities || !validCredentials || !validExtraKeys
+    if (!videoMetadataInvalid.value) {
+      videoProvider.value = topProvider as VideoProvider
+      initialVideoProvider.value = topProvider as VideoProvider
+      videoCredentials.value = typeof credentials?.base_url === 'string' ? { base_url: credentials.base_url } : {}
+      videoExtra.value = {
+        model_mapping: { ...(mapping as Record<string, string>) },
+        ...(Array.isArray(disabled) && disabled.length > 0 ? { video_disabled_capabilities: [...disabled] } : {})
+      }
+      videoCapabilityTags.value = Array.isArray(capabilities) ? [...capabilities] : []
+    }
+  }
 	mixedScheduling.value = extra?.mixed_scheduling === true
 	allowOverages.value = extra?.allow_overages === true
 	autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
@@ -3720,7 +3783,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   }
 
   // Initialize API Key fields for apikey type
-  if (newAccount.type === 'apikey' && newAccount.credentials) {
+  if (newAccount.type === 'apikey' && newAccount.platform !== 'video' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     const platformDefaultUrl =
       newAccount.platform === 'openai'
@@ -4324,7 +4387,7 @@ const handleSubmit = async () => {
       updatePayload.load_factor = 0
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
-    if (props.account.type === 'apikey') {
+    if (props.account.type === 'apikey' && props.account.platform !== 'video') {
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
       updatePayload.upstream_billing_rate_sync_enabled = upstreamBillingRateSyncEnabled.value
       if (upstreamBillingRateSyncEnabled.value) {
@@ -4333,7 +4396,47 @@ const handleSubmit = async () => {
     }
 
     // For apikey type, handle credentials update
-    if (props.account.type === 'apikey') {
+    if (props.account.platform === 'video') {
+      if (videoMetadataInvalid.value) {
+        appStore.showError(t('admin.accounts.video.invalidMetadata'))
+        return
+      }
+      const credentials = buildVideoCredentials({
+        platform: 'video',
+        provider: videoProvider.value,
+        apiKey: videoCredentials.value.api_key,
+        accessKey: videoCredentials.value.access_key,
+        secretKey: videoCredentials.value.secret_key,
+        baseUrl: videoCredentials.value.base_url
+      })
+      if (!isValidVideoBaseURL(String(videoCredentials.value.base_url || ''))) {
+        appStore.showError(t('admin.accounts.video.invalidBaseUrl'))
+        return
+      }
+      const status = props.account.credentials_status || {}
+      const providerUnchanged = videoProvider.value === initialVideoProvider.value
+      if (videoProvider.value === 'seedance' && !credentials.api_key && !(providerUnchanged && status.has_api_key)) {
+        appStore.showError(t('admin.accounts.video.apiKeyRequired'))
+        return
+      }
+      if (videoProvider.value === 'kling' &&
+          ((!credentials.access_key && !(providerUnchanged && status.has_access_key)) ||
+           (!credentials.secret_key && !(providerUnchanged && status.has_secret_key)))) {
+        appStore.showError(t('admin.accounts.video.klingCredentialsRequired'))
+        return
+      }
+      updatePayload.credentials = credentials
+      updatePayload.extra = buildVideoExtra({
+        provider: videoProvider.value,
+        modelMapping: videoExtra.value.model_mapping,
+        disabledCapabilities: Array.isArray(videoExtra.value.video_disabled_capabilities)
+          ? videoExtra.value.video_disabled_capabilities
+          : []
+      })
+    }
+
+    // For apikey type, handle credentials update
+    else if (props.account.type === 'apikey') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newBaseUrl = editBaseUrl.value.trim() || defaultBaseUrl.value
       const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
@@ -4930,7 +5033,7 @@ const handleSubmit = async () => {
     }
 
     // For apikey/bedrock accounts, handle quota_limit in extra
-    if (props.account.type === 'apikey' || props.account.type === 'bedrock') {
+    if ((props.account.type === 'apikey' && props.account.platform !== 'video') || props.account.type === 'bedrock') {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
         (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }

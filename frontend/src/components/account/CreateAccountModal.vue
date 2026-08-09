@@ -160,6 +160,19 @@
             <PlatformIcon platform="grok" size="sm" />
             Grok
           </button>
+          <button
+            type="button"
+            @click="form.platform = 'video'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'video'
+                ? 'bg-white text-rose-600 shadow-sm dark:bg-dark-600 dark:text-rose-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="video" size="sm" />
+            Video
+          </button>
         </div>
       </div>
 
@@ -1112,8 +1125,16 @@
         </div>
       </div>
 
-      <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
-      <div v-if="form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
+      <VideoProviderFields
+        v-if="form.platform === 'video'"
+        v-model:provider="videoProvider"
+        v-model:credentials="videoCredentials"
+        v-model:extra="videoExtra"
+        mode="create"
+      />
+
+      <!-- API Key input (only for apikey type, excluding platforms with their own fields) -->
+      <div v-if="form.type === 'apikey' && form.platform !== 'antigravity' && form.platform !== 'video'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -1890,7 +1911,7 @@
 
       <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
       <div
-        v-else-if="form.type === 'apikey' || form.type === 'bedrock'"
+        v-else-if="(form.type === 'apikey' || form.type === 'bedrock') && form.platform !== 'video'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2162,7 +2183,7 @@
       </div>
 
       <!-- Temp Unschedulable Rules -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div v-if="form.platform !== 'video'" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.title') }}</label>
@@ -3696,7 +3717,8 @@ import type {
   OpenAIResponsesMode,
   OpenAIJSONSchemaMode,
   OpenAIImageInputMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  VideoProvider
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -3711,12 +3733,16 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import VideoProviderFields from '@/components/account/VideoProviderFields.vue'
 import {
   applyAntigravityProjectID,
   applyHeaderOverride,
   applyInterceptWarmup,
   isHeaderOverrideCapable,
   validateHeaderOverrideRows,
+  buildVideoCredentials,
+  buildVideoExtra,
+  isValidVideoBaseURL,
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
@@ -3852,6 +3878,9 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const videoProvider = ref<VideoProvider>('seedance')
+const videoCredentials = ref<Record<string, unknown>>({})
+const videoExtra = ref<Record<string, unknown>>({ model_mapping: {} })
 const upstreamBillingAutoProbeEnabled = ref(true)
 
 const syncPreviewCredentials = computed(() => {
@@ -4351,6 +4380,10 @@ watch(
 watch(
   [accountCategory, addMethod, antigravityAccountType, () => form.platform],
   ([category, method, agType]) => {
+    if (form.platform === 'video') {
+      form.type = 'apikey'
+      return
+    }
     // Antigravity upstream 类型（实际创建为 apikey）
     if (form.platform === 'antigravity' && agType === 'upstream') {
       form.type = 'apikey'
@@ -4376,6 +4409,17 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
+    if (newPlatform === 'video') {
+      accountCategory.value = 'apikey'
+      form.type = 'apikey'
+      videoProvider.value = 'seedance'
+      videoCredentials.value = {}
+      videoExtra.value = { model_mapping: {} }
+    } else {
+      videoProvider.value = 'seedance'
+      videoCredentials.value = {}
+      videoExtra.value = { model_mapping: {} }
+    }
     // Reset base URL based on platform
     apiKeyBaseUrl.value =
       (newPlatform === 'openai')
@@ -4827,6 +4871,9 @@ const resetForm = () => {
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
+  videoProvider.value = 'seedance'
+  videoCredentials.value = {}
+  videoExtra.value = { model_mapping: {} }
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
@@ -5152,6 +5199,51 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 
 const handleSubmit = async () => {
   if (form.platform === 'openai' && !validateOpenAICustomInstructions()) {
+    return
+  }
+
+  if (form.platform === 'video') {
+    if (!form.name.trim()) {
+      appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    try {
+      const credentials = buildVideoCredentials({
+        platform: 'video',
+        provider: videoProvider.value,
+        apiKey: videoCredentials.value.api_key,
+        accessKey: videoCredentials.value.access_key,
+        secretKey: videoCredentials.value.secret_key,
+        baseUrl: videoCredentials.value.base_url
+      })
+      if (!isValidVideoBaseURL(String(videoCredentials.value.base_url || ''))) {
+        appStore.showError(t('admin.accounts.video.invalidBaseUrl'))
+        return
+      }
+      if (videoProvider.value === 'seedance' && !credentials.api_key) {
+        appStore.showError(t('admin.accounts.video.apiKeyRequired'))
+        return
+      }
+      if (videoProvider.value === 'kling' && (!credentials.access_key || !credentials.secret_key)) {
+        appStore.showError(t('admin.accounts.video.klingCredentialsRequired'))
+        return
+      }
+      const extra = buildVideoExtra({
+        provider: videoProvider.value,
+        modelMapping: videoExtra.value.model_mapping,
+        disabledCapabilities: videoExtra.value.video_disabled_capabilities
+      })
+      await doCreateAccount({
+        ...form,
+        type: 'apikey',
+        credentials,
+        extra,
+        group_ids: form.group_ids,
+        auto_pause_on_expired: autoPauseOnExpired.value
+      })
+    } catch {
+      appStore.showError(t('admin.accounts.video.invalidConfiguration'))
+    }
     return
   }
 

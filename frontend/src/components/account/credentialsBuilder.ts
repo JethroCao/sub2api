@@ -10,6 +10,114 @@ export function applyInterceptWarmup(
   }
 }
 
+export type VideoProvider = 'seedance' | 'kling'
+
+const VIDEO_CAPABILITY_KEYS = new Set([
+  'audio',
+  'edit',
+  'extension',
+  'first_and_last_frame',
+  'first_frame',
+  'generation',
+  'last_frame',
+  'reference_images',
+  'reference_videos',
+  'text'
+])
+
+export interface VideoCredentialsInput {
+  platform: string
+  provider: VideoProvider
+  apiKey: unknown
+  accessKey: unknown
+  secretKey: unknown
+  baseUrl: unknown
+}
+
+export function buildVideoCredentials(input: VideoCredentialsInput): Record<string, string> {
+  if (input.platform !== 'video') return {}
+  const credentials: Record<string, string> = {}
+  const baseURL = typeof input.baseUrl === 'string' ? input.baseUrl.trim() : ''
+  if (input.provider === 'seedance') {
+    const apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
+    if (apiKey) credentials.api_key = apiKey
+  } else if (input.provider === 'kling') {
+    const accessKey = typeof input.accessKey === 'string' ? input.accessKey.trim() : ''
+    const secretKey = typeof input.secretKey === 'string' ? input.secretKey.trim() : ''
+    if (accessKey) credentials.access_key = accessKey
+    if (secretKey) credentials.secret_key = secretKey
+  } else {
+    throw new Error('video_provider is invalid')
+  }
+  if (baseURL) credentials.base_url = baseURL
+  return credentials
+}
+
+export interface VideoExtraInput {
+  provider: VideoProvider
+  modelMapping: unknown
+  disabledCapabilities: unknown
+}
+
+export function buildVideoExtra(input: VideoExtraInput): Record<string, unknown> {
+  if (input.provider !== 'seedance' && input.provider !== 'kling') {
+    throw new Error('video_provider is invalid')
+  }
+  if (!input.modelMapping || typeof input.modelMapping !== 'object' || Array.isArray(input.modelMapping)) {
+    throw new Error('model_mapping is invalid')
+  }
+  const mapping: Record<string, string> = {}
+  for (const [rawFrom, rawTo] of Object.entries(input.modelMapping)) {
+    const from = rawFrom.trim()
+    const to = typeof rawTo === 'string' ? rawTo.trim() : ''
+    if (!from || !to || from.includes('*') || to.includes('*') || Object.prototype.hasOwnProperty.call(mapping, from)) {
+      throw new Error('model_mapping is invalid')
+    }
+    mapping[from] = to
+  }
+  if (Object.keys(mapping).length === 0) throw new Error('model_mapping is required')
+
+  const disabledCapabilities: string[] = []
+  const rawDisabledCapabilities = input.disabledCapabilities === undefined
+    ? []
+    : input.disabledCapabilities
+  if (!Array.isArray(rawDisabledCapabilities)) {
+    throw new Error('video_disabled_capabilities is invalid')
+  }
+  for (const rawCapability of rawDisabledCapabilities) {
+    if (typeof rawCapability !== 'string') throw new Error('video_disabled_capabilities is invalid')
+    const capability = rawCapability.trim()
+    if (!VIDEO_CAPABILITY_KEYS.has(capability)) {
+      throw new Error('video_disabled_capabilities is invalid')
+    }
+    if (!disabledCapabilities.includes(capability)) disabledCapabilities.push(capability)
+  }
+
+  const extra: Record<string, unknown> = {
+    video_provider: input.provider,
+    model_mapping: mapping
+  }
+  if (disabledCapabilities.length > 0) {
+    extra.video_disabled_capabilities = disabledCapabilities
+  }
+  return extra
+}
+
+export function isValidVideoBaseURL(value: string): boolean {
+  if (!value.trim()) return true
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      (url.pathname === '' || url.pathname === '/')
+  } catch {
+    return false
+  }
+}
+
 export const ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY = 'antigravity_project_id'
 
 export function applyAntigravityProjectID(

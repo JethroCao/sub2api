@@ -291,6 +291,28 @@ function buildOpenAISetupTokenAccount() {
   } as any
 }
 
+function buildVideoAccount() {
+  return {
+    ...buildAccount(),
+    id: 15,
+    name: 'Seedance account',
+    platform: 'video',
+    type: 'apikey',
+    credentials: {
+      api_key: 'api-returned-secret',
+      base_url: 'https://ark.example.com'
+    },
+    credentials_status: { has_api_key: true },
+    extra: {
+      video_provider: 'seedance',
+      model_mapping: { 'seedance-2.0': 'ep-seedance' },
+      video_disabled_capabilities: ['audio']
+    },
+    video_provider: 'seedance',
+    video_capabilities: ['generation', 'audio']
+  } as any
+}
+
 function mountModal(account = buildAccount()) {
   return mount(EditAccountModal, {
     props: {
@@ -1321,6 +1343,41 @@ describe('EditAccountModal', () => {
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('never renders or reserializes a Video secret and preserves it through has_api_key', async () => {
+    const account = buildVideoAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.html()).not.toContain('api-returned-secret')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="video-api-key"]').element.value).toBe('')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.credentials).toEqual({ base_url: 'https://ark.example.com' })
+    expect(payload.extra).toEqual({
+      video_provider: 'seedance',
+      model_mapping: { 'seedance-2.0': 'ep-seedance' },
+      video_disabled_capabilities: ['audio']
+    })
+  })
+
+  it('fails closed when Video provider metadata is unknown', async () => {
+    const account = buildVideoAccount()
+    account.video_provider = 'legacy-provider'
+    account.extra.video_provider = 'legacy-provider'
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.video.invalidMetadata')
   })
 
   it('allows saving Vertex SA account when backend redacted service_account_json but credentials_status reports it exists', async () => {

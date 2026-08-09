@@ -9,6 +9,8 @@ import {
   applyPlanType,
   buildHeaderOverridesObject,
   buildPlanTypeOptions,
+  buildVideoCredentials,
+  buildVideoExtra,
   isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
   GROK_BASE_URL_PRESETS,
@@ -19,6 +21,73 @@ import {
   splitHeaderOverridesObject,
   validateHeaderOverrideRows
 } from '../credentialsBuilder'
+
+describe('video account payload builders', () => {
+  it('builds Seedance credentials without Kling fields', () => {
+    expect(buildVideoCredentials({
+      platform: 'video',
+      provider: 'seedance',
+      apiKey: ' ark ',
+      accessKey: 'old-ak',
+      secretKey: 'old-sk',
+      baseUrl: ' https://ark.example.com '
+    })).toEqual({
+      api_key: 'ark',
+      base_url: 'https://ark.example.com'
+    })
+  })
+
+  it('builds Kling credentials without Seedance fields and omits blank secrets on edit', () => {
+    expect(buildVideoCredentials({
+      platform: 'video',
+      provider: 'kling',
+      apiKey: 'old-ark',
+      accessKey: '',
+      secretKey: '',
+      baseUrl: ''
+    })).toEqual({})
+
+    expect(buildVideoCredentials({
+      platform: 'video',
+      provider: 'kling',
+      apiKey: 'old-ark',
+      accessKey: ' ak ',
+      secretKey: ' sk ',
+      baseUrl: 'https://kling.example.com'
+    })).toEqual({
+      access_key: 'ak',
+      secret_key: 'sk',
+      base_url: 'https://kling.example.com'
+    })
+  })
+
+  it('places exact model mappings and disabled capabilities only in extra', () => {
+    expect(buildVideoExtra({
+      provider: 'seedance',
+      modelMapping: { ' seedance-2.0 ': ' ep-seedance ' },
+      disabledCapabilities: ['audio', 'audio', ' first_frame ']
+    })).toEqual({
+      video_provider: 'seedance',
+      model_mapping: { 'seedance-2.0': 'ep-seedance' },
+      video_disabled_capabilities: ['audio', 'first_frame']
+    })
+  })
+
+  it('fails closed for empty, wildcard, or malformed video mappings', () => {
+    expect(() => buildVideoExtra({ provider: 'seedance', modelMapping: {}, disabledCapabilities: [] }))
+      .toThrow('model_mapping')
+    expect(() => buildVideoExtra({
+      provider: 'seedance',
+      modelMapping: { 'seedance-*': 'ep-seedance' },
+      disabledCapabilities: []
+    })).toThrow('model_mapping')
+    expect(() => buildVideoExtra({
+      provider: 'legacy' as 'seedance',
+      modelMapping: { 'seedance-2.0': 'ep-seedance' },
+      disabledCapabilities: []
+    })).toThrow('video_provider')
+  })
+})
 
 describe('applyInterceptWarmup', () => {
   it('create + enabled=true: should set intercept_warmup_requests to true', () => {

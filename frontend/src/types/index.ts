@@ -500,7 +500,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video' | 'composite'
 
 export type SubscriptionType = 'standard' | 'subscription'
 
@@ -832,7 +832,8 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video'
+export type VideoProvider = 'seedance' | 'kling'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1066,6 +1067,8 @@ export interface Account {
   // 改为通过 credentials_status.has_<key> 暴露存在性。
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
+  video_provider?: VideoProvider
+  video_capabilities?: string[]
   ollama_cloud_usage?: OllamaCloudUsageState
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
