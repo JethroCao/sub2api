@@ -1002,6 +1002,8 @@ export default {
         removeRule: '删除规则',
         empty: '尚未配置定价规则。',
         noAuthoritativeModels: '当前分组没有已启用的 Video 账号提供权威模型能力。',
+        loadBlocked: '视频定价与账号能力数据必须重新加载成功后才能保存此分组。',
+        retryLoad: '重新加载',
         missingCoverageTitle: '缺少已启用的定价覆盖',
         missingCoverageItem: '{external_model} / {operation}',
         externalModel: '外部模型',

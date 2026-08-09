@@ -89,4 +89,16 @@ describe('VideoPricingRulesEditor', () => {
     expect(wrapper.get('[data-testid="video-pricing-margin-0"]').text()).toContain('$0.25')
     expect(wrapper.get('[data-testid="video-pricing-margin-0"]').text()).toContain('$0.5')
   })
+
+  it('never renders a dormant legacy Kling rule or preserves it as an option', () => {
+    const wrapper = mount(VideoPricingRulesEditor, {
+      props: {
+        modelValue: [rule({ external_model: 'kling-3.0', enabled: false })],
+        capabilities: [{ external_model: 'seedance-2.0', operation: 'generation' }]
+      }
+    })
+
+    expect(wrapper.find('[data-testid="video-pricing-model-0"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('kling-3.0')
+  })
 })

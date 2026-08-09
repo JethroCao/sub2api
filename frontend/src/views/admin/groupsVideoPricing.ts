@@ -134,16 +134,18 @@ export function deriveAuthoritativeVideoCapabilities(
 export function videoPricingRulesForReplacement(
   rules: Array<VideoPricingRuleInput & { id?: number; group_id?: number }>
 ): VideoPricingRuleInput[] {
-  return rules.map(rule => ({
-    external_model: rule.external_model.trim(),
-    operation: rule.operation,
-    resolution: rule.resolution,
-    audio_mode: rule.audio_mode,
-    unit: rule.unit,
-    unit_price: rule.unit_price,
-    upstream_unit_cost: rule.upstream_unit_cost,
-    enabled: rule.enabled
-  }))
+  return rules
+    .filter(rule => !rule.external_model.trim().toLowerCase().startsWith('kling-'))
+    .map(rule => ({
+      external_model: rule.external_model.trim(),
+      operation: rule.operation,
+      resolution: rule.resolution,
+      audio_mode: rule.audio_mode,
+      unit: rule.unit,
+      unit_price: rule.unit_price,
+      upstream_unit_cost: rule.upstream_unit_cost,
+      enabled: rule.enabled
+    }))
 }
 
 export function videoPricingErrorI18nKey(error: unknown): string {

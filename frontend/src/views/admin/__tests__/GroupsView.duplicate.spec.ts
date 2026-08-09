@@ -6,6 +6,7 @@ import type { AdminGroup } from '@/types'
 import GroupsView from '@/views/admin/GroupsView.vue'
 
 const {
+  apiPut,
   listGroups,
   duplicateGroup,
   listVideoPricingRules,
@@ -17,6 +18,7 @@ const {
   showSuccess,
   showError
 } = vi.hoisted(() => ({
+  apiPut: vi.fn(),
   listGroups: vi.fn(),
   duplicateGroup: vi.fn(),
   listVideoPricingRules: vi.fn(),
@@ -27,6 +29,10 @@ const {
   getCapacitySummary: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
+}))
+
+vi.mock('@/api/client', () => ({
+  apiClient: { put: apiPut }
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -68,9 +74,14 @@ vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   return {
     ...actual,
-    useI18n: () => ({ t: (key: string) => key })
+    useI18n: () => ({
+      t: (key: string, params?: Record<string, unknown>) =>
+        params ? `${key}:${Object.values(params).join(':')}` : key
+    })
   }
 })
+
+import { replaceVideoPricingRules as replaceVideoPricingRulesThroughClient } from '@/api/admin/groups'
 
 const sourceGroup: AdminGroup = {
   id: 42,
@@ -143,6 +154,12 @@ const DataTableStub = defineComponent({
   template: '<div><div v-for="row in data" :key="row.id"><slot name="cell-actions" :row="row" /></div></div>'
 })
 
+const TotpStepUpDialogStub = defineComponent({
+  name: 'TotpStepUpDialog',
+  props: { controller: { type: Object, required: true } },
+  template: '<div data-testid="step-up-dialog" />'
+})
+
 function mountView() {
   return mount(GroupsView, {
     global: {
@@ -161,7 +178,7 @@ function mountView() {
         GroupRateMultipliersModal: true,
         GroupRPMOverridesModal: true,
         VideoPricingRulesEditor: true,
-        TotpStepUpDialog: true,
+        TotpStepUpDialog: TotpStepUpDialogStub,
         VueDraggable: true
       }
     }
@@ -182,7 +199,8 @@ describe('GroupsView duplicate action', () => {
       getUsageSummary,
       getCapacitySummary,
       showSuccess,
-      showError
+      showError,
+      apiPut
     ]) {
       fn.mockReset()
     }
@@ -244,7 +262,7 @@ describe('GroupsView duplicate action', () => {
       upstream_unit_cost: null,
       enabled: true
     }])
-    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess')
+    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess:Primary (Copy)')
     expect(listGroups).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
@@ -301,7 +319,7 @@ describe('GroupsView duplicate action', () => {
     await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
     await flushPromises()
 
-    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess')
+    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess:Primary (Copy)')
     expect(showError).toHaveBeenCalledWith('admin.groups.failedToLoad')
     expect(showError).not.toHaveBeenCalledWith('admin.groups.duplicateFailed')
     wrapper.unmount()
@@ -309,8 +327,8 @@ describe('GroupsView duplicate action', () => {
 
   it('keeps and reloads the duplicate while reporting localized partial success when pricing copy fails', async () => {
     replaceVideoPricingRules.mockRejectedValueOnce({
-      status: 400,
-      code: 'VIDEO_PRICING_RULE_INVALID',
+      status: 500,
+      code: 'UNKNOWN_BACKEND_FAILURE',
       message: 'raw backend detail with secret=do-not-show'
     })
     const wrapper = mountView()
@@ -323,7 +341,9 @@ describe('GroupsView duplicate action', () => {
     expect(replaceVideoPricingRules).toHaveBeenCalledTimes(1)
     expect(listGroups).toHaveBeenCalledTimes(2)
     expect(showSuccess).not.toHaveBeenCalled()
-    expect(showError).toHaveBeenCalledWith('admin.groups.videoPricing.duplicatePartialSuccess')
+    expect(showError).toHaveBeenCalledWith(
+      'admin.groups.videoPricing.duplicatePartialSuccess:admin.groups.videoPricing.errors.generic'
+    )
     expect(showError).not.toHaveBeenCalledWith(expect.stringContaining('secret'))
     wrapper.unmount()
   })
@@ -345,6 +365,92 @@ describe('GroupsView duplicate action', () => {
     await flushPromises()
     expect(listVideoPricingRules).toHaveBeenCalledWith(42)
     expect(replaceVideoPricingRules).toHaveBeenCalledWith(43, expect.any(Array))
+    wrapper.unmount()
+  })
+
+  it('filters dormant Kling rows before copying pricing to the duplicate', async () => {
+    listVideoPricingRules.mockResolvedValueOnce([
+      {
+        id: 8,
+        group_id: 42,
+        external_model: 'kling-3.0',
+        operation: 'generation',
+        resolution: '*',
+        audio_mode: 'any',
+        unit: 'per_output_second',
+        unit_price: 0.3,
+        upstream_unit_cost: null,
+        enabled: false
+      },
+      {
+        id: 9,
+        group_id: 42,
+        external_model: 'seedance-2.0',
+        operation: 'generation',
+        resolution: '*',
+        audio_mode: 'any',
+        unit: 'per_output_second',
+        unit_price: 0.1,
+        upstream_unit_cost: null,
+        enabled: true
+      }
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
+    await flushPromises()
+
+    expect(replaceVideoPricingRules).toHaveBeenCalledWith(43, [{
+      external_model: 'seedance-2.0',
+      operation: 'generation',
+      resolution: '*',
+      audio_mode: 'any',
+      unit: 'per_output_second',
+      unit_price: 0.1,
+      upstream_unit_cost: null,
+      enabled: true
+    }])
+    wrapper.unmount()
+  })
+
+  it('automatically retries pricing after step-up with the same PUT idempotency key', async () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
+      '33333333-3333-4333-8333-333333333333'
+    )
+    replaceVideoPricingRules.mockImplementation(replaceVideoPricingRulesThroughClient)
+    apiPut
+      .mockRejectedValueOnce({ status: 403, code: 'STEP_UP_REQUIRED' })
+      .mockResolvedValueOnce({ data: [] })
+    const wrapper = mountView()
+    await flushPromises()
+
+    void wrapper.get('[data-testid="group-duplicate"]').trigger('click')
+    await vi.waitFor(() => expect(apiPut).toHaveBeenCalledTimes(1))
+    const controller = wrapper.getComponent(TotpStepUpDialogStub).props('controller') as {
+      onVerified: () => void
+    }
+    controller.onVerified()
+    await flushPromises()
+
+    expect(apiPut).toHaveBeenCalledTimes(2)
+    expect(apiPut.mock.calls[0][2].headers).toEqual(apiPut.mock.calls[1][2].headers)
+    expect(apiPut.mock.calls[1]).toEqual([
+      '/admin/groups/43/video-pricing-rules',
+      { rules: [{
+        external_model: 'seedance-2.0',
+        operation: 'generation',
+        resolution: '*',
+        audio_mode: 'any',
+        unit: 'per_output_second',
+        unit_price: 0.1,
+        upstream_unit_cost: null,
+        enabled: true
+      }] },
+      { headers: {
+        'Idempotency-Key': 'group-video-pricing-43-33333333-3333-4333-8333-333333333333'
+      } }
+    ])
     wrapper.unmount()
   })
 })

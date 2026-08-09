@@ -1005,6 +1005,8 @@ export default {
         removeRule: 'Remove rule',
         empty: 'No pricing rules yet.',
         noAuthoritativeModels: 'No enabled Video account exposes an authoritative model capability for this group.',
+        loadBlocked: 'Pricing and account capability data must reload successfully before this group can be saved.',
+        retryLoad: 'Retry loading',
         missingCoverageTitle: 'Missing enabled pricing coverage',
         missingCoverageItem: '{external_model} / {operation}',
         externalModel: 'External model',

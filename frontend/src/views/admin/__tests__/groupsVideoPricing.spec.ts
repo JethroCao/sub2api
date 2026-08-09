@@ -4,7 +4,8 @@ import {
   buildVideoPricingPreview,
   deriveAuthoritativeVideoCapabilities,
   resolveVideoPricingRule,
-  validateVideoPricingRules
+  validateVideoPricingRules,
+  videoPricingRulesForReplacement
 } from '../groupsVideoPricing'
 
 const rule = (overrides: Record<string, unknown> = {}) => ({
@@ -109,6 +110,22 @@ describe('group video pricing helpers', () => {
 
     expect(capabilities).toEqual([])
     expect(validateVideoPricingRules([], capabilities)).toEqual([])
+  })
+
+  it('removes dormant Kling rows from every replacement payload', () => {
+    expect(videoPricingRulesForReplacement([
+      rule({ id: 1, group_id: 7, external_model: ' kling-3.0 ', enabled: false }),
+      rule({ id: 2, group_id: 7, external_model: 'seedance-2.0', unit_price: 0.2 })
+    ])).toEqual([{
+      external_model: 'seedance-2.0',
+      operation: 'generation',
+      resolution: '*',
+      audio_mode: 'any',
+      unit: 'per_output_second',
+      unit_price: 0.2,
+      upstream_unit_cost: null,
+      enabled: true
+    }])
   })
 
   it('fails closed on malformed mappings and unknown capability tags', () => {

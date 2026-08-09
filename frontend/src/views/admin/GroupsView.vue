@@ -2670,6 +2670,21 @@
           class="border-t pt-4"
         />
 
+        <div
+          v-if="editForm.platform === 'video' && editVideoPricingLoadFailed"
+          class="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300"
+        >
+          <span>{{ t('admin.groups.videoPricing.loadBlocked') }}</span>
+          <button
+            type="button"
+            class="btn btn-secondary flex-shrink-0"
+            data-testid="retry-edit-video-pricing"
+            @click="retryEditVideoPricing"
+          >
+            {{ t('admin.groups.videoPricing.retryLoad') }}
+          </button>
+        </div>
+
         <!-- 旧 Grok 分辨率价格兼容配置 -->
         <div
           v-if="supportsVideoPricingPlatform(editForm.platform)"
@@ -3672,7 +3687,7 @@
           <button
             type="submit"
             form="edit-group-form"
-            :disabled="submitting"
+            :disabled="submitting || (editForm.platform === 'video' && !editVideoPricingReady)"
             class="btn btn-primary"
             data-tour="group-form-submit"
           >
@@ -4710,6 +4725,8 @@ const createVideoPricingRules = ref<VideoPricingRuleInput[]>([]);
 const editVideoPricingRules = ref<VideoPricingRuleInput[]>([]);
 const createVideoPricingCapabilities = ref<VideoPricingCapability[]>([]);
 const editVideoPricingCapabilities = ref<VideoPricingCapability[]>([]);
+const editVideoPricingReady = ref(false);
+const editVideoPricingLoadFailed = ref(false);
 const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
@@ -5257,18 +5274,29 @@ const refreshCreateVideoCapabilities = async () => {
 };
 
 const loadEditVideoPricing = async (groupID: number) => {
-  try {
-    const [rules, accounts] = await Promise.all([
-      adminAPI.groups.listVideoPricingRules(groupID),
-      loadActiveVideoAccountsForGroups([groupID]),
-    ]);
-    editVideoPricingRules.value = videoPricingRulesForReplacement(rules);
-    editVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accounts);
-  } catch {
-    editVideoPricingRules.value = [];
-    editVideoPricingCapabilities.value = [];
+  editVideoPricingReady.value = false;
+  editVideoPricingLoadFailed.value = false;
+  const [rulesResult, accountsResult] = await Promise.allSettled([
+    adminAPI.groups.listVideoPricingRules(groupID),
+    loadActiveVideoAccountsForGroups([groupID]),
+  ]);
+  if (rulesResult.status === "fulfilled") {
+    editVideoPricingRules.value = videoPricingRulesForReplacement(rulesResult.value);
+  }
+  if (accountsResult.status === "fulfilled") {
+    editVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accountsResult.value);
+  }
+  editVideoPricingLoadFailed.value =
+    rulesResult.status === "rejected" || accountsResult.status === "rejected";
+  editVideoPricingReady.value = !editVideoPricingLoadFailed.value;
+  if (editVideoPricingLoadFailed.value) {
     appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
   }
+};
+
+const retryEditVideoPricing = async () => {
+  if (!editingGroup.value || editForm.platform !== "video") return;
+  await loadEditVideoPricing(editingGroup.value.id);
 };
 
 const saveVideoPricingRules = async (groupID: number, rules: VideoPricingRuleInput[]) => {
@@ -5937,6 +5965,8 @@ const handleEdit = async (group: AdminGroup) => {
   resetModelsListState(editModelsListState, group.models_list_config);
   editVideoPricingRules.value = [];
   editVideoPricingCapabilities.value = [];
+  editVideoPricingReady.value = group.platform !== "video";
+  editVideoPricingLoadFailed.value = false;
   if (group.platform === "video") {
     await loadEditVideoPricing(group.id);
   }
@@ -5975,6 +6005,8 @@ const closeEditModal = () => {
   editForm.allow_video_generation = false;
   editVideoPricingRules.value = [];
   editVideoPricingCapabilities.value = [];
+  editVideoPricingReady.value = false;
+  editVideoPricingLoadFailed.value = false;
   editForm.web_search_price_per_call = null;
   resetMessagesDispatchFormState(editForm);
   editForm.allow_live = false;
@@ -5983,6 +6015,10 @@ const closeEditModal = () => {
 
 const handleUpdateGroup = async () => {
   if (!editingGroup.value) return;
+  if (editForm.platform === "video" && !editVideoPricingReady.value) {
+    appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
+    return;
+  }
   if (!editForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
     return;
