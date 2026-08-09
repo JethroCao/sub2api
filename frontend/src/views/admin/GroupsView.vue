@@ -4727,6 +4727,7 @@ const createVideoPricingCapabilities = ref<VideoPricingCapability[]>([]);
 const editVideoPricingCapabilities = ref<VideoPricingCapability[]>([]);
 const editVideoPricingReady = ref(false);
 const editVideoPricingLoadFailed = ref(false);
+let editVideoPricingLoadEpoch = 0;
 const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
@@ -5273,13 +5274,19 @@ const refreshCreateVideoCapabilities = async () => {
   }
 };
 
-const loadEditVideoPricing = async (groupID: number) => {
+const loadEditVideoPricing = async (groupID: number, requestEpoch: number): Promise<boolean> => {
   editVideoPricingReady.value = false;
   editVideoPricingLoadFailed.value = false;
   const [rulesResult, accountsResult] = await Promise.allSettled([
     adminAPI.groups.listVideoPricingRules(groupID),
     loadActiveVideoAccountsForGroups([groupID]),
   ]);
+  if (
+    requestEpoch !== editVideoPricingLoadEpoch ||
+    editingGroup.value?.id !== groupID
+  ) {
+    return false;
+  }
   if (rulesResult.status === "fulfilled") {
     editVideoPricingRules.value = videoPricingRulesForReplacement(rulesResult.value);
   }
@@ -5292,11 +5299,13 @@ const loadEditVideoPricing = async (groupID: number) => {
   if (editVideoPricingLoadFailed.value) {
     appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
   }
+  return true;
 };
 
 const retryEditVideoPricing = async () => {
   if (!editingGroup.value || editForm.platform !== "video") return;
-  await loadEditVideoPricing(editingGroup.value.id);
+  const requestEpoch = ++editVideoPricingLoadEpoch;
+  await loadEditVideoPricing(editingGroup.value.id, requestEpoch);
 };
 
 const saveVideoPricingRules = async (groupID: number, rules: VideoPricingRuleInput[]) => {
@@ -5887,6 +5896,7 @@ const handleCreateGroup = async () => {
 };
 
 const handleEdit = async (group: AdminGroup) => {
+  const requestEpoch = ++editVideoPricingLoadEpoch;
   editingGroup.value = group;
   editForm.name = group.name;
   editForm.description = group.description || "";
@@ -5968,7 +5978,8 @@ const handleEdit = async (group: AdminGroup) => {
   editVideoPricingReady.value = group.platform !== "video";
   editVideoPricingLoadFailed.value = false;
   if (group.platform === "video") {
-    await loadEditVideoPricing(group.id);
+    const isCurrentEdit = await loadEditVideoPricing(group.id, requestEpoch);
+    if (!isCurrentEdit) return;
   }
   // 加载模型路由规则（异步加载账号名称）
   editModelRoutingRules.value = await convertApiFormatToRoutingRules(
@@ -5979,6 +5990,7 @@ const handleEdit = async (group: AdminGroup) => {
 };
 
 const closeEditModal = () => {
+  editVideoPricingLoadEpoch += 1;
   editModelRoutingRules.value.forEach((rule) => {
     accountSearchRunner.clearKey(getEditRuleSearchKey(rule));
   });

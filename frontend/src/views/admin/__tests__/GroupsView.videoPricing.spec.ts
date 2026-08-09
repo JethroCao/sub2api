@@ -142,7 +142,7 @@ const TablePageLayoutStub = defineComponent({
 })
 const DataTableStub = defineComponent({
   props: { data: { type: Array, default: () => [] } },
-  template: '<div><div v-for="row in data" :key="row.id"><slot name="cell-actions" :row="row" /></div></div>'
+  template: '<div><div v-for="row in data" :key="row.id" :data-testid="`group-row-${row.id}`"><slot name="cell-actions" :row="row" /></div></div>'
 })
 const SelectStub = defineComponent({
   inheritAttrs: false,
@@ -196,6 +196,16 @@ async function openEdit(wrapper: ReturnType<typeof mount>) {
   if (!edit) throw new Error('edit action not found')
   await edit.trigger('click')
   await flushPromises()
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 describe('GroupsView video pricing safety and permissions', () => {
@@ -290,6 +300,87 @@ describe('GroupsView video pricing safety and permissions', () => {
       allow_image_generation: false,
       allow_video_generation: true
     })
+    wrapper.unmount()
+  })
+
+  it('ignores a late group-A retry after group B becomes the active edit', async () => {
+    const groupB = { ...videoGroup, id: 84, name: 'Video group B' }
+    const groupBRule = {
+      ...pricingRule,
+      id: 19,
+      group_id: 84,
+      external_model: 'seedance-b'
+    }
+    listGroups.mockResolvedValueOnce({
+      items: [videoGroup, groupB], total: 2, page: 1, page_size: 20, pages: 1
+    })
+
+    const lateARules = deferred<typeof pricingRule[]>()
+    const lateAAccounts = deferred<Awaited<ReturnType<typeof listAccounts>>>()
+    const groupBRules = deferred<typeof pricingRule[]>()
+    const groupBAccounts = deferred<Awaited<ReturnType<typeof listAccounts>>>()
+    let groupARuleCalls = 0
+    let groupAAccountCalls = 0
+    listVideoPricingRules.mockImplementation((groupID: number) => {
+      if (groupID === 42) {
+        groupARuleCalls += 1
+        return groupARuleCalls === 1 ? Promise.resolve([pricingRule]) : lateARules.promise
+      }
+      return groupBRules.promise
+    })
+    listAccounts.mockImplementation((_page, _pageSize, filters) => {
+      if (filters.group === '42') {
+        groupAAccountCalls += 1
+        if (groupAAccountCalls === 1) return Promise.reject(new Error('A initial load failed'))
+        return lateAAccounts.promise
+      }
+      return groupBAccounts.promise
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+    void wrapper.get('[data-testid="retry-edit-video-pricing"]').trigger('click')
+    await flushPromises()
+
+    const cancel = wrapper.findAll('button').find(button => button.text() === 'common.cancel')
+    if (!cancel) throw new Error('edit cancel action not found')
+    await cancel.trigger('click')
+    const groupBEdit = wrapper.get('[data-testid="group-row-84"]').findAll('button')
+      .find(button => button.text() === 'common.edit')
+    if (!groupBEdit) throw new Error('group B edit action not found')
+    void groupBEdit.trigger('click')
+    groupBRules.resolve([groupBRule])
+    groupBAccounts.reject(new Error('B authoritative accounts unavailable'))
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="video-editor"]').text()).toBe('seedance-b')
+    expect(wrapper.get('button[form="edit-group-form"]').attributes('disabled')).toBeDefined()
+
+    lateARules.resolve([{ ...pricingRule, external_model: 'seedance-a' }])
+    lateAAccounts.resolve({
+      items: [{
+        id: 15,
+        name: 'Late Seedance A',
+        platform: 'video',
+        type: 'apikey',
+        status: 'active',
+        video_provider: 'seedance',
+        video_capabilities: ['generation'],
+        extra: { model_mapping: { 'seedance-a': 'endpoint-a' } }
+      }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+      pages: 1
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="video-editor"]').text()).toBe('seedance-b')
+    expect(wrapper.get('button[form="edit-group-form"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('#edit-group-form').trigger('submit')
+    expect(updateGroup).not.toHaveBeenCalled()
+    expect(replaceVideoPricingRules).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })
