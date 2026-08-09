@@ -213,6 +213,32 @@ func TestNormalizeVideoAccountAdminUpdateUsesFinalMergedConfig(t *testing.T) {
 	}, extra)
 }
 
+func TestNormalizeVideoAccountAdminUpdateExplicitEmptyBaseURLClearsStoredValue(t *testing.T) {
+	existing := &Account{
+		Platform: PlatformVideo,
+		Type:     AccountTypeAPIKey,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"api_key":  "old-key",
+			"base_url": "https://old.example.com",
+		},
+		Extra: map[string]any{
+			"video_provider": VideoProviderSeedance,
+			"model_mapping":  map[string]any{"seedance-2.0": "endpoint-id"},
+		},
+	}
+
+	credentials, _, err := NormalizeVideoAccountAdminUpdate(
+		existing,
+		map[string]any{"base_url": ""},
+		nil,
+		"",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"api_key": "old-key"}, credentials)
+}
+
 func TestNormalizeVideoAccountAdminUpdateSecretClearingRequiresExplicitInactive(t *testing.T) {
 	existing := &Account{
 		Platform: PlatformVideo,

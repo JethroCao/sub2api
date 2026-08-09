@@ -514,7 +514,7 @@ describe('CreateAccountModal Video accounts', () => {
 
   it('forces API-key type and sends Seedance fields in the backend-owned locations', async () => {
     const wrapper = mountModal()
-    await selectButtonByText(wrapper, 'Video')
+    await selectButtonByText(wrapper, 'admin.accounts.platforms.video')
     await wrapper.get('form#create-account-form input[type="text"]').setValue('Seedance account')
     await wrapper.get('[data-testid="video-api-key"]').setValue('ark-key')
     await wrapper.get('[data-testid="video-base-url"]').setValue('https://ark.example.com')
@@ -539,9 +539,24 @@ describe('CreateAccountModal Video accounts', () => {
     expect(createAccountMock.mock.calls[0]?.[0]?.credentials).not.toHaveProperty('secret_key')
   })
 
+  it('omits a blank Video base URL from the create payload', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'admin.accounts.platforms.video')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Default URL account')
+    await wrapper.get('[data-testid="video-api-key"]').setValue('ark-key')
+    await wrapper.get('[data-testid="video-add-mapping"]').trigger('click')
+    await wrapper.get('[data-testid="video-mapping-from-0"]').setValue('seedance-2.0')
+    await wrapper.get('[data-testid="video-mapping-to-0"]').setValue('ep-seedance')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toEqual({ api_key: 'ark-key' })
+  })
+
   it('clears Seedance secrets and mapping before creating a Kling account', async () => {
     const wrapper = mountModal()
-    await selectButtonByText(wrapper, 'Video')
+    await selectButtonByText(wrapper, 'admin.accounts.platforms.video')
     await wrapper.get('form#create-account-form input[type="text"]').setValue('Kling account')
     await wrapper.get('[data-testid="video-api-key"]').setValue('must-not-leak')
     await wrapper.get('[data-testid="video-add-mapping"]').trigger('click')

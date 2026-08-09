@@ -131,7 +131,7 @@
         {{ t('admin.accounts.video.capabilities') }}
       </summary>
       <div class="border-t border-gray-200 p-4 dark:border-dark-600">
-        <template v-if="safeCapabilityTags.length > 0">
+        <template v-if="safeCapabilityTags.length > 0 || controlCapabilityTags.length > 0">
           <div class="mb-3 flex flex-wrap gap-2">
             <span
               v-for="capability in safeCapabilityTags"
@@ -142,8 +142,8 @@
               {{ t(`admin.accounts.video.capability.${capability}`) }}
             </span>
           </div>
-          <div class="space-y-2">
-            <label v-for="capability in safeCapabilityTags" :key="`disable-${capability}`" class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <div v-if="controlCapabilityTags.length > 0" class="space-y-2">
+            <label v-for="capability in controlCapabilityTags" :key="`disable-${capability}`" class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
               <input
                 type="checkbox"
                 :checked="disabledCapabilities.includes(capability)"
@@ -199,6 +199,9 @@ const apiKey = ref('')
 const accessKey = ref('')
 const secretKey = ref('')
 const baseUrl = ref('')
+const baseUrlTouched = ref(false)
+const providerChanged = ref(false)
+const initialProvider = props.provider
 let nextMappingID = 1
 const mappings = ref<Array<{ id: number; from: string; to: string }>>([])
 
@@ -231,17 +234,28 @@ const knownCapabilityTags = new Set([
   'generation', 'last_frame', 'reference_images', 'reference_videos', 'text'
 ])
 const safeCapabilityTags = computed(() => Array.from(new Set(
-  props.capabilityTags.filter(tag => typeof tag === 'string' && knownCapabilityTags.has(tag))
+  (providerChanged.value ? [] : props.capabilityTags)
+    .filter(tag => typeof tag === 'string' && knownCapabilityTags.has(tag))
 )))
+const controlCapabilityTags = computed(() => Array.from(new Set([
+  ...safeCapabilityTags.value,
+  ...(providerChanged.value ? [] : disabledCapabilities.value)
+])).filter(tag => knownCapabilityTags.has(tag)))
 
-const currentCredentials = () => buildVideoCredentials({
-  platform: 'video',
-  provider: props.provider,
-  apiKey: apiKey.value,
-  accessKey: accessKey.value,
-  secretKey: secretKey.value,
-  baseUrl: baseUrl.value
-})
+const currentCredentials = () => {
+  const credentials = buildVideoCredentials({
+    platform: 'video',
+    provider: props.provider,
+    apiKey: apiKey.value,
+    accessKey: accessKey.value,
+    secretKey: secretKey.value,
+    baseUrl: baseUrl.value
+  })
+  if (props.mode === 'edit' && baseUrlTouched.value && baseUrl.value.trim() === '') {
+    credentials.base_url = ''
+  }
+  return credentials
+}
 
 const mappingObject = () => Object.fromEntries(
   mappings.value
@@ -258,7 +272,10 @@ const handleCredentialInput = (
   if (field === 'api_key') apiKey.value = value
   if (field === 'access_key') accessKey.value = value
   if (field === 'secret_key') secretKey.value = value
-  if (field === 'base_url') baseUrl.value = value
+  if (field === 'base_url') {
+    baseUrl.value = value
+    baseUrlTouched.value = true
+  }
   emitCredentials()
 }
 const emitExtra = () => emit('update:extra', {
@@ -274,6 +291,8 @@ const handleProviderChange = (value: string | number | boolean | null) => {
   accessKey.value = ''
   secretKey.value = ''
   baseUrl.value = ''
+  baseUrlTouched.value = false
+  providerChanged.value = value !== initialProvider
   mappings.value = []
   emit('update:provider', value)
   emit('update:credentials', {})

@@ -171,7 +171,7 @@
             ]"
           >
             <PlatformIcon platform="video" size="sm" />
-            Video
+            {{ t('admin.accounts.platforms.video') }}
           </button>
         </div>
       </div>

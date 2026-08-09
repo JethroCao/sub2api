@@ -114,4 +114,69 @@ describe('VideoProviderFields', () => {
     expect(derived.find('[data-testid="video-disable-generation"]').exists()).toBe(true)
     expect(derived.find('[data-testid="video-capability-edit"]').exists()).toBe(false)
   })
+
+  it('lets an existing disabled capability be re-enabled without claiming it as effective', async () => {
+    const wrapper = mount(VideoProviderFields, {
+      props: {
+        mode: 'edit',
+        provider: 'seedance',
+        credentials: {},
+        extra: {
+          model_mapping: { 'seedance-2.0': 'ep-seedance' },
+          video_disabled_capabilities: ['audio']
+        },
+        capabilityTags: ['generation']
+      }
+    })
+
+    expect(wrapper.find('[data-testid="video-capability-audio"]').exists()).toBe(false)
+    const control = wrapper.get<HTMLInputElement>('[data-testid="video-disable-audio"]')
+    expect(control.element.checked).toBe(true)
+    await control.setValue(false)
+    expect(wrapper.emitted('update:extra')?.at(-1)?.[0]).toEqual({
+      model_mapping: { 'seedance-2.0': 'ep-seedance' }
+    })
+  })
+
+  it('drops stale Seedance capability tags after switching to Kling', async () => {
+    const wrapper = mount(VideoProviderFields, {
+      props: {
+        mode: 'edit',
+        provider: 'seedance',
+        credentials: {},
+        extra: { model_mapping: { 'seedance-2.0': 'ep-seedance' } },
+        capabilityTags: ['generation', 'audio']
+      }
+    })
+
+    expect(wrapper.find('[data-testid="video-capability-generation"]').exists()).toBe(true)
+    wrapper.getComponent(Select).vm.$emit('update:modelValue', 'kling')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="video-capability-generation"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-disable-generation"]').exists()).toBe(false)
+  })
+
+  it('emits an explicit empty base URL only when edit mode clears an existing value', async () => {
+    const edit = mount(VideoProviderFields, {
+      props: {
+        mode: 'edit',
+        provider: 'seedance',
+        credentials: { base_url: 'https://ark.example.com' },
+        extra: { model_mapping: { 'seedance-2.0': 'ep-seedance' } }
+      }
+    })
+    await edit.get('[data-testid="video-base-url"]').setValue('')
+    expect(edit.emitted('update:credentials')?.at(-1)?.[0]).toEqual({ base_url: '' })
+
+    const create = mount(VideoProviderFields, {
+      props: {
+        mode: 'create',
+        provider: 'seedance',
+        credentials: {},
+        extra: { model_mapping: {} }
+      }
+    })
+    await create.get('[data-testid="video-base-url"]').setValue('')
+    expect(create.emitted('update:credentials')?.at(-1)?.[0]).toEqual({})
+  })
 })

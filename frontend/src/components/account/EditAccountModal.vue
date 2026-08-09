@@ -4409,6 +4409,10 @@ const handleSubmit = async () => {
         secretKey: videoCredentials.value.secret_key,
         baseUrl: videoCredentials.value.base_url
       })
+      if (Object.prototype.hasOwnProperty.call(videoCredentials.value, 'base_url') &&
+          String(videoCredentials.value.base_url).trim() === '') {
+        credentials.base_url = ''
+      }
       if (!isValidVideoBaseURL(String(videoCredentials.value.base_url || ''))) {
         appStore.showError(t('admin.accounts.video.invalidBaseUrl'))
         return

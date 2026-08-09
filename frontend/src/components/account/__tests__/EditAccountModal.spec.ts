@@ -309,7 +309,8 @@ function buildVideoAccount() {
       video_disabled_capabilities: ['audio']
     },
     video_provider: 'seedance',
-    video_capabilities: ['generation', 'audio']
+    // API returns effective capabilities, so administrator-disabled audio is absent.
+    video_capabilities: ['generation']
   } as any
 }
 
@@ -1364,6 +1365,36 @@ describe('EditAccountModal', () => {
       model_mapping: { 'seedance-2.0': 'ep-seedance' },
       video_disabled_capabilities: ['audio']
     })
+  })
+
+  it('re-enables an existing disabled capability from an effective-capability response', async () => {
+    const account = buildVideoAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="video-capability-audio"]').exists()).toBe(false)
+    const control = wrapper.get<HTMLInputElement>('[data-testid="video-disable-audio"]')
+    expect(control.element.checked).toBe(true)
+    await control.setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toEqual({
+      video_provider: 'seedance',
+      model_mapping: { 'seedance-2.0': 'ep-seedance' }
+    })
+  })
+
+  it('explicitly clears a configured Video base URL without sending a secret', async () => {
+    const account = buildVideoAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="video-base-url"]').setValue('')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toEqual({ base_url: '' })
   })
 
   it('fails closed when Video provider metadata is unknown', async () => {
