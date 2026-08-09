@@ -92,6 +92,96 @@ export interface AdminUsageQueryParams extends UsageQueryParams {
   status_code?: number | null
 }
 
+export type VideoTaskStatus =
+  | 'created' | 'submitting' | 'submitted' | 'queued' | 'running'
+  | 'succeeded' | 'failed' | 'cancelled' | 'unknown' | 'manual_review'
+
+export interface AdminVideoTask {
+  request_id: string
+  user_id: number
+  api_key_id: number
+  group_id: number
+  account_id: number
+  provider: 'grok' | 'seedance' | 'kling'
+  operation: 'generation' | 'edit' | 'extension'
+  external_model: string
+  status: VideoTaskStatus
+  upstream_status: string
+  result_url_summary: string
+  result_url_expires_at?: string | null
+  result_duration_seconds: number | null
+  result_width: number | null
+  result_height: number | null
+  pricing_unit: 'per_request' | 'per_output_second' | string
+  unit_price: number
+  estimated_units: number
+  upstream_unit_cost: number | null
+  actual_upstream_cost: number | null
+  estimated_amount: number
+  frozen_amount: number
+  settled_amount: number
+  billing_status: string
+  last_error_code: string
+  next_poll_at: string | null
+  lease_expires_at: string | null
+  created_at: string
+  updated_at: string
+  submitted_at: string | null
+  started_at: string | null
+  finished_at: string | null
+  settled_at: string | null
+}
+
+export interface AdminVideoTaskEvent {
+  id: number
+  event_type: string
+  payload: unknown
+  created_at: string
+}
+
+export interface AdminVideoTaskDetail {
+  task: AdminVideoTask
+  events: AdminVideoTaskEvent[]
+  result_url_summary: string
+}
+
+export interface AdminVideoTaskListParams {
+  request_id?: string
+  provider?: string
+  model?: string
+  operation?: string
+  status?: string
+  user_id?: number
+  api_key_id?: number
+  account_id?: number
+  group_id?: number
+  created_after?: string
+  created_before?: string
+  limit?: number
+  offset?: number
+}
+
+export interface AdminVideoTaskListResponse {
+  items: AdminVideoTask[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface AdminVideoTaskActionResponse {
+  task: AdminVideoTask
+  replayed: boolean
+}
+
+export interface CompleteVideoTaskRequest {
+  reason: string
+  provider_task_id: string
+  result_url: string
+  duration_seconds: number
+  resolution: '480p' | '720p' | '1080p'
+  final_amount: number
+}
+
 // ==================== API Functions ====================
 
 /**
@@ -204,6 +294,71 @@ export async function cancelCleanupTask(taskId: number): Promise<{ id: number; s
   return data
 }
 
+function assertObject(value: unknown, code: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw { code }
+  return value as Record<string, unknown>
+}
+
+function normalizeVideoTask(value: unknown): AdminVideoTask {
+  const task = assertObject(value, 'ADMIN_VIDEO_TASK_RESPONSE_INVALID')
+  if (typeof task.request_id !== 'string' || !task.request_id.startsWith('vid_')) {
+    throw { code: 'ADMIN_VIDEO_TASK_RESPONSE_INVALID' }
+  }
+  return task as unknown as AdminVideoTask
+}
+
+export async function listVideoTasks(
+  params: AdminVideoTaskListParams,
+  options?: { signal?: AbortSignal }
+): Promise<AdminVideoTaskListResponse> {
+  const { data } = await apiClient.get<unknown>('/admin/video/tasks', { params, signal: options?.signal })
+  const response = assertObject(data, 'ADMIN_VIDEO_TASKS_RESPONSE_INVALID')
+  if (!Array.isArray(response.items) || typeof response.total !== 'number') {
+    throw { code: 'ADMIN_VIDEO_TASKS_RESPONSE_INVALID' }
+  }
+  return {
+    items: response.items.map(normalizeVideoTask),
+    total: response.total,
+    limit: typeof response.limit === 'number' ? response.limit : (params.limit ?? 50),
+    offset: typeof response.offset === 'number' ? response.offset : (params.offset ?? 0),
+  }
+}
+
+export async function getVideoTask(requestId: string): Promise<AdminVideoTaskDetail> {
+  const { data } = await apiClient.get<unknown>(`/admin/video/tasks/${encodeURIComponent(requestId)}`)
+  const response = assertObject(data, 'ADMIN_VIDEO_TASK_DETAIL_RESPONSE_INVALID')
+  if (!Array.isArray(response.events)) throw { code: 'ADMIN_VIDEO_TASK_DETAIL_RESPONSE_INVALID' }
+  return {
+    task: normalizeVideoTask(response.task),
+    events: response.events as AdminVideoTaskEvent[],
+    result_url_summary: typeof response.result_url_summary === 'string' ? response.result_url_summary : '',
+  }
+}
+
+async function postVideoAction(
+  requestId: string,
+  action: 'reconcile' | 'refund' | 'complete',
+  payload: Record<string, unknown>,
+  idempotencyKey: string
+): Promise<AdminVideoTaskActionResponse> {
+  const { data } = await apiClient.post<unknown>(
+    `/admin/video/tasks/${encodeURIComponent(requestId)}/${action}`,
+    payload,
+    { headers: { 'Idempotency-Key': idempotencyKey } }
+  )
+  const response = assertObject(data, 'ADMIN_VIDEO_TASK_ACTION_RESPONSE_INVALID')
+  return { task: normalizeVideoTask(response.task), replayed: response.replayed === true }
+}
+
+export const reconcileVideoTask = (requestId: string, reason: string, idempotencyKey: string) =>
+  postVideoAction(requestId, 'reconcile', { reason }, idempotencyKey)
+
+export const refundVideoTask = (requestId: string, reason: string, idempotencyKey: string) =>
+  postVideoAction(requestId, 'refund', { reason }, idempotencyKey)
+
+export const completeVideoTask = (requestId: string, request: CompleteVideoTaskRequest, idempotencyKey: string) =>
+  postVideoAction(requestId, 'complete', { ...request }, idempotencyKey)
+
 export const adminUsageAPI = {
   list,
   getStats,
@@ -211,7 +366,12 @@ export const adminUsageAPI = {
   searchApiKeys,
   listCleanupTasks,
   createCleanupTask,
-  cancelCleanupTask
+  cancelCleanupTask,
+  listVideoTasks,
+  getVideoTask,
+  reconcileVideoTask,
+  refundVideoTask,
+  completeVideoTask
 }
 
 export default adminUsageAPI

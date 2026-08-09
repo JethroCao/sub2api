@@ -71,7 +71,7 @@
             v-for="tab in detailTabs"
             :key="tab.key"
             type="button"
-            data-testid="usage-detail-tab"
+            :data-testid="`usage-detail-tab-${tab.key}`"
             class="-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-3 text-sm font-medium transition-colors sm:px-4"
             :class="activeTab === tab.key
               ? 'border-primary-500 text-primary-600 dark:text-primary-400'
@@ -83,7 +83,7 @@
           </button>
         </div>
 
-        <UsageFilters v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" class="border-b border-gray-100 dark:border-dark-700/50" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
+        <UsageFilters v-if="activeTab !== 'video'" v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" class="border-b border-gray-100 dark:border-dark-700/50" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
           <template #after-reset>
             <div v-if="activeTab !== 'ranking'" class="relative" ref="columnDropdownRef">
               <button
@@ -160,8 +160,28 @@
             @select-user="handleRankingSelectUser"
           />
         </div>
+        <div v-if="videoMounted" v-show="activeTab === 'video'" class="overflow-hidden rounded-b-2xl">
+          <VideoTasksTable
+            :tasks="videoTasks"
+            :total="videoTotal"
+            :loading="videoLoading"
+            :page="videoPage"
+            :page-size="videoPageSize"
+            @open="openVideoTask"
+            @filter-change="applyVideoFilters"
+            @update:page="onVideoPage"
+            @update:page-size="onVideoPageSize"
+          />
+        </div>
       </div>
       <OpsErrorDetailModal v-model:show="showErrorModal" :error-id="selectedErrorId" :error-type="'request'" />
+      <VideoTaskDetailModal
+        :show="showVideoDetail"
+        :detail="videoDetail"
+        :loading="videoDetailLoading"
+        @close="closeVideoDetail"
+        @refreshed="refreshVideoTask"
+      />
     </div>
   </AppLayout>
   <UsageExportProgress :show="exportProgress.show" :progress="exportProgress.progress" :current="exportProgress.current" :total="exportProgress.total" :estimated-time="exportProgress.estimatedTime" @cancel="cancelExport" />
@@ -198,12 +218,15 @@ import UsageCleanupDialog from '@/components/admin/usage/UsageCleanupDialog.vue'
 import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryModal.vue'
 import OpsErrorLogTable from '@/views/admin/ops/components/OpsErrorLogTable.vue'
 import OpsErrorDetailModal from '@/views/admin/ops/components/OpsErrorDetailModal.vue'
+import VideoTasksTable from '@/components/usage/VideoTasksTable.vue'
+import VideoTaskDetailModal from '@/components/usage/VideoTaskDetailModal.vue'
 import { listErrorLogs } from '@/api/admin/ops'
 import type { OpsErrorLog } from '@/api/admin/ops'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'; import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'; import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
 import Icon from '@/components/icons/Icon.vue'
-import type { AdminUsageLog, TrendDataPoint, ModelStat, GroupStat, EndpointStat, AdminUser } from '@/types'; import type { AdminUsageStatsResponse, AdminUsageQueryParams } from '@/api/admin/usage'
+import type { AdminUsageLog, TrendDataPoint, ModelStat, GroupStat, EndpointStat, AdminUser } from '@/types'; import type { AdminUsageStatsResponse, AdminUsageQueryParams, AdminVideoTask, AdminVideoTaskDetail, AdminVideoTaskListParams } from '@/api/admin/usage'
+import type { VideoTaskFilters } from '@/components/usage/VideoTasksTable.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -228,6 +251,9 @@ const upstreamEndpointStats = ref<EndpointStat[]>([])
 const endpointPathStats = ref<EndpointStat[]>([])
 const endpointStatsLoading = ref(false)
 let abortController: AbortController | null = null; let exportAbortController: AbortController | null = null
+let videoAbortController: AbortController | null = null
+let videoRequestSequence = 0
+let videoDetailSequence = 0
 let chartReqSeq = 0
 let statsReqSeq = 0
 let modelStatsReqSeq = 0
@@ -511,6 +537,11 @@ const loadChartData = async () => {
   } catch (error) { console.error('Failed to load chart data:', error) } finally { if (seq === chartReqSeq) chartsLoading.value = false }
 }
 const applyFilters = () => {
+  if (activeTab.value === 'video') {
+    videoPage.value = 1
+    void loadVideoTasks()
+    return
+  }
   pagination.page = 1
   invalidateModelStatsCache()
   loadLogs()
@@ -525,6 +556,10 @@ const applyFilters = () => {
   }
 }
 const refreshData = () => {
+  if (activeTab.value === 'video') {
+    void loadVideoTasks()
+    return
+  }
   invalidateModelStatsCache()
   loadLogs()
   loadStats(true)
@@ -759,21 +794,112 @@ const loadSavedColumns = () => {
 }
 
 // Detail tabs
-type DetailTab = 'usage' | 'errors' | 'ranking'
+type DetailTab = 'usage' | 'errors' | 'ranking' | 'video'
 const activeTab = ref<DetailTab>('usage')
 const detailTabs = computed(() => [
   { key: 'usage' as const, label: t('usage.tabs.usage'), icon: 'document' as const },
   { key: 'errors' as const, label: t('usage.tabs.errors'), icon: 'exclamationTriangle' as const },
   { key: 'ranking' as const, label: t('usage.tabs.ranking'), icon: 'chart' as const },
+  { key: 'video' as const, label: t('usage.tabs.video'), icon: 'play' as const },
 ])
 const usageFiltersRef = ref<InstanceType<typeof UsageFilters> | null>(null)
 const rankingMounted = ref(false)
 const rankingRef = ref<InstanceType<typeof UserTokenRanking> | null>(null)
+const videoMounted = ref(false)
 
 const switchTab = (tab: DetailTab) => {
   activeTab.value = tab
   if (tab === 'errors' && errRows.value.length === 0) loadAdminErrors()
   if (tab === 'ranking') rankingMounted.value = true
+  if (tab === 'video') {
+    videoMounted.value = true
+    if (!videoLoaded.value) void loadVideoTasks()
+  }
+}
+
+// Video task operations are isolated from usage/error requests so opening this
+// tab is the only event that starts its network work.
+const videoTasks = ref<AdminVideoTask[]>([])
+const videoTotal = ref(0)
+const videoPage = ref(1)
+const videoPageSize = ref(20)
+const videoLoading = ref(false)
+const videoLoaded = ref(false)
+const videoFilters = ref<VideoTaskFilters>({
+  provider: '', model: '', operation: '', status: '', group_id: undefined, user_id: undefined,
+  start_date: '', end_date: '',
+})
+const showVideoDetail = ref(false)
+const videoDetail = ref<AdminVideoTaskDetail | null>(null)
+const videoDetailLoading = ref(false)
+
+const loadVideoTasks = async () => {
+  videoAbortController?.abort()
+  const controller = new AbortController()
+  videoAbortController = controller
+  const sequence = ++videoRequestSequence
+  videoLoading.value = true
+  const query: AdminVideoTaskListParams = {
+    provider: videoFilters.value.provider || undefined,
+    model: videoFilters.value.model || undefined,
+    operation: videoFilters.value.operation || undefined,
+    status: videoFilters.value.status || undefined,
+    group_id: videoFilters.value.group_id,
+    user_id: videoFilters.value.user_id,
+    created_after: toRFC3339(videoFilters.value.start_date),
+    created_before: toRFC3339(videoFilters.value.end_date, true),
+    limit: videoPageSize.value,
+    offset: (videoPage.value - 1) * videoPageSize.value,
+  }
+  try {
+    const response = await adminUsageAPI.listVideoTasks(query, { signal: controller.signal })
+    if (controller.signal.aborted || sequence !== videoRequestSequence) return
+    videoTasks.value = response.items
+    videoTotal.value = response.total
+    videoLoaded.value = true
+  } catch (error: any) {
+    if (error?.name !== 'AbortError' && !controller.signal.aborted && sequence === videoRequestSequence) {
+      appStore.showError(t('videoTasks.failedToLoad'))
+    }
+  } finally {
+    if (videoAbortController === controller) {
+      videoAbortController = null
+      videoLoading.value = false
+    }
+  }
+}
+
+const applyVideoFilters = (next: VideoTaskFilters) => {
+  videoFilters.value = next
+  videoPage.value = 1
+  void loadVideoTasks()
+}
+const onVideoPage = (page: number) => { videoPage.value = page; void loadVideoTasks() }
+const onVideoPageSize = (pageSize: number) => { videoPageSize.value = pageSize; videoPage.value = 1; void loadVideoTasks() }
+const openVideoTask = async (task: AdminVideoTask) => {
+  const sequence = ++videoDetailSequence
+  showVideoDetail.value = true
+  videoDetail.value = null
+  videoDetailLoading.value = true
+  try {
+    const detail = await adminUsageAPI.getVideoTask(task.request_id)
+    if (sequence === videoDetailSequence && showVideoDetail.value) videoDetail.value = detail
+  } catch {
+    if (sequence === videoDetailSequence) appStore.showError(t('videoTasks.detail.failedToLoad'))
+  } finally {
+    if (sequence === videoDetailSequence) videoDetailLoading.value = false
+  }
+}
+const closeVideoDetail = () => {
+  videoDetailSequence++
+  showVideoDetail.value = false
+  videoDetail.value = null
+  videoDetailLoading.value = false
+}
+const refreshVideoTask = async (requestId: string) => {
+  await loadVideoTasks()
+  const current = videoTasks.value.find((task) => task.request_id === requestId)
+  if (showVideoDetail.value && current) await openVideoTask(current)
 }
 
 // Error tab state
@@ -853,7 +979,7 @@ onMounted(() => {
   loadSavedErrColumns()
   document.addEventListener('click', handleColumnClickOutside)
 })
-onUnmounted(() => { abortController?.abort(); exportAbortController?.abort(); document.removeEventListener('click', handleColumnClickOutside) })
+onUnmounted(() => { abortController?.abort(); exportAbortController?.abort(); videoAbortController?.abort(); document.removeEventListener('click', handleColumnClickOutside) })
 
 watch(modelDistributionSource, (source) => {
   void loadModelStats(source)

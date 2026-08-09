@@ -617,5 +617,35 @@ export default {
       },
     },
   },
+  videoTasks: {
+    failedToLoad: 'Failed to load video tasks',
+    filters: {
+      provider: 'Provider', model: 'Model', operation: 'Operation', status: 'Status', group: 'Group ID', user: 'User ID',
+      allProviders: 'All providers', allOperations: 'All operations', allStatuses: 'All statuses',
+    },
+    columns: {
+      requestId: 'Request ID', user: 'User', routing: 'Provider / Model', status: 'Status / Progress', elapsed: 'Elapsed',
+      cost: 'Billing', frozen: 'Frozen', final: 'Final', upstream: 'Upstream', createdAt: 'Created',
+    },
+    operations: { generation: 'Generation', edit: 'Edit', extension: 'Extension' },
+    status: {
+      created: 'Created', submitting: 'Submitting', submitted: 'Submitted', queued: 'Queued', running: 'Running',
+      succeeded: 'Succeeded', failed: 'Failed', cancelled: 'Cancelled', unknown: 'Unknown', manual_review: 'Manual review',
+    },
+    detail: {
+      title: 'Video Task Detail', billingStatus: 'Billing status', result: 'Result', resultHost: 'Result host',
+      resultExpiry: 'Expires at', normalizedError: 'Normalized error', timeline: 'State timeline', noEvents: 'No state events',
+      lifecycle: 'Lifecycle', createdAt: 'Created at', updatedAt: 'Updated at', submittedAt: 'Submitted at',
+      startedAt: 'Started at', finishedAt: 'Finished at', settledAt: 'Settled at',
+      failedToLoad: 'Failed to load video task detail',
+    },
+    actions: {
+      reconcile: 'Reconcile now', refund: 'Manual refund', complete: 'Manual completion', reason: 'Reason',
+      providerTaskId: 'Provider task ID', resultUrl: 'Result URL', duration: 'Duration (seconds)', resolution: 'Resolution',
+      finalAmount: 'Final amount', confirmHint: 'This audited action changes durable task state. Review the target and reason before continuing.',
+      success: 'Video task updated', failed: 'Video task action failed',
+      confirm: { reconcile: 'Confirm reconciliation', refund: 'Confirm refund', complete: 'Confirm completion' },
+    },
+  },
 
 }

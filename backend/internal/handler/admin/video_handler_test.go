@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -108,4 +109,12 @@ func TestAdminVideoTaskResponsePreservesUnknownAndCalculatesActualUpstreamCost(t
 	})
 	require.Equal(t, &unitCost, known["upstream_unit_cost"])
 	require.InDelta(t, 1.2, known["actual_upstream_cost"], 1e-12)
+}
+
+func TestAdminVideoTaskResponseExposesResultExpiryWithoutRawResultURL(t *testing.T) {
+	expiresAt := time.Date(2026, time.August, 9, 2, 0, 0, 0, time.UTC)
+	rawURL := "https://media.example.com/video.mp4?signature=secret"
+	result := adminVideoTaskResponse(&service.VideoTask{ResultURL: &rawURL, ResultURLExpiresAt: &expiresAt})
+	require.Equal(t, &expiresAt, result["result_url_expires_at"])
+	require.NotContains(t, result, "result_url")
 }

@@ -4,7 +4,7 @@ import { defineComponent, ref } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery } = vi.hoisted(() => {
+const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, listVideoTasks, routeQuery } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -18,6 +18,7 @@ const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, ro
     getById: vi.fn(),
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
+    listVideoTasks: vi.fn(),
     routeQuery: {} as Record<string, string>,
   }
 })
@@ -55,6 +56,7 @@ vi.mock('@/api/admin', () => ({
 vi.mock('@/api/admin/usage', () => ({
   adminUsageAPI: {
     list: vi.fn(),
+    listVideoTasks,
   },
 }))
 
@@ -147,6 +149,37 @@ const mountRouteFilteredUsageView = () => mount(UsageView, {
     ModelDistributionChart: true, GroupDistributionChart: true,
     EndpointDistributionChart: true, UserTokenRanking: true,
   } },
+})
+
+describe('admin UsageView video tasks tab', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    list.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockResolvedValue({ total_requests: 0, total_input_tokens: 0, total_output_tokens: 0, total_cache_tokens: 0, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0 })
+    getSnapshotV2.mockResolvedValue({ trend: [], models: [], groups: [] })
+    getModelStats.mockResolvedValue({ models: [] })
+    listVideoTasks.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 })
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('loads video tasks only after the video tab is opened', async () => {
+    const wrapper = mount(UsageView, {
+      global: { stubs: {
+        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+        UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
+        UserBalanceHistoryModal: true, Pagination: true, Select: true, DateRangePicker: true,
+        Icon: true, TokenUsageTrend: true, ModelDistributionChart: true,
+        GroupDistributionChart: true, EndpointDistributionChart: true, UserTokenRanking: true,
+        VideoTasksTable: true, VideoTaskDetailModal: true,
+      } },
+    })
+    await flushPromises()
+    expect(listVideoTasks).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="usage-detail-tab-video"]').trigger('click')
+    await flushPromises()
+    expect(listVideoTasks).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('admin UsageView route filters', () => {
@@ -472,7 +505,7 @@ describe('admin UsageView errors tab filter forwarding', () => {
     await flushPromises()
 
     // 切换到「错误请求」标签（第二个 tab 按钮）触发 loadAdminErrors
-    const tabs = wrapper.findAll('[data-testid="usage-detail-tab"]')
+    const tabs = wrapper.findAll('[data-testid^="usage-detail-tab-"]')
     await tabs[1].trigger('click')
     await flushPromises()
 
@@ -523,8 +556,8 @@ describe('admin UsageView ranking tab', () => {
     // 懒挂载:切到排行 tab 前不渲染
     expect(wrapper.find('[data-test="ranking"]').exists()).toBe(false)
 
-    const tabs = wrapper.findAll('[data-testid="usage-detail-tab"]')
-    expect(tabs).toHaveLength(3)
+    const tabs = wrapper.findAll('[data-testid^="usage-detail-tab-"]')
+    expect(tabs).toHaveLength(4)
     await tabs[2].trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-test="ranking"]').exists()).toBe(true)

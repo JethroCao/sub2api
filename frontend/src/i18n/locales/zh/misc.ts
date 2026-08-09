@@ -641,5 +641,35 @@ export default {
       },
     },
   },
+  videoTasks: {
+    failedToLoad: '加载视频任务失败',
+    filters: {
+      provider: '供应商', model: '模型', operation: '操作', status: '状态', group: '分组 ID', user: '用户 ID',
+      allProviders: '全部供应商', allOperations: '全部操作', allStatuses: '全部状态',
+    },
+    columns: {
+      requestId: '请求 ID', user: '用户', routing: '供应商 / 模型', status: '状态 / 进度', elapsed: '耗时',
+      cost: '计费', frozen: '冻结', final: '最终', upstream: '上游', createdAt: '创建时间',
+    },
+    operations: { generation: '生成', edit: '编辑', extension: '扩展' },
+    status: {
+      created: '已创建', submitting: '提交中', submitted: '已提交', queued: '排队中', running: '运行中',
+      succeeded: '成功', failed: '失败', cancelled: '已取消', unknown: '未知', manual_review: '人工复核',
+    },
+    detail: {
+      title: '视频任务详情', billingStatus: '计费状态', result: '结果', resultHost: '结果主机',
+      resultExpiry: '过期时间', normalizedError: '标准化错误', timeline: '状态时间线', noEvents: '暂无状态事件',
+      lifecycle: '生命周期', createdAt: '创建时间', updatedAt: '更新时间', submittedAt: '提交时间',
+      startedAt: '开始时间', finishedAt: '完成时间', settledAt: '结算时间',
+      failedToLoad: '加载视频任务详情失败',
+    },
+    actions: {
+      reconcile: '立即对账', refund: '手动退款', complete: '手动完成', reason: '操作原因',
+      providerTaskId: '供应商任务 ID', resultUrl: '结果 URL', duration: '时长（秒）', resolution: '分辨率',
+      finalAmount: '最终金额', confirmHint: '此审计操作会修改持久任务状态，请确认目标和原因后再继续。',
+      success: '视频任务已更新', failed: '视频任务操作失败',
+      confirm: { reconcile: '确认对账', refund: '确认退款', complete: '确认完成' },
+    },
+  },
 
 }
