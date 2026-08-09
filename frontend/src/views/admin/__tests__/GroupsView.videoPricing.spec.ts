@@ -166,7 +166,7 @@ const VideoPricingRulesEditorStub = defineComponent({
   template: '<div data-testid="video-editor">{{ modelValue.map(rule => rule.external_model).join(",") }}</div>'
 })
 
-function mountView() {
+function mountView(options: { realVideoPricingEditor?: boolean } = {}) {
   return mount(GroupsView, {
     global: {
       stubs: {
@@ -183,12 +183,26 @@ function mountView() {
         GroupCapacityBadge: true,
         GroupRateMultipliersModal: true,
         GroupRPMOverridesModal: true,
-        VideoPricingRulesEditor: VideoPricingRulesEditorStub,
+        ...(options.realVideoPricingEditor
+          ? {}
+          : { VideoPricingRulesEditor: VideoPricingRulesEditorStub }),
         TotpStepUpDialog: true,
         VueDraggable: { template: '<div><slot /></div>' }
       }
     }
   })
+}
+
+function findCopySourceSelect(
+  wrapper: ReturnType<typeof mount>,
+  formSelector: '#create-group-form' | '#edit-group-form',
+  groupID: number
+) {
+  const select = wrapper.findAll(`${formSelector} select`).find(candidate =>
+    candidate.find(`option[value="${groupID}"]`).exists()
+  )
+  if (!select) throw new Error(`copy-account source ${groupID} not found in ${formSelector}`)
+  return select
 }
 
 async function openEdit(wrapper: ReturnType<typeof mount>) {
@@ -300,6 +314,236 @@ describe('GroupsView video pricing safety and permissions', () => {
       allow_image_generation: false,
       allow_video_generation: true
     })
+    wrapper.unmount()
+  })
+
+  it('blocks an immediate create submit while copied-source capabilities are pending', async () => {
+    const pendingAccounts = deferred<Awaited<ReturnType<typeof listAccounts>>>()
+    listAccounts.mockReturnValueOnce(pendingAccounts.promise)
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+    await wrapper.get('#create-group-form input[required]').setValue('Pending capabilities')
+    await wrapper.get('#create-group-form [data-tour="group-form-platform"]').setValue('video')
+    await findCopySourceSelect(wrapper, '#create-group-form', 42).setValue('42')
+    await flushPromises()
+
+    expect(wrapper.get('button[form="create-group-form"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('#create-group-form').trigger('submit')
+    expect(createGroup).not.toHaveBeenCalled()
+    expect(replaceVideoPricingRules).not.toHaveBeenCalled()
+
+    pendingAccounts.resolve({
+      items: [{
+        id: 5,
+        name: 'Seedance',
+        platform: 'video',
+        type: 'apikey',
+        status: 'active',
+        video_provider: 'seedance',
+        video_capabilities: ['generation'],
+        extra: { model_mapping: { 'seedance-2.0': 'endpoint-id' } }
+      }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+      pages: 1
+    })
+    await flushPromises()
+    expect(wrapper.get('button[form="create-group-form"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('keeps create blocked after a source failure and safely retries the latest selection', async () => {
+    listAccounts
+      .mockRejectedValueOnce(new Error('credential=do-not-render'))
+      .mockResolvedValueOnce({
+        items: [{
+          id: 6,
+          name: 'Safe source',
+          platform: 'video',
+          type: 'apikey',
+          status: 'active',
+          video_provider: 'seedance',
+          video_capabilities: ['generation'],
+          extra: { model_mapping: { 'seedance-safe': 'endpoint-safe' } }
+        }],
+        total: 1,
+        page: 1,
+        page_size: 100,
+        pages: 1
+      })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+    await wrapper.get('#create-group-form input[required]').setValue('Retry safely')
+    await wrapper.get('#create-group-form [data-tour="group-form-platform"]').setValue('video')
+    await findCopySourceSelect(wrapper, '#create-group-form', 42).setValue('42')
+    await flushPromises()
+
+    expect(wrapper.get('button[form="create-group-form"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="retry-create-video-pricing"]').exists()).toBe(true)
+    expect(showError).toHaveBeenCalledWith('admin.groups.videoPricing.errors.loadFailed')
+    expect(showError).not.toHaveBeenCalledWith(expect.stringContaining('credential'))
+    await wrapper.get('#create-group-form').trigger('submit')
+    expect(createGroup).not.toHaveBeenCalled()
+    expect(replaceVideoPricingRules).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="retry-create-video-pricing"]').trigger('click')
+    await flushPromises()
+    expect(listAccounts).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('button[form="create-group-form"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('uses replacement-source capabilities for edit validation and replacement', async () => {
+    const sourceGroup = { ...videoGroup, id: 84, name: 'Video source', account_count: 1 }
+    listGroups.mockResolvedValueOnce({
+      items: [videoGroup, sourceGroup], total: 2, page: 1, page_size: 20, pages: 1
+    })
+    listAccounts.mockImplementation((_page, _pageSize, filters) => Promise.resolve({
+      items: filters.group === '84'
+        ? [{
+            id: 84,
+            name: 'Replacement source',
+            platform: 'video',
+            type: 'apikey',
+            status: 'active',
+            video_provider: 'seedance',
+            video_capabilities: ['generation'],
+            extra: { model_mapping: { 'seedance-source': 'endpoint-source' } }
+          }]
+        : [{
+            id: 42,
+            name: 'Current target',
+            platform: 'video',
+            type: 'apikey',
+            status: 'active',
+            video_provider: 'seedance',
+            video_capabilities: ['generation'],
+            extra: { model_mapping: { 'seedance-2.0': 'endpoint-current' } }
+          }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+      pages: 1
+    }))
+    const wrapper = mountView({ realVideoPricingEditor: true })
+    await flushPromises()
+    await openEdit(wrapper)
+
+    await findCopySourceSelect(wrapper, '#edit-group-form', 84).setValue('84')
+    await flushPromises()
+    await wrapper.get('#edit-group-form').trigger('submit')
+    expect(updateGroup).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('admin.groups.videoPricing.errors.validation')
+
+    await wrapper.get('[data-testid="video-pricing-model-0"]').setValue('seedance-source')
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup.mock.calls[0][1]).toMatchObject({
+      copy_accounts_from_group_ids: [84]
+    })
+    expect(replaceVideoPricingRules.mock.calls[0][1][0]).toMatchObject({
+      external_model: 'seedance-source',
+      operation: 'generation'
+    })
+    wrapper.unmount()
+  })
+
+  it('ignores stale source capabilities after a newer edit source selection succeeds', async () => {
+    const sourceB = { ...videoGroup, id: 84, name: 'Source B', account_count: 1 }
+    const sourceC = { ...videoGroup, id: 85, name: 'Source C', account_count: 1 }
+    listGroups.mockResolvedValueOnce({
+      items: [videoGroup, sourceB, sourceC], total: 3, page: 1, page_size: 20, pages: 1
+    })
+    const staleB = deferred<Awaited<ReturnType<typeof listAccounts>>>()
+    let sourceBCalls = 0
+    listAccounts.mockImplementation((_page, _pageSize, filters) => {
+      if (filters.group === '42') return Promise.resolve({
+        items: [{
+          id: 42, name: 'Target', platform: 'video', type: 'apikey', status: 'active',
+          video_provider: 'seedance', video_capabilities: ['generation'],
+          extra: { model_mapping: { 'seedance-2.0': 'target' } }
+        }], total: 1, page: 1, page_size: 100, pages: 1
+      })
+      if (filters.group === '84') {
+        sourceBCalls += 1
+        if (sourceBCalls === 1) return staleB.promise
+        return Promise.resolve({
+          items: [{
+            id: 84, name: 'B', platform: 'video', type: 'apikey', status: 'active',
+            video_provider: 'seedance', video_capabilities: ['generation'],
+            extra: { model_mapping: { 'seedance-b': 'b' } }
+          }], total: 1, page: 1, page_size: 100, pages: 1
+        })
+      }
+      return Promise.resolve({
+        items: [{
+          id: 85, name: 'C', platform: 'video', type: 'apikey', status: 'active',
+          video_provider: 'seedance', video_capabilities: ['generation'],
+          extra: { model_mapping: { 'seedance-c': 'c' } }
+        }], total: 1, page: 1, page_size: 100, pages: 1
+      })
+    })
+    const wrapper = mountView({ realVideoPricingEditor: true })
+    await flushPromises()
+    await openEdit(wrapper)
+
+    const sourceSelect = findCopySourceSelect(wrapper, '#edit-group-form', 84)
+    await sourceSelect.setValue('84')
+    await sourceSelect.setValue('85')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="video-pricing-model-0"] option[value="seedance-c"]').exists()).toBe(true)
+
+    staleB.resolve({
+      items: [{
+        id: 84, name: 'Late B', platform: 'video', type: 'apikey', status: 'active',
+        video_provider: 'seedance', video_capabilities: ['generation'],
+        extra: { model_mapping: { 'seedance-late': 'late' } }
+      }], total: 1, page: 1, page_size: 100, pages: 1
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="video-pricing-model-0"] option[value="seedance-c"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('blocks edit when the pricing rule list cannot be read authoritatively', async () => {
+    listVideoPricingRules.mockRejectedValueOnce({
+      code: 'VIDEO_PRICING_RULES_RESPONSE_INVALID'
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await openEdit(wrapper)
+
+    expect(wrapper.get('button[form="edit-group-form"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('#edit-group-form').trigger('submit')
+    expect(updateGroup).not.toHaveBeenCalled()
+    expect(replaceVideoPricingRules).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('admin.groups.videoPricing.errors.loadFailed')
+    wrapper.unmount()
+  })
+
+  it('keeps a created group and reports safe partial success when pricing save fails', async () => {
+    replaceVideoPricingRules.mockRejectedValueOnce(new Error('signed_response=secret'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+    await wrapper.get('#create-group-form input[required]').setValue('Partial create')
+    await wrapper.get('#create-group-form [data-tour="group-form-platform"]').setValue('video')
+    await wrapper.get('#create-group-form').trigger('submit')
+    await flushPromises()
+
+    expect(createGroup).toHaveBeenCalledTimes(1)
+    expect(replaceVideoPricingRules).toHaveBeenCalledWith(43, [])
+    expect(listGroups.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(showError).toHaveBeenCalledWith(
+      'admin.groups.videoPricing.createPartialSuccess:admin.groups.videoPricing.errors.generic'
+    )
+    expect(showError).not.toHaveBeenCalledWith(expect.stringContaining('signed_response'))
     wrapper.unmount()
   })
 

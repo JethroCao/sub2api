@@ -252,7 +252,10 @@ function normalizeVideoPricingRule(value: unknown): VideoPricingRule {
 
 export async function listVideoPricingRules(id: number): Promise<VideoPricingRule[]> {
   const { data } = await apiClient.get<unknown[]>(`/admin/groups/${id}/video-pricing-rules`)
-  return Array.isArray(data) ? data.map(normalizeVideoPricingRule) : []
+  if (!Array.isArray(data)) {
+    throw { code: 'VIDEO_PRICING_RULES_RESPONSE_INVALID' }
+  }
+  return data.map(normalizeVideoPricingRule)
 }
 
 const videoPricingOperationKeys = new Map<number, { fingerprint: string; key: string }>()
@@ -272,13 +275,28 @@ export async function replaceVideoPricingRules(
   rules: VideoPricingRuleInput[]
 ): Promise<VideoPricingRule[]> {
   const operation = videoPricingOperationKey(id, rules)
-  const { data } = await apiClient.put<unknown[]>(
-    `/admin/groups/${id}/video-pricing-rules`,
-    { rules },
-    { headers: { 'Idempotency-Key': operation.key } }
-  )
-  if (videoPricingOperationKeys.get(id) === operation) videoPricingOperationKeys.delete(id)
-  return Array.isArray(data) ? data.map(normalizeVideoPricingRule) : []
+  try {
+    const { data } = await apiClient.put<unknown[]>(
+      `/admin/groups/${id}/video-pricing-rules`,
+      { rules },
+      { headers: { 'Idempotency-Key': operation.key } }
+    )
+    if (videoPricingOperationKeys.get(id) === operation) videoPricingOperationKeys.delete(id)
+    return Array.isArray(data) ? data.map(normalizeVideoPricingRule) : []
+  } catch (error) {
+    const marker = typeof error === 'object' && error !== null
+      ? String((error as { reason?: unknown; code?: unknown }).reason
+        ?? (error as { code?: unknown }).code
+        ?? '')
+      : ''
+    if (
+      marker === 'IDEMPOTENCY_KEY_CONFLICT'
+      && videoPricingOperationKeys.get(id) === operation
+    ) {
+      videoPricingOperationKeys.delete(id)
+    }
+    throw error
+  }
 }
 
 /**

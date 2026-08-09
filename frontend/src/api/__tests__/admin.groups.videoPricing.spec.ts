@@ -47,6 +47,14 @@ describe('admin group video pricing API', () => {
     await expect(listVideoPricingRules(7)).resolves.toEqual([{ id: 9, group_id: 7, ...rules[0] }])
   })
 
+  it('rejects a malformed successful pricing list instead of authoritatively normalizing it empty', async () => {
+    get.mockResolvedValue({ data: { rules: [], credential: 'must-not-surface' } })
+
+    await expect(listVideoPricingRules(7)).rejects.toMatchObject({
+      code: 'VIDEO_PRICING_RULES_RESPONSE_INVALID'
+    })
+  })
+
   it('reuses one idempotency key when the same logical replacement is retried after step-up', async () => {
     put.mockRejectedValueOnce({ status: 403, code: 'STEP_UP_REQUIRED' })
     put.mockResolvedValueOnce({ data: [] })
@@ -75,6 +83,25 @@ describe('admin group video pricing API', () => {
 
     expect(put.mock.calls[1][2].headers).toEqual({
       'Idempotency-Key': 'group-video-pricing-7-22222222-2222-4222-8222-222222222222'
+    })
+  })
+
+  it('uses a fresh idempotency key when the unchanged replacement is retried after conflict', async () => {
+    put.mockRejectedValueOnce({ status: 409, code: 'IDEMPOTENCY_KEY_CONFLICT' })
+    await expect(replaceVideoPricingRules(7, rules)).rejects.toMatchObject({
+      status: 409,
+      code: 'IDEMPOTENCY_KEY_CONFLICT'
+    })
+
+    vi.mocked(globalThis.crypto.randomUUID).mockReturnValueOnce('33333333-3333-4333-8333-333333333333')
+    put.mockResolvedValueOnce({ data: [] })
+    await replaceVideoPricingRules(7, rules)
+
+    expect(put.mock.calls[0][2].headers).toEqual({
+      'Idempotency-Key': 'group-video-pricing-7-11111111-1111-4111-8111-111111111111'
+    })
+    expect(put.mock.calls[1][2].headers).toEqual({
+      'Idempotency-Key': 'group-video-pricing-7-33333333-3333-4333-8333-333333333333'
     })
   })
 })

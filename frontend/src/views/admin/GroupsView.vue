@@ -1039,6 +1039,21 @@
           class="border-t pt-4"
         />
 
+        <div
+          v-if="createForm.platform === 'video' && createVideoPricingCapabilitiesLoadState === 'failed'"
+          class="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300"
+        >
+          <span>{{ t('admin.groups.videoPricing.loadBlocked') }}</span>
+          <button
+            type="button"
+            class="btn btn-secondary flex-shrink-0"
+            data-testid="retry-create-video-pricing"
+            @click="retryCreateVideoPricing"
+          >
+            {{ t('admin.groups.videoPricing.retryLoad') }}
+          </button>
+        </div>
+
         <!-- 旧 Grok 分辨率价格兼容配置 -->
         <div
           v-if="supportsVideoPricingPlatform(createForm.platform)"
@@ -2046,7 +2061,7 @@
           <button
             type="submit"
             form="create-group-form"
-            :disabled="submitting"
+            :disabled="submitting || (createForm.platform === 'video' && !createVideoPricingReady)"
             class="btn btn-primary"
             data-tour="group-form-submit"
           >
@@ -4725,8 +4740,11 @@ const createVideoPricingRules = ref<VideoPricingRuleInput[]>([]);
 const editVideoPricingRules = ref<VideoPricingRuleInput[]>([]);
 const createVideoPricingCapabilities = ref<VideoPricingCapability[]>([]);
 const editVideoPricingCapabilities = ref<VideoPricingCapability[]>([]);
-const editVideoPricingReady = ref(false);
-const editVideoPricingLoadFailed = ref(false);
+type VideoPricingLoadState = "idle" | "pending" | "ready" | "failed";
+const createVideoPricingCapabilitiesLoadState = ref<VideoPricingLoadState>("ready");
+const editVideoPricingRulesLoadState = ref<VideoPricingLoadState>("idle");
+const editVideoPricingCapabilitiesLoadState = ref<VideoPricingLoadState>("idle");
+let createVideoPricingLoadEpoch = 0;
 let editVideoPricingLoadEpoch = 0;
 const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
@@ -5238,6 +5256,36 @@ type VideoPricingFormState = {
 const supportsVideoPermissionPlatform = (platform: GroupPlatform) =>
   platform === "video" || platform === "grok" || platform === "composite";
 
+const createVideoPricingReady = computed(
+  () => createForm.platform !== "video" || createVideoPricingCapabilitiesLoadState.value === "ready",
+);
+const editVideoPricingReady = computed(
+  () => editForm.platform !== "video" || (
+    editVideoPricingRulesLoadState.value === "ready"
+    && editVideoPricingCapabilitiesLoadState.value === "ready"
+  ),
+);
+const editVideoPricingLoadFailed = computed(
+  () => editVideoPricingRulesLoadState.value === "failed"
+    || editVideoPricingCapabilitiesLoadState.value === "failed",
+);
+
+const normalizedVideoCapabilityGroupIDs = (groupIDs: number[]) =>
+  Array.from(new Set(groupIDs.filter((groupID) => groupID > 0))).sort((a, b) => a - b);
+
+const videoCapabilitySourceKey = (groupIDs: number[]) =>
+  normalizedVideoCapabilityGroupIDs(groupIDs).join(",");
+
+const createVideoCapabilityGroupIDs = () =>
+  normalizedVideoCapabilityGroupIDs(createForm.copy_accounts_from_group_ids);
+
+const editVideoCapabilityGroupIDs = (groupID: number) => {
+  const selectedSources = normalizedVideoCapabilityGroupIDs(
+    editForm.copy_accounts_from_group_ids,
+  );
+  return selectedSources.length > 0 ? selectedSources : [groupID];
+};
+
 const loadActiveVideoAccountsForGroups = async (groupIDs: number[]): Promise<Account[]> => {
   const accounts = new Map<number, Account>();
   for (const groupID of groupIDs) {
@@ -5257,46 +5305,107 @@ const loadActiveVideoAccountsForGroups = async (groupIDs: number[]): Promise<Acc
   return [...accounts.values()];
 };
 
-let createVideoCapabilitiesRequest = 0;
-const refreshCreateVideoCapabilities = async () => {
-  const request = ++createVideoCapabilitiesRequest;
-  if (createForm.platform !== "video" || createForm.copy_accounts_from_group_ids.length === 0) {
+const refreshCreateVideoCapabilities = async (): Promise<boolean> => {
+  const requestEpoch = ++createVideoPricingLoadEpoch;
+  const groupIDs = createVideoCapabilityGroupIDs();
+  const sourceKey = videoCapabilitySourceKey(groupIDs);
+  if (createForm.platform !== "video" || groupIDs.length === 0) {
     createVideoPricingCapabilities.value = [];
-    return;
+    createVideoPricingCapabilitiesLoadState.value = "ready";
+    return true;
   }
+  createVideoPricingCapabilitiesLoadState.value = "pending";
   try {
-    const accounts = await loadActiveVideoAccountsForGroups(createForm.copy_accounts_from_group_ids);
-    if (request === createVideoCapabilitiesRequest) {
-      createVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accounts);
+    const accounts = await loadActiveVideoAccountsForGroups(groupIDs);
+    if (
+      requestEpoch !== createVideoPricingLoadEpoch
+      || createForm.platform !== "video"
+      || sourceKey !== videoCapabilitySourceKey(createVideoCapabilityGroupIDs())
+    ) {
+      return false;
     }
+    createVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accounts);
+    createVideoPricingCapabilitiesLoadState.value = "ready";
   } catch {
-    if (request === createVideoCapabilitiesRequest) createVideoPricingCapabilities.value = [];
+    if (
+      requestEpoch !== createVideoPricingLoadEpoch
+      || createForm.platform !== "video"
+      || sourceKey !== videoCapabilitySourceKey(createVideoCapabilityGroupIDs())
+    ) {
+      return false;
+    }
+    createVideoPricingCapabilitiesLoadState.value = "failed";
+    appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
   }
+  return true;
+};
+
+const retryCreateVideoPricing = async () => {
+  if (createForm.platform !== "video") return;
+  await refreshCreateVideoCapabilities();
 };
 
 const loadEditVideoPricing = async (groupID: number, requestEpoch: number): Promise<boolean> => {
-  editVideoPricingReady.value = false;
-  editVideoPricingLoadFailed.value = false;
+  const capabilityGroupIDs = editVideoCapabilityGroupIDs(groupID);
+  const sourceKey = videoCapabilitySourceKey(capabilityGroupIDs);
+  editVideoPricingRulesLoadState.value = "pending";
+  editVideoPricingCapabilitiesLoadState.value = "pending";
   const [rulesResult, accountsResult] = await Promise.allSettled([
     adminAPI.groups.listVideoPricingRules(groupID),
-    loadActiveVideoAccountsForGroups([groupID]),
+    loadActiveVideoAccountsForGroups(capabilityGroupIDs),
   ]);
   if (
     requestEpoch !== editVideoPricingLoadEpoch ||
-    editingGroup.value?.id !== groupID
+    editingGroup.value?.id !== groupID ||
+    sourceKey !== videoCapabilitySourceKey(editVideoCapabilityGroupIDs(groupID))
   ) {
     return false;
   }
   if (rulesResult.status === "fulfilled") {
     editVideoPricingRules.value = videoPricingRulesForReplacement(rulesResult.value);
+    editVideoPricingRulesLoadState.value = "ready";
+  } else {
+    editVideoPricingRulesLoadState.value = "failed";
   }
   if (accountsResult.status === "fulfilled") {
     editVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accountsResult.value);
+    editVideoPricingCapabilitiesLoadState.value = "ready";
+  } else {
+    editVideoPricingCapabilitiesLoadState.value = "failed";
   }
-  editVideoPricingLoadFailed.value =
-    rulesResult.status === "rejected" || accountsResult.status === "rejected";
-  editVideoPricingReady.value = !editVideoPricingLoadFailed.value;
   if (editVideoPricingLoadFailed.value) {
+    appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
+  }
+  return true;
+};
+
+const refreshEditVideoCapabilities = async (): Promise<boolean> => {
+  const groupID = editingGroup.value?.id;
+  if (!groupID || editForm.platform !== "video") return false;
+  const requestEpoch = ++editVideoPricingLoadEpoch;
+  const capabilityGroupIDs = editVideoCapabilityGroupIDs(groupID);
+  const sourceKey = videoCapabilitySourceKey(capabilityGroupIDs);
+  editVideoPricingCapabilitiesLoadState.value = "pending";
+  try {
+    const accounts = await loadActiveVideoAccountsForGroups(capabilityGroupIDs);
+    if (
+      requestEpoch !== editVideoPricingLoadEpoch
+      || editingGroup.value?.id !== groupID
+      || sourceKey !== videoCapabilitySourceKey(editVideoCapabilityGroupIDs(groupID))
+    ) {
+      return false;
+    }
+    editVideoPricingCapabilities.value = deriveAuthoritativeVideoCapabilities(accounts);
+    editVideoPricingCapabilitiesLoadState.value = "ready";
+  } catch {
+    if (
+      requestEpoch !== editVideoPricingLoadEpoch
+      || editingGroup.value?.id !== groupID
+      || sourceKey !== videoCapabilitySourceKey(editVideoCapabilityGroupIDs(groupID))
+    ) {
+      return false;
+    }
+    editVideoPricingCapabilitiesLoadState.value = "failed";
     appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
   }
   return true;
@@ -5720,6 +5829,8 @@ const closeCreateModal = () => {
   createForm.reasoning_effort_mappings = [];
   createVideoPricingRules.value = [];
   createVideoPricingCapabilities.value = [];
+  createVideoPricingLoadEpoch += 1;
+  createVideoPricingCapabilitiesLoadState.value = "ready";
   createReasoningEffortPolicyRef.value?.resetValidation();
   resetModelsListState(createModelsListState);
   createModelRoutingRules.value = [];
@@ -5780,6 +5891,10 @@ const handleCreateGroup = async () => {
     return;
   }
   if (!validateProfitControlForm(createForm)) {
+    return;
+  }
+  if (createForm.platform === "video" && !createVideoPricingReady.value) {
+    appStore.showError(t("admin.groups.videoPricing.errors.loadFailed"));
     return;
   }
   if (createForm.platform === "video" && !createVideoPricingEditorRef.value?.validate()) {
@@ -5975,8 +6090,8 @@ const handleEdit = async (group: AdminGroup) => {
   resetModelsListState(editModelsListState, group.models_list_config);
   editVideoPricingRules.value = [];
   editVideoPricingCapabilities.value = [];
-  editVideoPricingReady.value = group.platform !== "video";
-  editVideoPricingLoadFailed.value = false;
+  editVideoPricingRulesLoadState.value = group.platform === "video" ? "idle" : "ready";
+  editVideoPricingCapabilitiesLoadState.value = group.platform === "video" ? "idle" : "ready";
   if (group.platform === "video") {
     const isCurrentEdit = await loadEditVideoPricing(group.id, requestEpoch);
     if (!isCurrentEdit) return;
@@ -6017,8 +6132,8 @@ const closeEditModal = () => {
   editForm.allow_video_generation = false;
   editVideoPricingRules.value = [];
   editVideoPricingCapabilities.value = [];
-  editVideoPricingReady.value = false;
-  editVideoPricingLoadFailed.value = false;
+  editVideoPricingRulesLoadState.value = "idle";
+  editVideoPricingCapabilitiesLoadState.value = "idle";
   editForm.web_search_price_per_call = null;
   resetMessagesDispatchFormState(editForm);
   editForm.allow_live = false;
@@ -6489,11 +6604,15 @@ watch(
     }
     resetDisabledBatchImagePricing(createForm);
     if (newVal !== "video") {
+      createVideoPricingLoadEpoch += 1;
+      createVideoPricingCapabilitiesLoadState.value = "ready";
       createForm.allow_video_generation = newVal === "grok" || newVal === "composite"
         ? createForm.allow_video_generation
         : false;
       createVideoPricingRules.value = [];
       createVideoPricingCapabilities.value = [];
+    } else {
+      void refreshCreateVideoCapabilities();
     }
     resetModelsListState(createModelsListState);
     loadModelsListCandidates("create", 0, newVal);
@@ -6517,6 +6636,15 @@ watch(
 watch(
   () => [...createForm.copy_accounts_from_group_ids],
   () => { void refreshCreateVideoCapabilities(); },
+);
+
+watch(
+  () => [...editForm.copy_accounts_from_group_ids],
+  () => {
+    if (showEditModal.value && editingGroup.value && editForm.platform === "video") {
+      void refreshEditVideoCapabilities();
+    }
+  },
 );
 
 watch(
