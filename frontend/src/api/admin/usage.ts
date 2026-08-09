@@ -94,7 +94,7 @@ export interface AdminUsageQueryParams extends UsageQueryParams {
 
 export type VideoTaskStatus =
   | 'created' | 'submitting' | 'submitted' | 'queued' | 'running'
-  | 'succeeded' | 'failed' | 'cancelled' | 'unknown' | 'manual_review'
+  | 'succeeded' | 'failed' | 'cancelled' | 'unknown'
 
 export interface AdminVideoTask {
   request_id: string

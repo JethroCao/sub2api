@@ -55,7 +55,8 @@ const mountTable = () => mount(VideoTasksTable, {
       },
       Pagination: true,
       Select: {
-        props: ['modelValue'],
+        name: 'Select',
+        props: ['modelValue', 'options'],
         emits: ['update:modelValue'],
         template: '<button data-testid="select-filter" @click="$emit(\'update:modelValue\', \'seedance\')" />',
       },
@@ -100,5 +101,11 @@ describe('VideoTasksTable', () => {
       start_date: '2026-08-01',
       end_date: '2026-08-09',
     })
+  })
+
+  it('offers only status values accepted by the admin video API', () => {
+    const wrapper = mountTable()
+    const statusOptions = wrapper.findAllComponents({ name: 'Select' })[2]?.props('options') as Array<{ value: string }>
+    expect(statusOptions.map((option) => option.value)).not.toContain('manual_review')
   })
 })

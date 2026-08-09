@@ -4,7 +4,7 @@ import { defineComponent, ref } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, listVideoTasks, routeQuery } = vi.hoisted(() => {
+const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, listVideoTasks, getVideoTask, routeQuery } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -19,6 +19,7 @@ const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, li
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
     listVideoTasks: vi.fn(),
+    getVideoTask: vi.fn(),
     routeQuery: {} as Record<string, string>,
   }
 })
@@ -57,6 +58,7 @@ vi.mock('@/api/admin/usage', () => ({
   adminUsageAPI: {
     list: vi.fn(),
     listVideoTasks,
+    getVideoTask,
   },
 }))
 
@@ -179,6 +181,33 @@ describe('admin UsageView video tasks tab', () => {
     await wrapper.get('[data-testid="usage-detail-tab-video"]').trigger('click')
     await flushPromises()
     expect(listVideoTasks).toHaveBeenCalledTimes(1)
+  })
+
+  it('reloads an acted-on detail even when the task leaves the current page', async () => {
+    const detail = { task: { request_id: 'vid_00000000000000000000000000000001' }, events: [], result_url_summary: '' }
+    getVideoTask.mockResolvedValue(detail)
+    const wrapper = mount(UsageView, {
+      global: { stubs: {
+        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+        UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
+        UserBalanceHistoryModal: true, Pagination: true, Select: true, DateRangePicker: true,
+        Icon: true, TokenUsageTrend: true, ModelDistributionChart: true,
+        GroupDistributionChart: true, EndpointDistributionChart: true, UserTokenRanking: true,
+        VideoTasksTable: { emits: ['open'], template: '<button data-testid="open-video" @click="$emit(\'open\', { request_id: \'vid_00000000000000000000000000000001\' })" />' },
+        VideoTaskDetailModal: { props: ['show'], emits: ['refreshed'], template: '<button v-if="show" data-testid="refresh-video" @click="$emit(\'refreshed\', \'vid_00000000000000000000000000000001\')" />' },
+      } },
+    })
+    await flushPromises()
+    await wrapper.get('[data-testid="usage-detail-tab-video"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="open-video"]').trigger('click')
+    await flushPromises()
+    expect(getVideoTask).toHaveBeenCalledTimes(1)
+
+    // The refreshed list remains empty, simulating a task leaving the active filter/page.
+    await wrapper.get('[data-testid="refresh-video"]').trigger('click')
+    await flushPromises()
+    expect(getVideoTask).toHaveBeenCalledTimes(2)
   })
 })
 

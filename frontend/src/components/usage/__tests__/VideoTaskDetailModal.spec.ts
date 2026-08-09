@@ -144,10 +144,13 @@ describe('VideoTaskDetailModal', () => {
       expect(refundVideoTask).toHaveBeenCalledTimes(1)
       expect(wrapper.get('[data-testid="video-task-confirm"]').attributes('disabled')).toBeUndefined()
     })
+    vm.actionReason = 'changed payload must not replace the first attempt'
     await wrapper.get('[data-testid="video-task-confirm"]').trigger('click')
     await flushPromises()
 
     expect(refundVideoTask).toHaveBeenCalledTimes(2)
+    expect(refundVideoTask.mock.calls[0]?.[1]).toBe('provider confirmed absent')
+    expect(refundVideoTask.mock.calls[1]?.[1]).toBe(refundVideoTask.mock.calls[0]?.[1])
     expect(refundVideoTask.mock.calls[0]?.[2]).toBe('video-refund-vid_00000000000000000000000000000001-11111111-1111-4111-8111-111111111111')
     expect(refundVideoTask.mock.calls[1]?.[2]).toBe(refundVideoTask.mock.calls[0]?.[2])
   })

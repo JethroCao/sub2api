@@ -103,15 +103,15 @@
   >
     <div class="space-y-4">
       <p class="text-sm text-gray-600 dark:text-gray-400">{{ t('videoTasks.actions.confirmHint') }}</p>
-      <TextArea v-model="actionReason" :label="t('videoTasks.actions.reason')" :rows="3" required />
+      <TextArea v-model="actionReason" :label="t('videoTasks.actions.reason')" :rows="3" :disabled="actionLocked" required />
       <template v-if="pendingAction === 'complete'">
-        <Input v-model="completeForm.provider_task_id" :label="t('videoTasks.actions.providerTaskId')" required />
-        <Input v-model="completeForm.result_url" :label="t('videoTasks.actions.resultUrl')" type="url" required />
+        <Input v-model="completeForm.provider_task_id" :label="t('videoTasks.actions.providerTaskId')" :disabled="actionLocked" required />
+        <Input v-model="completeForm.result_url" :label="t('videoTasks.actions.resultUrl')" type="url" :disabled="actionLocked" required />
         <div class="grid grid-cols-2 gap-3">
-          <Input v-model="completeForm.duration_seconds" :label="t('videoTasks.actions.duration')" type="number" required />
-          <Select v-model="completeForm.resolution" :options="resolutionOptions" :aria-label="t('videoTasks.actions.resolution')" />
+          <Input v-model="completeForm.duration_seconds" :label="t('videoTasks.actions.duration')" type="number" :disabled="actionLocked" required />
+          <Select v-model="completeForm.resolution" :options="resolutionOptions" :aria-label="t('videoTasks.actions.resolution')" :disabled="actionLocked" />
         </div>
-        <Input v-model="completeForm.final_amount" :label="t('videoTasks.actions.finalAmount')" type="number" required />
+        <Input v-model="completeForm.final_amount" :label="t('videoTasks.actions.finalAmount')" type="number" :disabled="actionLocked" required />
       </template>
       <p v-if="actionError" class="text-sm text-red-600 dark:text-red-400">{{ actionError }}</p>
     </div>
@@ -166,6 +166,14 @@ const actionReason = ref('')
 const actionBusy = ref(false)
 const actionError = ref('')
 const actionKey = ref('')
+interface ActionSnapshot {
+  action: Action
+  requestId: string
+  idempotencyKey: string
+  reason: string
+  completion: CompleteVideoTaskRequest
+}
+const actionSnapshot = ref<ActionSnapshot | null>(null)
 let actionGeneration = 0
 const completeForm = reactive({ provider_task_id: '', result_url: '', duration_seconds: '', resolution: '720p', final_amount: '' })
 const resolutionOptions = [
@@ -220,6 +228,7 @@ const safeEvents = computed(() => (props.detail?.events ?? []).map((event) => {
 }))
 
 const actionValid = computed(() => {
+  if (actionSnapshot.value) return true
   if (!actionReason.value.trim()) return false
   if (pendingAction.value !== 'complete') return true
   const duration = Number(completeForm.duration_seconds)
@@ -227,6 +236,7 @@ const actionValid = computed(() => {
   return !!completeForm.provider_task_id.trim() && !!completeForm.result_url.trim()
     && Number.isFinite(duration) && duration > 0 && Number.isFinite(amount) && amount >= 0
 })
+const actionLocked = computed(() => actionSnapshot.value !== null)
 
 const newKey = (action: Action, requestId: string) => {
   const uuid = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -238,6 +248,7 @@ const openAction = (action: Action) => {
   actionReason.value = ''
   actionError.value = ''
   actionKey.value = newKey(action, props.detail.task.request_id)
+  actionSnapshot.value = null
   actionGeneration++
   Object.assign(completeForm, { provider_task_id: '', result_url: '', duration_seconds: '', resolution: '720p', final_amount: '' })
 }
@@ -246,6 +257,7 @@ const resetAction = () => {
   actionReason.value = ''
   actionError.value = ''
   actionKey.value = ''
+  actionSnapshot.value = null
 }
 const closeAction = () => {
   if (actionBusy.value) return
@@ -263,29 +275,33 @@ const confirmAction = async () => {
   const task = props.detail?.task
   if (!action || !task || !actionValid.value || !actionKey.value) return
   const generation = actionGeneration
-  const requestId = task.request_id
-  const idempotencyKey = actionKey.value
-  const reason = actionReason.value.trim()
-  const completion: CompleteVideoTaskRequest = {
-    reason,
-    provider_task_id: completeForm.provider_task_id.trim(),
-    result_url: completeForm.result_url.trim(),
-    duration_seconds: Number(completeForm.duration_seconds),
-    resolution: completeForm.resolution as CompleteVideoTaskRequest['resolution'],
-    final_amount: Number(completeForm.final_amount),
+  const snapshot = actionSnapshot.value ?? {
+    action,
+    requestId: task.request_id,
+    idempotencyKey: actionKey.value,
+    reason: actionReason.value.trim(),
+    completion: {
+      reason: actionReason.value.trim(),
+      provider_task_id: completeForm.provider_task_id.trim(),
+      result_url: completeForm.result_url.trim(),
+      duration_seconds: Number(completeForm.duration_seconds),
+      resolution: completeForm.resolution as CompleteVideoTaskRequest['resolution'],
+      final_amount: Number(completeForm.final_amount),
+    },
   }
+  actionSnapshot.value = snapshot
   actionBusy.value = true
   actionError.value = ''
   try {
     await stepUp.run(() => {
-      if (action === 'reconcile') return adminUsageAPI.reconcileVideoTask(requestId, reason, idempotencyKey)
-      if (action === 'refund') return adminUsageAPI.refundVideoTask(requestId, reason, idempotencyKey)
-      return adminUsageAPI.completeVideoTask(requestId, completion, idempotencyKey)
+      if (snapshot.action === 'reconcile') return adminUsageAPI.reconcileVideoTask(snapshot.requestId, snapshot.reason, snapshot.idempotencyKey)
+      if (snapshot.action === 'refund') return adminUsageAPI.refundVideoTask(snapshot.requestId, snapshot.reason, snapshot.idempotencyKey)
+      return adminUsageAPI.completeVideoTask(snapshot.requestId, snapshot.completion, snapshot.idempotencyKey)
     })
-    if (generation === actionGeneration && props.detail?.task.request_id === requestId) {
+    if (generation === actionGeneration && props.detail?.task.request_id === snapshot.requestId) {
       resetAction()
       appStore.showSuccess(t('videoTasks.actions.success'))
-      emit('refreshed', requestId)
+      emit('refreshed', snapshot.requestId)
     }
   } catch (error: unknown) {
     if (isStepUpCancelled(error) || generation !== actionGeneration) return

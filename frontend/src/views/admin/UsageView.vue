@@ -876,19 +876,22 @@ const applyVideoFilters = (next: VideoTaskFilters) => {
 }
 const onVideoPage = (page: number) => { videoPage.value = page; void loadVideoTasks() }
 const onVideoPageSize = (pageSize: number) => { videoPageSize.value = pageSize; videoPage.value = 1; void loadVideoTasks() }
-const openVideoTask = async (task: AdminVideoTask) => {
+const loadVideoTaskDetail = async (requestId: string) => {
   const sequence = ++videoDetailSequence
-  showVideoDetail.value = true
-  videoDetail.value = null
   videoDetailLoading.value = true
   try {
-    const detail = await adminUsageAPI.getVideoTask(task.request_id)
+    const detail = await adminUsageAPI.getVideoTask(requestId)
     if (sequence === videoDetailSequence && showVideoDetail.value) videoDetail.value = detail
   } catch {
     if (sequence === videoDetailSequence) appStore.showError(t('videoTasks.detail.failedToLoad'))
   } finally {
     if (sequence === videoDetailSequence) videoDetailLoading.value = false
   }
+}
+const openVideoTask = async (task: AdminVideoTask) => {
+  showVideoDetail.value = true
+  videoDetail.value = null
+  await loadVideoTaskDetail(task.request_id)
 }
 const closeVideoDetail = () => {
   videoDetailSequence++
@@ -898,8 +901,7 @@ const closeVideoDetail = () => {
 }
 const refreshVideoTask = async (requestId: string) => {
   await loadVideoTasks()
-  const current = videoTasks.value.find((task) => task.request_id === requestId)
-  if (showVideoDetail.value && current) await openVideoTask(current)
+  if (showVideoDetail.value) await loadVideoTaskDetail(requestId)
 }
 
 // Error tab state

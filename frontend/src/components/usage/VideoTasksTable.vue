@@ -136,7 +136,7 @@ const operationOptions = computed(() => [
 ])
 const statusOptions = computed(() => [
   { value: '', label: t('videoTasks.filters.allStatuses') },
-  ...(['created', 'submitting', 'submitted', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'unknown', 'manual_review'] as const)
+  ...(['created', 'submitting', 'submitted', 'queued', 'running', 'succeeded', 'failed', 'cancelled', 'unknown'] as const)
     .map((value) => ({ value, label: statusLabel(value) })),
 ])
 
