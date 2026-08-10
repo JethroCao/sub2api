@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -40,6 +41,9 @@ type videoContentFetcher interface {
 }
 
 type legacyGrokVideoHandler interface {
+	GrokVideoGeneration(*gin.Context)
+	GrokVideoEdit(*gin.Context)
+	GrokVideoExtension(*gin.Context)
 	GrokVideoStatus(*gin.Context)
 	GrokVideoContent(*gin.Context)
 }
@@ -49,14 +53,15 @@ type legacyGrokRouteGate interface {
 }
 
 type VideoHandler struct {
-	tasks       videoTaskApplication
-	billing     videoBillingEligibility
-	accounts    videoAccountReader
-	providers   *service.VideoProviderRegistry
-	fetcher     videoContentFetcher
-	legacy      legacyGrokVideoHandler
-	legacyRoute legacyGrokRouteGate
-	audit       *OpenAIGatewayHandler
+	tasks                         videoTaskApplication
+	billing                       videoBillingEligibility
+	accounts                      videoAccountReader
+	providers                     *service.VideoProviderRegistry
+	fetcher                       videoContentFetcher
+	legacy                        legacyGrokVideoHandler
+	legacyRoute                   legacyGrokRouteGate
+	audit                         *OpenAIGatewayHandler
+	durableGrokSubmissionsEnabled bool
 }
 
 func NewVideoHandler(
@@ -67,8 +72,10 @@ func NewVideoHandler(
 	fetcher *service.VideoContentFetcher,
 	legacy *OpenAIGatewayHandler,
 	composite *service.CompositeRouteResolver,
+	cfg *config.Config,
 ) *VideoHandler {
-	return newVideoHandler(tasks, billing, accounts, providers, fetcher, legacy, videoCompositeLegacyRouteGate{resolver: composite})
+	durableGrokEnabled := cfg != nil && cfg.Video.Enabled && cfg.Video.GrokEnabled
+	return newVideoHandler(tasks, billing, accounts, providers, fetcher, legacy, videoCompositeLegacyRouteGate{resolver: composite}, durableGrokEnabled)
 }
 
 func newVideoHandler(
@@ -79,10 +86,12 @@ func newVideoHandler(
 	fetcher videoContentFetcher,
 	legacy legacyGrokVideoHandler,
 	legacyRoute legacyGrokRouteGate,
+	durableGrokSubmissionsEnabled bool,
 ) *VideoHandler {
 	handler := &VideoHandler{
 		tasks: tasks, billing: billing, accounts: accounts, providers: providers,
 		fetcher: fetcher, legacy: legacy, legacyRoute: legacyRoute,
+		durableGrokSubmissionsEnabled: durableGrokSubmissionsEnabled,
 	}
 	if openAI, ok := legacy.(*OpenAIGatewayHandler); ok {
 		handler.audit = openAI
@@ -98,6 +107,19 @@ func (h *VideoHandler) submit(c *gin.Context, operation service.VideoOperation) 
 	apiKey, ok := videoOwnerAPIKey(c)
 	if !ok {
 		videoError(c, http.StatusUnauthorized, "invalid_request_error", "Invalid API key")
+		return
+	}
+	if h.useLegacyGrokSubmission(apiKey.Group) {
+		switch operation {
+		case service.VideoOperationGeneration:
+			h.legacy.GrokVideoGeneration(c)
+		case service.VideoOperationEdit:
+			h.legacy.GrokVideoEdit(c)
+		case service.VideoOperationExtension:
+			h.legacy.GrokVideoExtension(c)
+		default:
+			videoError(c, http.StatusNotFound, "not_found_error", "Videos API is not supported for this operation")
+		}
 		return
 	}
 	if apiKey.Group == nil || !apiKey.Group.AllowVideoGeneration {
@@ -173,6 +195,11 @@ func (h *VideoHandler) submit(c *gin.Context, operation service.VideoOperation) 
 	c.Header("Cache-Control", "no-store")
 	c.Header("Location", videoContentStatusPath(c.Request.URL.Path, task.RequestID))
 	c.JSON(videoSubmissionHTTPStatus(task.Status), videoTaskResponse(c, task))
+}
+
+func (h *VideoHandler) useLegacyGrokSubmission(group *service.Group) bool {
+	return h != nil && h.legacy != nil && !h.durableGrokSubmissionsEnabled &&
+		group != nil && group.Platform == service.PlatformGrok
 }
 
 func (h *VideoHandler) Status(c *gin.Context) {

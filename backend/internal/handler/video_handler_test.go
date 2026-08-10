@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
@@ -55,6 +56,37 @@ func TestVideoSubmitRejectsDisabledGroupBeforeService(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code)
 	require.Equal(t, "unsupported_capability", gjson.GetBytes(w.Body.Bytes(), "error.type").String())
 	require.Zero(t, tasks.submitCalls)
+}
+
+func TestVideoSubmitFallsBackToLegacyGrokWhileDurableGrokIsDisabled(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		handler   func(*VideoHandler) gin.HandlerFunc
+		wantCalls func(*legacyVideoHandlerStub) int
+	}{
+		{name: "generation", path: "/v1/videos/generations", handler: func(h *VideoHandler) gin.HandlerFunc { return h.Generate }, wantCalls: func(s *legacyVideoHandlerStub) int { return s.generationCalls }},
+		{name: "edit", path: "/v1/videos/edits", handler: func(h *VideoHandler) gin.HandlerFunc { return h.Edit }, wantCalls: func(s *legacyVideoHandlerStub) int { return s.editCalls }},
+		{name: "extension", path: "/v1/videos/extensions", handler: func(h *VideoHandler) gin.HandlerFunc { return h.Extend }, wantCalls: func(s *legacyVideoHandlerStub) int { return s.extensionCalls }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasks := &videoHandlerTaskStub{}
+			legacy := &legacyVideoHandlerStub{submitCode: http.StatusAccepted, submitBody: `{"request_id":"legacy-grok-id"}`}
+			h := newVideoHandlerForTest(tasks, nil, nil, legacy, nil)
+			h.durableGrokSubmissionsEnabled = false
+			apiKey := ownedVideoAPIKey(10, 20, service.PlatformGrok)
+			apiKey.Group.AllowVideoGeneration = false
+
+			w := performVideoHandlerRequest(t, tt.handler(h), http.MethodPost, tt.path,
+				`{"model":"grok-imagine-video","prompt":"waves"}`, apiKey)
+
+			require.Equal(t, http.StatusAccepted, w.Code)
+			require.Equal(t, "legacy-grok-id", gjson.GetBytes(w.Body.Bytes(), "request_id").String())
+			require.Equal(t, 1, tt.wantCalls(legacy))
+			require.Zero(t, tasks.submitCalls)
+		})
+	}
 }
 
 func TestVideoSubmitMapsStableErrorEnvelope(t *testing.T) {
@@ -141,7 +173,9 @@ func TestVideoSubmitSecurityAuditBlocksBeforeBillingOrTaskSideEffects(t *testing
 	openAI := &OpenAIGatewayHandler{securityAuditCoordinator: securityaudit.NewCoordinator(nil, engine)}
 	tasks := &videoHandlerTaskStub{submitTask: &service.VideoTask{RequestID: "vid_0123456789abcdef0123456789abcdef"}}
 	billing := &videoBillingEligibilityStub{}
-	h := NewVideoHandler(nil, nil, nil, nil, nil, openAI, nil)
+	h := NewVideoHandler(nil, nil, nil, nil, nil, openAI, nil, &config.Config{
+		Video: config.VideoConfig{Enabled: true, GrokEnabled: true},
+	})
 	h.tasks = tasks
 	h.billing = billing
 
@@ -240,7 +274,7 @@ func TestVideoContentUsesOwnedPublicURLAndForwardsOnlyAllowlistedHeaders(t *test
 		Header:     upstreamHeaders,
 		Body:       io.NopCloser(strings.NewReader("cde")), ContentLength: 3,
 	}}
-	h := newVideoHandler(tasks, nil, nil, nil, fetcher, nil, nil)
+	h := newVideoHandler(tasks, nil, nil, nil, fetcher, nil, nil, true)
 
 	w := performVideoHandlerRequest(t, h.Content, http.MethodGet,
 		"/v1/videos/vid_0123456789abcdef0123456789abcdef/content", "", ownedVideoAPIKey(10, 20, service.PlatformVideo))
@@ -262,7 +296,7 @@ func TestVideoContentOwnershipFailureNeverFetchesOrFallsBack(t *testing.T) {
 	}}
 	legacy := &legacyVideoHandlerStub{}
 	fetcher := &videoContentFetcherStub{}
-	h := newVideoHandler(tasks, nil, nil, nil, fetcher, legacy, staticLegacyRouteGate(true))
+	h := newVideoHandler(tasks, nil, nil, nil, fetcher, legacy, staticLegacyRouteGate(true), true)
 
 	w := performVideoHandlerRequest(t, h.Content, http.MethodGet,
 		"/v1/videos/vid_0123456789abcdef0123456789abcdef/content", "", ownedVideoAPIKey(10, 21, service.PlatformGrok))
@@ -288,7 +322,7 @@ func TestVideoContentWithoutPublicURLUsesStoredAccountProvider(t *testing.T) {
 	}, length: 14}
 	registry, err := service.NewVideoProviderRegistry(provider)
 	require.NoError(t, err)
-	h := newVideoHandler(tasks, nil, accounts, registry, nil, nil, nil)
+	h := newVideoHandler(tasks, nil, accounts, registry, nil, nil, nil, true)
 
 	w := performVideoHandlerRequest(t, h.Content, http.MethodGet,
 		"/v1/videos/vid_0123456789abcdef0123456789abcdef/content", "", ownedVideoAPIKey(10, 20, service.PlatformGrok))
@@ -312,7 +346,7 @@ func TestVideoContentWithoutPublicURLPreservesProviderRangeStatus(t *testing.T) 
 	}}
 	registry, err := service.NewVideoProviderRegistry(provider)
 	require.NoError(t, err)
-	h := newVideoHandler(tasks, nil, videoAccountReaderStub{account: &service.Account{ID: 77}}, registry, nil, nil, nil)
+	h := newVideoHandler(tasks, nil, videoAccountReaderStub{account: &service.Account{ID: 77}}, registry, nil, nil, nil, true)
 
 	w := performVideoHandlerRequest(t, h.Content, http.MethodGet,
 		"/v1/videos/vid_0123456789abcdef0123456789abcdef/content", "", ownedVideoAPIKey(10, 20, service.PlatformGrok))
@@ -379,7 +413,7 @@ func TestVideoContentEndToEndClassifiesGrokRelayAndPublicURLs(t *testing.T) {
 			registry, err := service.NewVideoProviderRegistry(provider)
 			require.NoError(t, err)
 			fetcher := &videoContentFetcherStub{response: videoGrokHandlerResponse(http.StatusOK, "video/mp4", "public-bytes")}
-			h := newVideoHandler(tasks, nil, videoAccountReaderStub{account: tt.account}, registry, fetcher, nil, nil)
+			h := newVideoHandler(tasks, nil, videoAccountReaderStub{account: tt.account}, registry, fetcher, nil, nil, true)
 
 			w := performVideoHandlerRequest(t, h.Content, http.MethodGet,
 				"/v1/videos/vid_0123456789abcdef0123456789abcdef/content", "", ownedVideoAPIKey(10, 20, service.PlatformGrok))
@@ -465,10 +499,36 @@ func (s *videoHandlerTaskStub) GetOwned(ctx context.Context, requestID string, u
 }
 
 type legacyVideoHandlerStub struct {
-	statusCalls  int
-	contentCalls int
-	statusCode   int
-	statusBody   string
+	generationCalls int
+	editCalls       int
+	extensionCalls  int
+	statusCalls     int
+	contentCalls    int
+	submitCode      int
+	submitBody      string
+	statusCode      int
+	statusBody      string
+}
+
+func (s *legacyVideoHandlerStub) writeSubmit(c *gin.Context, calls *int) {
+	*calls++
+	status := s.submitCode
+	if status == 0 {
+		status = http.StatusAccepted
+	}
+	c.Data(status, "application/json", []byte(s.submitBody))
+}
+
+func (s *legacyVideoHandlerStub) GrokVideoGeneration(c *gin.Context) {
+	s.writeSubmit(c, &s.generationCalls)
+}
+
+func (s *legacyVideoHandlerStub) GrokVideoEdit(c *gin.Context) {
+	s.writeSubmit(c, &s.editCalls)
+}
+
+func (s *legacyVideoHandlerStub) GrokVideoExtension(c *gin.Context) {
+	s.writeSubmit(c, &s.extensionCalls)
 }
 
 func (s *legacyVideoHandlerStub) GrokVideoStatus(c *gin.Context) {
@@ -561,7 +621,7 @@ func newVideoHandlerForTest(
 	legacy legacyGrokVideoHandler,
 	legacyGate legacyGrokRouteGate,
 ) *VideoHandler {
-	return newVideoHandler(tasks, billing, accounts, nil, nil, legacy, legacyGate)
+	return newVideoHandler(tasks, billing, accounts, nil, nil, legacy, legacyGate, true)
 }
 
 func ownedVideoAPIKey(userID, apiKeyID int64, platform string) *service.APIKey {

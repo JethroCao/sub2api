@@ -6341,15 +6341,17 @@ const handleDuplicate = async (group: AdminGroup) => {
   duplicatingGroupIds.add(group.id);
   try {
     const duplicate = await adminAPI.groups.duplicate(group.id);
-    let pricingCopied = false;
-    try {
-      const sourceRules = await adminAPI.groups.listVideoPricingRules(group.id);
-      await saveVideoPricingRules(duplicate.id, videoPricingRulesForReplacement(sourceRules));
-      pricingCopied = true;
-    } catch (error: unknown) {
-      appStore.showError(t("admin.groups.videoPricing.duplicatePartialSuccess", {
-        reason: t(videoPricingErrorI18nKey(error)),
-      }));
+    let pricingCopied = !supportsVideoPermissionPlatform(group.platform);
+    if (supportsVideoPermissionPlatform(group.platform)) {
+      try {
+        const sourceRules = await adminAPI.groups.listVideoPricingRules(group.id);
+        await saveVideoPricingRules(duplicate.id, videoPricingRulesForReplacement(sourceRules));
+        pricingCopied = true;
+      } catch (error: unknown) {
+        appStore.showError(t("admin.groups.videoPricing.duplicatePartialSuccess", {
+          reason: t(videoPricingErrorI18nKey(error)),
+        }));
+      }
     }
     if (pricingCopied) {
       appStore.showSuccess(

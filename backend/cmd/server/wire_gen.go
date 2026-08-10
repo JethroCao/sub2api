@@ -324,7 +324,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	openAIVideoAccountScheduler := service.NewOpenAIVideoAccountScheduler(openAIGatewayService)
 	videoTaskService := service.ProvideVideoTaskService(videoSubmissionRepository, videoTaskRepository, videoPricingService, videoBillingService, videoProviderRegistry, videoCapabilityValidator, openAIVideoAccountScheduler, subscriptionService, configConfig)
 	videoContentFetcher := service.NewVideoContentFetcher()
-	handlerVideoHandler := handler.NewVideoHandler(videoTaskService, billingCacheService, accountRepository, videoProviderRegistry, videoContentFetcher, openAIGatewayHandler, compositeRouteResolver)
+	handlerVideoHandler := handler.NewVideoHandler(videoTaskService, billingCacheService, accountRepository, videoProviderRegistry, videoContentFetcher, openAIGatewayHandler, compositeRouteResolver, configConfig)
 	feishuOrgPermissionService := service.ProvideFeishuOrgPermissionService(db, apiKeyAuthCacheInvalidator, leaderLockCache)
 	feishuOrgHandler := handler.NewFeishuOrgHandler(feishuOrgPermissionService, settingService, usageService)
 	idempotencyCoordinator := service.ProvideIdempotencyCoordinator(idempotencyRepository, configConfig)

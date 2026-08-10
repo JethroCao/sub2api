@@ -182,7 +182,7 @@ func newValidatedResolvedIPDialer(lookup func(context.Context, string, string) (
 		lookup = net.DefaultResolver.LookupIP
 	}
 	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
+		dial = newUpstreamDialer().DialContext
 	}
 	return &validatedResolvedIPDialer{lookup: lookup, dial: dial}
 }
@@ -392,7 +392,7 @@ func (s *httpUpstreamService) httpClientForUpstreamRequest(client *http.Client, 
 	if !ok || transport == nil {
 		return nil, errors.New("validated destination dial requires an HTTP transport")
 	}
-	if transport.Proxy != nil || transport.DialContext != nil || transport.DialTLSContext != nil {
+	if transport.Proxy != nil || transport.DialTLSContext != nil {
 		return nil, errors.New("validated destination dial cannot use a proxy or custom dialer")
 	}
 	transport = transport.Clone()

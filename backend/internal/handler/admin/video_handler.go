@@ -289,7 +289,7 @@ func adminVideoTaskResponse(task *service.VideoTask) map[string]any {
 		"group_id": task.GroupID, "account_id": task.AccountID, "provider": task.Provider,
 		"operation": task.Operation, "external_model": task.ExternalModel, "status": task.Status,
 		"upstream_status": task.UpstreamStatus, "result_url_summary": safeAdminVideoResultURL(task.ResultURL),
-		"result_url_expires_at": task.ResultURLExpiresAt,
+		"result_url_expires_at":   task.ResultURLExpiresAt,
 		"result_duration_seconds": task.ResultDurationSeconds, "result_width": task.ResultWidth, "result_height": task.ResultHeight,
 		"pricing_unit": task.PricingUnit, "unit_price": task.UnitPrice, "estimated_units": task.EstimatedUnits,
 		"upstream_unit_cost": task.UpstreamUnitCost, "actual_upstream_cost": adminVideoActualUpstreamCost(task),

@@ -15,7 +15,6 @@ const {
   getLiveCapability,
   getUsageSummary,
   getCapacitySummary,
-  getLiveCapability,
   showSuccess,
   showError
 } = vi.hoisted(() => ({
@@ -28,7 +27,6 @@ const {
   getLiveCapability: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
-  getLiveCapability: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
 }))
@@ -48,7 +46,6 @@ vi.mock('@/api/admin', () => ({
       getLiveCapability,
       getUsageSummary,
       getCapacitySummary,
-      getLiveCapability,
       getAll: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -90,7 +87,7 @@ const sourceGroup: AdminGroup = {
   id: 42,
   name: 'Primary',
   description: null,
-  platform: 'openai',
+  platform: 'video',
   rate_multiplier: 1,
   rpm_limit: 0,
   is_exclusive: false,
@@ -138,6 +135,12 @@ const sourceGroup: AdminGroup = {
   rate_limited_account_count: 0,
   models_list_config: undefined,
   sort_order: 10
+}
+
+const legacySourceGroup: AdminGroup = {
+  ...sourceGroup,
+  platform: 'openai',
+  allow_video_generation: false
 }
 
 const AppLayoutStub = defineComponent({
@@ -201,7 +204,6 @@ describe('GroupsView duplicate action', () => {
       getLiveCapability,
       getUsageSummary,
       getCapacitySummary,
-      getLiveCapability,
       showSuccess,
       showError,
       apiPut
@@ -239,7 +241,6 @@ describe('GroupsView duplicate action', () => {
     getLiveCapability.mockResolvedValue({ supported: false })
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
-    getLiveCapability.mockResolvedValue({ supported: false })
   })
 
   afterEach(() => {
@@ -269,6 +270,33 @@ describe('GroupsView duplicate action', () => {
     }])
     expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess:Primary (Copy)')
     expect(listGroups).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('duplicates a legacy non-video group without video pricing side effects', async () => {
+    listGroups.mockResolvedValueOnce({
+      items: [legacySourceGroup],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    duplicateGroup.mockResolvedValueOnce({
+      ...legacySourceGroup,
+      id: 43,
+      name: 'Primary (Copy)',
+      status: 'inactive'
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
+    await flushPromises()
+
+    expect(duplicateGroup).toHaveBeenCalledWith(42)
+    expect(listVideoPricingRules).not.toHaveBeenCalled()
+    expect(replaceVideoPricingRules).not.toHaveBeenCalled()
+    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess:Primary (Copy)')
     wrapper.unmount()
   })
 
