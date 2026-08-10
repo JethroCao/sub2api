@@ -101,7 +101,25 @@ func (h *PromptAdminHandler) ListEvents(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, result)
+	response.Success(c, eventPageWithoutFullPrompts(result))
+}
+
+func eventPageWithoutFullPrompts(page *EventPage) *EventPage {
+	if page == nil {
+		return nil
+	}
+	copyPage := *page
+	copyPage.Items = make([]*Event, 0, len(page.Items))
+	for _, event := range page.Items {
+		if event == nil {
+			copyPage.Items = append(copyPage.Items, nil)
+			continue
+		}
+		copyEvent := *event
+		copyEvent.Snapshot.FullPrompt = ""
+		copyPage.Items = append(copyPage.Items, &copyEvent)
+	}
+	return &copyPage
 }
 
 func (h *PromptAdminHandler) GetEvent(c *gin.Context) {
@@ -227,7 +245,7 @@ func configAuditFields(request UpdateConfigRequest, saved *PublicConfig) map[str
 		version = saved.ConfigVersion
 	}
 	return map[string]any{
-		"enabled": request.Enabled, "blocking_enabled": request.BlockingEnabled,
+		"enabled": request.Enabled, "capture_only": request.CaptureOnly, "blocking_enabled": request.BlockingEnabled,
 		"blocking_latest_turn_only": request.BlockingLatestTurnOnly,
 		"config_version":            version, "endpoint_count": len(request.Endpoints),
 		"scanner_count": len(request.Scanners), "all_groups": request.AllGroups,

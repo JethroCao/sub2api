@@ -65,6 +65,7 @@ type StorageEndpoint struct {
 
 type storageConfig struct {
 	Enabled                bool              `json:"enabled"`
+	CaptureOnly            bool              `json:"capture_only"`
 	BlockingEnabled        bool              `json:"blocking_enabled"`
 	BlockingLatestTurnOnly bool              `json:"blocking_latest_turn_only"`
 	StorePassEvents        bool              `json:"store_pass_events"`
@@ -101,6 +102,7 @@ type ActiveEndpoint struct {
 type ActiveConfig struct {
 	RiskControlEnabled     bool
 	Enabled                bool
+	CaptureOnly            bool
 	BlockingEnabled        bool
 	BlockingLatestTurnOnly bool
 	StorePassEvents        bool
@@ -132,6 +134,7 @@ type PublicEndpoint struct {
 
 type PublicConfig struct {
 	Enabled                bool             `json:"enabled"`
+	CaptureOnly            bool             `json:"capture_only"`
 	BlockingEnabled        bool             `json:"blocking_enabled"`
 	BlockingLatestTurnOnly bool             `json:"blocking_latest_turn_only"`
 	StorePassEvents        bool             `json:"store_pass_events"`
@@ -165,6 +168,7 @@ type UpdateEndpoint struct {
 type UpdateConfigRequest struct {
 	ExpectedConfigVersion  int64            `json:"expected_config_version" binding:"required"`
 	Enabled                bool             `json:"enabled"`
+	CaptureOnly            bool             `json:"capture_only"`
 	BlockingEnabled        bool             `json:"blocking_enabled"`
 	BlockingLatestTurnOnly bool             `json:"blocking_latest_turn_only"`
 	StorePassEvents        bool             `json:"store_pass_events"`
@@ -258,6 +262,9 @@ func validateStorageConfig(cfg storageConfig) error {
 	if cfg.BlockingEnabled && !cfg.Enabled {
 		return infraerrors.BadRequest(ErrorCodeRequiresEnabled, "开启同步阻止前必须先启用提示词审计")
 	}
+	if cfg.CaptureOnly && cfg.BlockingEnabled {
+		return infraerrors.BadRequest("prompt_audit_capture_only_conflict", "仅留存模式不能同时开启同步阻止")
+	}
 	if cfg.Strategy != "priority" {
 		return infraerrors.BadRequest("prompt_audit_invalid_strategy", "提示词审计策略仅支持 priority")
 	}
@@ -299,13 +306,16 @@ func validateStorageConfig(cfg storageConfig) error {
 			enabled++
 		}
 	}
-	if cfg.Enabled && enabled == 0 {
+	if cfg.Enabled && !cfg.CaptureOnly && enabled == 0 {
 		return infraerrors.BadRequest("prompt_audit_endpoint_required", "启用提示词审计前至少需要启用一个审计节点")
 	}
 	return nil
 }
 
 func validateUpdateConfigRequest(req UpdateConfigRequest) error {
+	if req.CaptureOnly && req.BlockingEnabled {
+		return infraerrors.BadRequest("prompt_audit_capture_only_conflict", "仅留存模式不能同时开启同步阻止")
+	}
 	if strings.TrimSpace(req.Strategy) != "priority" {
 		return infraerrors.BadRequest("prompt_audit_invalid_strategy", "提示词审计策略仅支持 priority")
 	}
@@ -347,6 +357,9 @@ func validateUpdateConfigRequest(req UpdateConfigRequest) error {
 func (cfg ActiveConfig) EffectiveMode() Mode {
 	if !cfg.RiskControlEnabled || !cfg.Enabled {
 		return ModeOff
+	}
+	if cfg.CaptureOnly {
+		return ModeCaptureOnly
 	}
 	if cfg.BlockingEnabled {
 		return ModeBlocking
@@ -410,9 +423,9 @@ func PublicFromStorage(cfg storageConfig, riskControlEnabled bool, invalidTokenE
 			Enabled: ep.Enabled, HasToken: hasToken, TokenStatus: status,
 		})
 	}
-	active := ActiveConfig{RiskControlEnabled: riskControlEnabled, Enabled: cfg.Enabled, BlockingEnabled: cfg.BlockingEnabled}
+	active := ActiveConfig{RiskControlEnabled: riskControlEnabled, Enabled: cfg.Enabled, CaptureOnly: cfg.CaptureOnly, BlockingEnabled: cfg.BlockingEnabled}
 	return PublicConfig{
-		Enabled: cfg.Enabled, BlockingEnabled: cfg.BlockingEnabled, BlockingLatestTurnOnly: cfg.BlockingLatestTurnOnly, StorePassEvents: cfg.StorePassEvents,
+		Enabled: cfg.Enabled, CaptureOnly: cfg.CaptureOnly, BlockingEnabled: cfg.BlockingEnabled, BlockingLatestTurnOnly: cfg.BlockingLatestTurnOnly, StorePassEvents: cfg.StorePassEvents,
 		EffectiveMode: active.EffectiveMode(), Strategy: cfg.Strategy, WorkerCount: cfg.WorkerCount,
 		QueueCapacity: cfg.QueueCapacity, Scanners: scanners, AllGroups: cfg.AllGroups,
 		GroupIDs: groupIDs, Endpoints: endpoints, ConfigVersion: cfg.ConfigVersion,
@@ -422,7 +435,7 @@ func PublicFromStorage(cfg storageConfig, riskControlEnabled bool, invalidTokenE
 
 func ActiveFromStorage(cfg storageConfig, riskControlEnabled bool, encryptor SecretEncryptor) (ActiveConfig, error) {
 	active := ActiveConfig{
-		RiskControlEnabled: riskControlEnabled, Enabled: cfg.Enabled, BlockingEnabled: cfg.BlockingEnabled,
+		RiskControlEnabled: riskControlEnabled, Enabled: cfg.Enabled, CaptureOnly: cfg.CaptureOnly, BlockingEnabled: cfg.BlockingEnabled,
 		BlockingLatestTurnOnly: cfg.BlockingLatestTurnOnly,
 		StorePassEvents:        cfg.StorePassEvents, Strategy: cfg.Strategy, WorkerCount: cfg.WorkerCount,
 		QueueCapacity: cfg.QueueCapacity, Scanners: append([]string(nil), cfg.Scanners...), AllGroups: cfg.AllGroups,
@@ -461,6 +474,7 @@ func ActiveFromStorage(cfg storageConfig, riskControlEnabled bool, encryptor Sec
 func changeSummary(cfg storageConfig) string {
 	summary := struct {
 		Enabled                bool   `json:"enabled"`
+		CaptureOnly            bool   `json:"capture_only"`
 		BlockingEnabled        bool   `json:"blocking_enabled"`
 		BlockingLatestTurnOnly bool   `json:"blocking_latest_turn_only"`
 		StorePassEvents        bool   `json:"store_pass_events"`
@@ -469,7 +483,7 @@ func changeSummary(cfg storageConfig) string {
 		AllGroups              bool   `json:"all_groups"`
 		GroupCount             int    `json:"group_count"`
 		GroupHash              string `json:"group_hash"`
-	}{cfg.Enabled, cfg.BlockingEnabled, cfg.BlockingLatestTurnOnly, cfg.StorePassEvents, len(cfg.Endpoints), len(cfg.Scanners), cfg.AllGroups, len(cfg.GroupIDs), ""}
+	}{cfg.Enabled, cfg.CaptureOnly, cfg.BlockingEnabled, cfg.BlockingLatestTurnOnly, cfg.StorePassEvents, len(cfg.Endpoints), len(cfg.Scanners), cfg.AllGroups, len(cfg.GroupIDs), ""}
 	rawGroups, _ := json.Marshal(cfg.GroupIDs)
 	digest := sha256.Sum256(rawGroups)
 	summary.GroupHash = hex.EncodeToString(digest[:])

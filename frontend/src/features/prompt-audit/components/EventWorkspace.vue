@@ -20,6 +20,7 @@
         <span>{{ t('admin.promptAudit.events.decision') }}</span>
         <select v-model="localFilters.decision" class="input mt-1 w-full" :aria-label="t('admin.promptAudit.events.decision')" @change="filtersChanged">
           <option value="">{{ t('common.all') }}</option>
+          <option value="unreviewed">{{ t('admin.promptAudit.decisions.unreviewed') }}</option>
           <option value="pass">{{ t('admin.promptAudit.decisions.pass') }}</option>
           <option value="flag">{{ t('admin.promptAudit.decisions.flag') }}</option>
           <option value="critical">{{ t('admin.promptAudit.decisions.critical') }}</option>
@@ -29,6 +30,7 @@
         <span>{{ t('admin.promptAudit.events.risk') }}</span>
         <select v-model="localFilters.risk_level" class="input mt-1 w-full" :aria-label="t('admin.promptAudit.events.risk')" @change="filtersChanged">
           <option value="">{{ t('common.all') }}</option>
+          <option value="unknown">{{ t('admin.promptAudit.riskLevels.unknown') }}</option>
           <option value="low">{{ t('admin.promptAudit.riskLevels.low') }}</option>
           <option value="medium">{{ t('admin.promptAudit.riskLevels.medium') }}</option>
           <option value="high">{{ t('admin.promptAudit.riskLevels.high') }}</option>
@@ -186,10 +188,11 @@ function formatDate(value: string): string {
 function decisionClass(decision: string): string {
   if (decision === 'critical') return 'bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300'
   if (decision === 'flag') return 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+  if (decision === 'unreviewed') return 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
   return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
 }
-const DECISIONS = new Set(['pass', 'flag', 'critical'])
-const RISK_LEVELS = new Set(['low', 'medium', 'high', 'critical'])
+const DECISIONS = new Set(['unreviewed', 'pass', 'flag', 'critical'])
+const RISK_LEVELS = new Set(['unknown', 'low', 'medium', 'high', 'critical'])
 
 function translateDecision(decision: string): string {
   return DECISIONS.has(decision) ? t(`admin.promptAudit.decisions.${decision}`) : decision

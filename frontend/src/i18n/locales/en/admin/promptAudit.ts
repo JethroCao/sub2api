@@ -1,15 +1,15 @@
 export default {
   promptAudit: {
     title: 'Prompt Audit',
-    description: 'Review user input asynchronously or block it synchronously through OpenAI-compatible Qwen3Guard nodes. Full prompts are stored with events for admin review.',
+    description: 'Retain user input without scanning, or review it asynchronously or synchronously through OpenAI-compatible Qwen3Guard nodes. Full prompts are for admin review only.',
     configVersion: 'Config version v{version}',
     tabs: { config: 'Configuration', events: 'Events' },
-    actions: { refresh: 'Refresh runtime', retry: 'Retry', Allow: 'Allow', Warn: 'Warn', Block: 'Block' },
+    actions: { refresh: 'Refresh runtime', retry: 'Retry', Record: 'Capture only', Allow: 'Allow', Warn: 'Warn', Block: 'Block' },
     common: { actions: 'Actions', never: 'Never' },
-    mode: { off: 'Off', async_audit: 'Async audit only', blocking: 'Synchronous audit and block' },
+    mode: { off: 'Off', capture_only: 'Capture only (no audit API)', async_audit: 'Async audit only', blocking: 'Synchronous audit and block' },
     status: { disabled: 'Disabled', running: 'Running', degraded: 'Degraded', error: 'Error', healthy: 'Healthy', failed: 'Failed', stale: 'Stale heartbeat' },
-    decisions: { pass: 'Pass', flag: 'Flag', critical: 'Critical' },
-    riskLevels: { low: 'Low', medium: 'Medium', high: 'High', critical: 'Critical' },
+    decisions: { unreviewed: 'Unreviewed', pass: 'Pass', flag: 'Flag', critical: 'Critical' },
+    riskLevels: { unknown: 'Unknown', low: 'Low', medium: 'Medium', high: 'High', critical: 'Critical' },
     scanners: {
       violent: 'Violent',
       non_violent_illegal_acts: 'Non-violent Illegal Acts',
@@ -38,7 +38,7 @@ export default {
       process: 'Process status', mode: 'Effective mode', version: 'Active / expected version', workers: 'Active / total workers',
       queue: 'Active jobs / capacity', dependencies: 'Dependencies', guardMetrics: 'Synchronous Guard metrics', latest: 'Latest processing and error',
       queueBreakdown: 'queued {queued} · processing {processing} · retry {retry} · done {done} · failed {failed}',
-      deliveryTotals: 'Total enqueued {enqueued} · dropped {dropped} · processed {processed} · failed {failed}',
+      deliveryTotals: 'Total enqueued {enqueued} · captured {captured} · dropped {dropped} · processed {processed} · failed {failed}',
     },
     metrics: { total: 'Total', allowed: 'Allowed', flagged: 'Flagged', blocked: 'Blocked', unavailable: 'Unavailable', timeouts: 'Timeouts', failovers: 'Failovers' },
     pool: {
@@ -55,7 +55,7 @@ export default {
       searchGroups: 'Search groups', noGroups: 'No matching groups', missingGroups: 'Configured IDs for groups that no longer exist', selectedCount: '{count} groups selected',
       scanners: 'Qwen3Guard input-risk categories', workerCount: 'Worker count', queueCapacity: 'Persistent queue capacity', strategy: 'Node strategy', strategyHint: 'Try nodes in configuration order and fail over when allowed.',
     },
-    saveBar: { enabled: 'Enable prompt audit', blocking: 'Synchronous blocking', blockingLatestTurnOnly: 'Only latest input and prior output', storePass: 'Store safe events', dirty: 'Unsaved changes', synced: 'Configuration synced' },
+    saveBar: { processingMode: 'Processing mode', enabled: 'Enable prompt audit', blocking: 'Synchronous blocking', blockingLatestTurnOnly: 'Only latest input and prior output', storePass: 'Store safe events', dirty: 'Unsaved changes', synced: 'Configuration synced' },
     blockingConfirm: {
       title: 'Enable synchronous blocking?',
       message: 'Applicable requests wait for Guard before account selection, billing, or upstream access. Block, unavailable Guard, and invalid responses all prevent upstream access.',
@@ -78,6 +78,8 @@ export default {
       promptFullHint: 'The full prompt is stored with this event for admin review only. Treat it as sensitive data and do not share it.',
       guardReturn: 'Model audit return',
       guardReturnHint: 'Normalized Guard result (decision, categories, scores, and redacted evidence). Raw response bodies are not stored.',
+      captureOnlyTitle: 'Capture-only record',
+      captureOnlyNotice: 'This event retained the user prompt without calling an audit API. It is unreviewed and has no risk decision or Guard return.',
       riskSummaries: 'Risk summaries',
       evidence: 'Redacted evidence',
       score: 'Score',

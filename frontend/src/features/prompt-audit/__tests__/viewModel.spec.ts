@@ -3,6 +3,8 @@ import type { PromptAuditConfig } from '../types'
 import {
   buildUpdateRequest,
   configToDraft,
+  draftProcessingMode,
+  applyProcessingMode,
   draftFingerprint,
   emptyEventFilters,
   eventFilterPayload,
@@ -12,6 +14,7 @@ import {
 
 const config = (): PromptAuditConfig => ({
   enabled: true,
+  capture_only: false,
   blocking_enabled: false,
   blocking_latest_turn_only: false,
   store_pass_events: false,
@@ -61,6 +64,22 @@ describe('Prompt Audit view model', () => {
     const draft = configToDraft(config())
     draft.blocking_latest_turn_only = true
     expect(buildUpdateRequest(draft)).toMatchObject({ blocking_latest_turn_only: true })
+  })
+
+  it('maps capture-only without Guard behavior and keeps legacy configs async', () => {
+	const capture = configToDraft({
+	  ...config(), enabled: true, capture_only: true,
+	  blocking_enabled: false, endpoints: [],
+	})
+	expect(draftProcessingMode(capture)).toBe('capture_only')
+	expect(buildUpdateRequest(capture)).toMatchObject({
+	  enabled: true, capture_only: true, blocking_enabled: false, endpoints: [],
+	})
+
+	const legacy = configToDraft({ ...config(), capture_only: undefined } as unknown as PromptAuditConfig)
+	expect(draftProcessingMode(legacy)).toBe('async_audit')
+	const blocking = applyProcessingMode(legacy, 'blocking')
+	expect(blocking).toMatchObject({ enabled: true, capture_only: false, blocking_enabled: true })
   })
 
   it('tracks dirty state from the full normalized save payload', () => {

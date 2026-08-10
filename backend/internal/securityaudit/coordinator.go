@@ -35,7 +35,7 @@ func (c *Coordinator) Check(ctx context.Context, req Request) Decision {
 		mode = c.prompt.EffectiveMode()
 	}
 	switch mode {
-	case ModeAsync:
+	case ModeCaptureOnly, ModeAsync:
 		// Enqueue is deliberately best-effort. The implementation owns a bounded
 		// context and copies request memory before it can outlive the Handler.
 		_ = c.prompt.Enqueue(ctx, req.Clone())

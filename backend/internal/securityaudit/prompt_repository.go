@@ -75,6 +75,7 @@ type JobRepository interface {
 	ReclaimStale(ctx context.Context, stagingBefore, processingBefore time.Time, limit int) (int64, error)
 	QueueStats(ctx context.Context) (QueueStats, error)
 	RecordBlocking(ctx context.Context, snapshot PromptSnapshot, configVersion int64, result *NormalizedResult, storePassEvents bool) (*Event, error)
+	RecordCapture(ctx context.Context, snapshot PromptSnapshot, configVersion int64) (*Event, error)
 }
 
 type PostgreSQLRepository struct {
@@ -297,6 +298,36 @@ func (r *PostgreSQLRepository) RecordBlocking(ctx context.Context, snapshot Prom
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return event, nil
+}
+
+func (r *PostgreSQLRepository) RecordCapture(ctx context.Context, snapshot PromptSnapshot, configVersion int64) (*Event, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("prompt audit database unavailable")
+	}
+	snapshot.FullPrompt = BuildFullPrompt(snapshot.FullPrompt, DefaultFullPromptMaxRunes)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	job, err := insertJob(ctx, tx, snapshot.Redacted(), ModeCaptureOnly, configVersion, "done", 0)
+	if err != nil {
+		return nil, err
+	}
+	result := &NormalizedResult{
+		Decision: EventUnreviewed, RiskLevel: RiskUnknown, Action: ActionRecord,
+		Categories: []string{}, MatchedScanners: []string{}, ScannerScores: map[string]float64{},
+		ScannerEvidence: map[string]string{}, ScannerBackend: "capture-only", ScannerVersion: "capture-only",
+		PolicyID: "capture-only",
+	}
+	event, err := insertEvent(ctx, tx, job.ID, snapshot.Redacted(), configVersion, result)
+	if err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

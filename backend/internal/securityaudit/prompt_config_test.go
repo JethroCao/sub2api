@@ -43,6 +43,52 @@ func TestDefaultConfigIsOff(t *testing.T) {
 	require.Contains(t, string(publicJSON), `"endpoints":[]`)
 }
 
+func TestPromptAuditCaptureOnlyConfig(t *testing.T) {
+	legacy := DefaultStorageConfig()
+	require.False(t, legacy.CaptureOnly)
+
+	capture := ActiveConfig{RiskControlEnabled: true, Enabled: true, CaptureOnly: true}
+	require.Equal(t, ModeCaptureOnly, capture.EffectiveMode())
+
+	off := capture
+	off.RiskControlEnabled = false
+	require.Equal(t, ModeOff, off.EffectiveMode())
+
+	valid := UpdateConfigRequest{
+		ExpectedConfigVersion: 1, Enabled: true, CaptureOnly: true,
+		Strategy: "priority", WorkerCount: 4, QueueCapacity: 100,
+		Scanners: []string{"pii"}, AllGroups: true,
+	}
+	require.NoError(t, validateUpdateConfigRequest(valid))
+
+	invalid := valid
+	invalid.BlockingEnabled = true
+	err := validateUpdateConfigRequest(invalid)
+	require.Equal(t, "prompt_audit_capture_only_conflict", infraerrors.Reason(err))
+}
+
+func TestPromptAuditCaptureOnlyConfigRoundTrip(t *testing.T) {
+	manager := &ConfigManager{encryptor: prefixEncryptor{}, encryptionKeyConfigured: true}
+	request := UpdateConfigRequest{
+		ExpectedConfigVersion: 1, Enabled: true, CaptureOnly: true,
+		Strategy: "priority", WorkerCount: 1, QueueCapacity: 10,
+		Scanners: []string{"pii"}, AllGroups: true,
+	}
+	next, err := manager.buildNextStorage(DefaultStorageConfig(), request, 9)
+	require.NoError(t, err)
+	require.True(t, next.CaptureOnly)
+	require.Contains(t, changeSummary(next), `"capture_only":true`)
+
+	active, err := ActiveFromStorage(next, true, prefixEncryptor{})
+	require.NoError(t, err)
+	require.True(t, active.CaptureOnly)
+	require.Equal(t, ModeCaptureOnly, active.EffectiveMode())
+
+	public := PublicFromStorage(next, true, nil)
+	require.True(t, public.CaptureOnly)
+	require.Equal(t, ModeCaptureOnly, public.EffectiveMode)
+}
+
 func TestBlockingLatestTurnOnlyConfigRoundTrip(t *testing.T) {
 	manager := &ConfigManager{encryptor: prefixEncryptor{}, encryptionKeyConfigured: true}
 	request := UpdateConfigRequest{

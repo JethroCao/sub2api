@@ -42,7 +42,7 @@
           <p class="mt-2 text-xs text-gray-500 dark:text-dark-400">{{ t('admin.promptAudit.policy.selectedCount', { count: draft.group_ids.length }) }}</p>
         </div>
 
-        <fieldset class="mt-5 border-t border-gray-100 pt-5 dark:border-dark-800">
+        <fieldset class="mt-5 border-t border-gray-100 pt-5 dark:border-dark-800" :disabled="guardDisabled">
           <legend class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.promptAudit.policy.scanners') }}</legend>
           <div class="mt-3 grid gap-2 sm:grid-cols-2">
             <label v-for="scanner in SCANNER_CATALOG" :key="scanner.id" class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:text-dark-200 dark:hover:bg-dark-800">
@@ -53,7 +53,7 @@
         </fieldset>
       </div>
 
-      <div class="space-y-4 rounded-xl border border-gray-200 p-4 dark:border-dark-700/60 dark:bg-dark-900/20 sm:p-5">
+      <fieldset class="space-y-4 rounded-xl border border-gray-200 p-4 dark:border-dark-700/60 dark:bg-dark-900/20 sm:p-5" :disabled="guardDisabled">
         <label class="block text-sm text-gray-700 dark:text-dark-200">
           <span>{{ t('admin.promptAudit.policy.workerCount') }}</span>
           <input :value="draft.worker_count" type="number" min="1" max="32" class="input mt-1.5 w-full" :aria-label="t('admin.promptAudit.policy.workerCount')" @input="patch({ worker_count: Number(($event.target as HTMLInputElement).value) })" />
@@ -66,7 +66,7 @@
           <p class="font-medium text-gray-800 dark:text-dark-100">{{ t('admin.promptAudit.policy.strategy') }}</p>
           <p class="mt-1">priority · {{ t('admin.promptAudit.policy.strategyHint') }}</p>
         </div>
-      </div>
+      </fieldset>
     </div>
   </section>
 </template>
@@ -77,7 +77,7 @@ import { useI18n } from 'vue-i18n'
 import type { PromptAuditDraft, PromptAuditGroup } from '../types'
 import { cloneData, SCANNER_CATALOG } from '../viewModel'
 
-const props = defineProps<{ draft: PromptAuditDraft; groups: PromptAuditGroup[] }>()
+const props = defineProps<{ draft: PromptAuditDraft; groups: PromptAuditGroup[]; guardDisabled?: boolean }>()
 const emit = defineEmits<{ (event: 'update:draft', value: PromptAuditDraft): void }>()
 const { t } = useI18n()
 const groupSearch = ref('')

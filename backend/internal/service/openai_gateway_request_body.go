@@ -308,6 +308,7 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 		"tools",
 		"parallel_tool_calls",
 		"reasoning",
+		"service_tier",
 		"text",
 		"previous_response_id",
 	} {
@@ -1266,7 +1267,15 @@ func openAIJSONValueMayContainImageInput(value gjson.Result) bool {
 		if contentType == "input_image" || contentType == "image" || value.Get("image_url").Exists() {
 			return true
 		}
-		return openAIJSONValueMayContainImageInput(value.Get("content"))
+		found := false
+		value.ForEach(func(_, child gjson.Result) bool {
+			if openAIJSONValueMayContainImageInput(child) {
+				found = true
+				return false
+			}
+			return true
+		})
+		return found
 	}
 	return false
 }

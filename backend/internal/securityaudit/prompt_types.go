@@ -26,9 +26,10 @@ const (
 type Mode string
 
 const (
-	ModeOff      Mode = "off"
-	ModeAsync    Mode = "async_audit"
-	ModeBlocking Mode = "blocking"
+	ModeOff         Mode = "off"
+	ModeCaptureOnly Mode = "capture_only"
+	ModeAsync       Mode = "async_audit"
+	ModeBlocking    Mode = "blocking"
 )
 
 type DecisionKind string
@@ -44,9 +45,10 @@ const (
 type EventDecision string
 
 const (
-	EventPass     EventDecision = "pass"
-	EventFlag     EventDecision = "flag"
-	EventCritical EventDecision = "critical"
+	EventPass       EventDecision = "pass"
+	EventFlag       EventDecision = "flag"
+	EventCritical   EventDecision = "critical"
+	EventUnreviewed EventDecision = "unreviewed"
 )
 
 type RiskLevel string
@@ -56,14 +58,16 @@ const (
 	RiskMedium   RiskLevel = "medium"
 	RiskHigh     RiskLevel = "high"
 	RiskCritical RiskLevel = "critical"
+	RiskUnknown  RiskLevel = "unknown"
 )
 
 type Action string
 
 const (
-	ActionAllow Action = "Allow"
-	ActionWarn  Action = "Warn"
-	ActionBlock Action = "Block"
+	ActionAllow  Action = "Allow"
+	ActionWarn   Action = "Warn"
+	ActionBlock  Action = "Block"
+	ActionRecord Action = "Record"
 )
 
 type Request struct {
@@ -107,7 +111,7 @@ type PromptSnapshot struct {
 	Model              string `json:"model"`
 	PromptHash         string `json:"prompt_hash"`
 	RedactedPreview    string `json:"redacted_preview"`
-	FullPrompt         string `json:"full_prompt"`
+	FullPrompt         string `json:"full_prompt,omitempty"`
 	PromptLength       int    `json:"prompt_length"`
 	MessageCount       int    `json:"message_count"`
 	Stage              string `json:"stage"`
@@ -216,6 +220,7 @@ type GuardMetricsSnapshot struct {
 
 type AuditMetricsSnapshot struct {
 	Enqueued int64 `json:"enqueued"`
+	Captured int64 `json:"captured"`
 	Dropped  int64 `json:"dropped"`
 }
 
@@ -244,6 +249,7 @@ type RuntimeSnapshot struct {
 	ProcessedTotal        int64                  `json:"processed_total"`
 	FailedTotal           int64                  `json:"failed_total"`
 	EnqueuedTotal         int64                  `json:"enqueued_total"`
+	CapturedTotal         int64                  `json:"captured_total"`
 	DroppedTotal          int64                  `json:"dropped_total"`
 	LastProcessedAt       *time.Time             `json:"last_processed_at,omitempty"`
 	LastErrorCode         string                 `json:"last_error_code,omitempty"`
@@ -267,6 +273,7 @@ type Metrics interface {
 	AuditSnapshot() AuditMetricsSnapshot
 	Observe(kind DecisionKind, latency time.Duration)
 	IncEnqueued()
+	IncCaptured()
 	IncDropped()
 	IncTimeout()
 	IncFailover()

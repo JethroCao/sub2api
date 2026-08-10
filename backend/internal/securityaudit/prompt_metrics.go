@@ -23,6 +23,7 @@ type AtomicMetrics struct {
 	latencyTotal atomic.Int64
 	latencyMax   atomic.Int64
 	enqueued     atomic.Int64
+	captured     atomic.Int64
 	dropped      atomic.Int64
 	latencyMu    sync.RWMutex
 	latencies    []int64
@@ -60,7 +61,7 @@ func (m *AtomicMetrics) AuditSnapshot() AuditMetricsSnapshot {
 	if m == nil {
 		return AuditMetricsSnapshot{}
 	}
-	return AuditMetricsSnapshot{Enqueued: m.enqueued.Load(), Dropped: m.dropped.Load()}
+	return AuditMetricsSnapshot{Enqueued: m.enqueued.Load(), Captured: m.captured.Load(), Dropped: m.dropped.Load()}
 }
 
 func (m *AtomicMetrics) Observe(kind DecisionKind, latency time.Duration) {
@@ -114,6 +115,12 @@ func percentile(sorted []int64, quantile float64) int64 {
 func (m *AtomicMetrics) IncEnqueued() {
 	if m != nil {
 		m.enqueued.Add(1)
+	}
+}
+
+func (m *AtomicMetrics) IncCaptured() {
+	if m != nil {
+		m.captured.Add(1)
 	}
 }
 

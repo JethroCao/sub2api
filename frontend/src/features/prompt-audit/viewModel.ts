@@ -3,6 +3,7 @@ import type {
   PromptAuditDraft,
   PromptAuditEndpointDraft,
   PromptAuditUpdateRequest,
+  PromptProcessingMode,
   PromptEventFilters,
 } from './types'
 
@@ -30,6 +31,7 @@ export function cloneData<T>(value: T): T {
 export function configToDraft(config: PromptAuditConfig): PromptAuditDraft {
   return {
     ...cloneData(config),
+    capture_only: Boolean(config.capture_only),
     group_ids: [...(config.group_ids ?? [])],
     scanners: [...(config.scanners ?? [])],
     endpoints: (config.endpoints ?? []).map((endpoint) => ({
@@ -37,6 +39,25 @@ export function configToDraft(config: PromptAuditConfig): PromptAuditDraft {
       token: '',
       clear_token: false,
     })),
+  }
+}
+
+export function draftProcessingMode(draft: PromptAuditDraft): PromptProcessingMode {
+  if (!draft.enabled) return 'off'
+  if (draft.capture_only) return 'capture_only'
+  return draft.blocking_enabled ? 'blocking' : 'async_audit'
+}
+
+export function applyProcessingMode(
+  draft: PromptAuditDraft,
+  mode: PromptProcessingMode,
+): PromptAuditDraft {
+  return {
+    ...cloneData(draft),
+    enabled: mode !== 'off',
+    capture_only: mode === 'capture_only',
+    blocking_enabled: mode === 'blocking',
+    store_pass_events: mode === 'capture_only' ? false : draft.store_pass_events,
   }
 }
 
@@ -61,9 +82,10 @@ export function buildUpdateRequest(draft: PromptAuditDraft): PromptAuditUpdateRe
   return {
     expected_config_version: draft.config_version,
     enabled: draft.enabled,
-    blocking_enabled: draft.enabled && draft.blocking_enabled,
+    capture_only: draft.enabled && draft.capture_only,
+    blocking_enabled: draft.enabled && !draft.capture_only && draft.blocking_enabled,
     blocking_latest_turn_only: draft.blocking_latest_turn_only,
-    store_pass_events: draft.store_pass_events,
+    store_pass_events: draft.capture_only ? false : draft.store_pass_events,
     strategy: 'priority',
     worker_count: Number(draft.worker_count),
     queue_capacity: Number(draft.queue_capacity),

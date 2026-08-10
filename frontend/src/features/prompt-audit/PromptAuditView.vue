@@ -46,17 +46,18 @@
                 :endpoints="draft.endpoints"
                 :probe-results="probeResults"
                 :probing-ids="probingIds"
+                :disabled="processingMode === 'capture_only'"
                 @update:endpoints="updateEndpoints"
                 @probe="runProbe"
               />
               <div v-if="loadErrors.groups" role="alert" class="mt-5 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{{ loadErrors.groups }}</div>
-              <PolicyPanel :draft="draft" :groups="groups" @update:draft="replaceDraft" />
+              <PolicyPanel :draft="draft" :groups="groups" :guard-disabled="processingMode === 'capture_only'" @update:draft="replaceDraft" />
             </template>
           </div>
 
           <div v-show="activeTab === 'events'" data-test="tab-panel-events">
             <div
-              v-if="draft?.enabled && !draft.store_pass_events"
+              v-if="draft?.enabled && !draft.capture_only && !draft.store_pass_events"
               data-test="pass-events-disabled-notice"
               role="status"
               class="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-200"
@@ -93,10 +94,14 @@
     <div v-if="draft && activeTab === 'config'" class="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200 bg-white/95 px-4 py-3 shadow-[0_-12px_35px_rgba(15,23,42,0.08)] backdrop-blur dark:border-dark-700/80 dark:bg-dark-900/95 dark:shadow-[0_-12px_35px_rgba(0,0,0,0.35)] lg:left-64">
       <div class="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <SaveToggle :label="t('admin.promptAudit.saveBar.enabled')" :model-value="draft.enabled" data-test="enabled-toggle" @update:model-value="setEnabled" />
-          <SaveToggle :label="t('admin.promptAudit.saveBar.blocking')" :model-value="draft.blocking_enabled" :disabled="!draft.enabled" data-test="blocking-toggle" @update:model-value="setBlocking" />
-          <SaveToggle :label="t('admin.promptAudit.saveBar.blockingLatestTurnOnly')" :model-value="draft.blocking_latest_turn_only" :disabled="!draft.enabled || !draft.blocking_enabled" data-test="blocking-latest-turn-only-toggle" @update:model-value="replaceDraft({ ...draft!, blocking_latest_turn_only: $event })" />
-          <SaveToggle :label="t('admin.promptAudit.saveBar.storePass')" :model-value="draft.store_pass_events" data-test="store-pass-toggle" @update:model-value="replaceDraft({ ...draft!, store_pass_events: $event })" />
+          <label class="flex items-center gap-2.5 text-sm text-gray-700 dark:text-dark-200">
+            <span>{{ t('admin.promptAudit.saveBar.processingMode') }}</span>
+            <select data-test="processing-mode" class="input py-1.5" :value="processingMode" :aria-label="t('admin.promptAudit.saveBar.processingMode')" @change="setProcessingMode(($event.target as HTMLSelectElement).value as PromptProcessingMode)">
+              <option v-for="mode in processingModes" :key="mode" :value="mode">{{ t(`admin.promptAudit.mode.${mode}`) }}</option>
+            </select>
+          </label>
+          <SaveToggle :label="t('admin.promptAudit.saveBar.blockingLatestTurnOnly')" :model-value="draft.blocking_latest_turn_only" :disabled="processingMode !== 'blocking'" data-test="blocking-latest-turn-only-toggle" @update:model-value="replaceDraft({ ...draft!, blocking_latest_turn_only: $event })" />
+          <SaveToggle :label="t('admin.promptAudit.saveBar.storePass')" :model-value="draft.store_pass_events" :disabled="processingMode === 'capture_only' || processingMode === 'off'" data-test="store-pass-toggle" @update:model-value="replaceDraft({ ...draft!, store_pass_events: $event })" />
         </div>
         <div class="flex items-center gap-3">
           <span class="text-sm" :class="dirty ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500 dark:text-dark-400'">
@@ -168,8 +173,9 @@ import type {
   PromptEventPage,
   PromptLoadErrors,
   PromptProbeResult,
+  PromptProcessingMode,
 } from './types'
-import { buildUpdateRequest, cloneData, configToDraft, draftFingerprint, emptyEventFilters } from './viewModel'
+import { applyProcessingMode, buildUpdateRequest, cloneData, configToDraft, draftFingerprint, draftProcessingMode, emptyEventFilters } from './viewModel'
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -199,6 +205,8 @@ const deleteRequest = reactive<{ mode: '' | 'single' | 'batch'; ids: number[] }>
 const loading = reactive({ config: false, runtime: false, groups: false, events: false, saving: false, detail: false, deleting: false, previewing: false })
 const loadErrors = reactive<PromptLoadErrors>({ config: '', runtime: '', groups: '', events: '' })
 const dirty = computed(() => draftFingerprint(draft.value) !== draftFingerprint(serverConfig.value))
+const processingModes: PromptProcessingMode[] = ['off', 'capture_only', 'async_audit', 'blocking']
+const processingMode = computed(() => draft.value ? draftProcessingMode(draft.value) : 'off')
 
 const SaveToggle = defineComponent({
   inheritAttrs: false,
@@ -294,18 +302,17 @@ function updateEndpoints(value: PromptAuditEndpointDraft[]) {
   if (!draft.value) return
   replaceDraft({ ...draft.value, endpoints: value })
 }
-function setEnabled(value: boolean) {
+function setProcessingMode(value: PromptProcessingMode) {
   if (!draft.value) return
-  replaceDraft({ ...draft.value, enabled: value, blocking_enabled: value ? draft.value.blocking_enabled : false })
-}
-function setBlocking(value: boolean) {
-  if (!draft.value || !draft.value.enabled) return
-  if (value && !draft.value.blocking_enabled) { showBlockingConfirmation.value = true; return }
-  replaceDraft({ ...draft.value, blocking_enabled: value })
+  if (value === 'blocking' && processingMode.value !== 'blocking') {
+    showBlockingConfirmation.value = true
+    return
+  }
+  replaceDraft(applyProcessingMode(draft.value, value))
 }
 function confirmBlocking() {
   showBlockingConfirmation.value = false
-  if (draft.value) replaceDraft({ ...draft.value, blocking_enabled: true })
+  if (draft.value) replaceDraft(applyProcessingMode(draft.value, 'blocking'))
 }
 function resetDraft() {
   if (serverConfig.value) draft.value = cloneData(serverConfig.value)
@@ -327,6 +334,7 @@ async function saveConfig() {
   }
 }
 async function runProbe(endpoint: PromptAuditEndpointDraft) {
+  if (processingMode.value === 'capture_only') return
   if (probingIds.value.includes(endpoint.id)) return
   probingIds.value = [...probingIds.value, endpoint.id]
   try {

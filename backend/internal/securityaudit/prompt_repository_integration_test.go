@@ -43,7 +43,7 @@ func openPromptAuditIntegrationDB(t *testing.T) *sql.DB {
 		);
 	`)
 	require.NoError(t, err)
-	for _, name := range []string{"181_prompt_audit.sql", "182_prompt_audit_full_prompt.sql"} {
+	for _, name := range []string{"181_prompt_audit.sql", "182_prompt_audit_full_prompt.sql", "194_prompt_capture_only.sql"} {
 		migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		require.NoError(t, err)
 		// The migration runner can retry an interrupted deployment; the migration
@@ -56,6 +56,51 @@ func openPromptAuditIntegrationDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	resetPromptAuditIntegrationDB(t, db)
 	return db
+}
+
+func TestPromptAuditRecordCapturePersistsUnreviewedEventTransactionally(t *testing.T) {
+	db := openPromptAuditIntegrationDB(t)
+	repo := NewPostgreSQLRepository(db)
+	ctx := context.Background()
+	const promptCanary = "CAPTURE_ONLY_PROMPT_CANARY"
+	snapshot, err := ExtractPromptSnapshot(Request{
+		RequestID: "capture-only-request", Provider: "openai", Endpoint: "/v1/responses",
+		Protocol: "openai_responses", Model: "gpt-test", Stage: "http",
+		Body: []byte(`{"input":"` + promptCanary + `"}`),
+	})
+	require.NoError(t, err)
+
+	event, err := repo.RecordCapture(ctx, snapshot, 7)
+	require.NoError(t, err)
+	require.Equal(t, EventUnreviewed, event.Decision)
+	require.Equal(t, RiskUnknown, event.RiskLevel)
+	require.Equal(t, ActionRecord, event.Action)
+	require.Equal(t, "capture-only", event.ScannerBackend)
+	require.Equal(t, "capture-only", event.PolicyID)
+	require.Contains(t, event.Snapshot.FullPrompt, promptCanary)
+
+	var mode, status, jobJSON string
+	require.NoError(t, db.QueryRow(`SELECT execution_mode,status,row_to_json(j)::text FROM prompt_audit_jobs j WHERE id=$1`, event.JobID).Scan(&mode, &status, &jobJSON))
+	require.Equal(t, string(ModeCaptureOnly), mode)
+	require.Equal(t, "done", status)
+	require.NotContains(t, jobJSON, promptCanary)
+
+	var eventCount int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM prompt_audit_events WHERE job_id=$1`, event.JobID).Scan(&eventCount))
+	require.Equal(t, 1, eventCount)
+
+	page, err := repo.ListEvents(ctx, EventFilter{Decision: "unreviewed", RiskLevel: "unknown"}, 1, 20)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Empty(t, page.Items[0].Snapshot.FullPrompt)
+	detail, err := repo.GetEvent(ctx, event.ID)
+	require.NoError(t, err)
+	require.Contains(t, detail.Snapshot.FullPrompt, promptCanary)
+	require.Empty(t, detail.IssueSummaries)
+	deleted, err := repo.DeleteEvent(ctx, event.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted.DeletedEvents)
+	require.Equal(t, int64(1), deleted.DeletedJobs)
 }
 
 func resetPromptAuditIntegrationDB(t *testing.T, db *sql.DB) {

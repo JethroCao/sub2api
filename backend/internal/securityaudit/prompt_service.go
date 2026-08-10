@@ -108,7 +108,8 @@ func (s *PromptService) EffectiveMode() Mode {
 }
 
 func (s *PromptService) Enqueue(_ context.Context, req Request) error {
-	if s == nil || s.enqueuer == nil || s.EffectiveMode() != ModeAsync {
+	mode := s.EffectiveMode()
+	if s == nil || s.enqueuer == nil || (mode != ModeCaptureOnly && mode != ModeAsync) {
 		return nil
 	}
 	select {
@@ -197,7 +198,7 @@ func (s *PromptService) Runtime(ctx context.Context) RuntimeSnapshot {
 	} else {
 		runtime.DatabaseStatus = "error"
 	}
-	if s.payload == nil || s.payload.Ping(ctx) != nil {
+	if mode != ModeCaptureOnly && (s.payload == nil || s.payload.Ping(ctx) != nil) {
 		runtime.RedisStatus = "error"
 		if runtime.LastErrorCode == "" {
 			runtime.LastErrorCode = "payload_store_unavailable"
@@ -207,7 +208,7 @@ func (s *PromptService) Runtime(ctx context.Context) RuntimeSnapshot {
 	runtime.WorkerActive, runtime.ProcessedTotal, runtime.FailedTotal = activeWorkers, processed, failed
 	if s.metrics != nil {
 		auditMetrics := s.metrics.AuditSnapshot()
-		runtime.EnqueuedTotal, runtime.DroppedTotal = auditMetrics.Enqueued, auditMetrics.Dropped
+		runtime.EnqueuedTotal, runtime.CapturedTotal, runtime.DroppedTotal = auditMetrics.Enqueued, auditMetrics.Captured, auditMetrics.Dropped
 	}
 	runtime.WorkerHeartbeatAt, runtime.LastProcessedAt = heartbeat, lastProcessed
 	if workerCode != "" {
@@ -218,7 +219,7 @@ func (s *PromptService) Runtime(ctx context.Context) RuntimeSnapshot {
 		if loadError != "" || runtime.DatabaseStatus != "ok" || runtime.RedisStatus != "ok" || activeVersion != expected {
 			runtime.ProcessStatus = "degraded"
 		}
-		if heartbeat == nil || s.clock.Now().Sub(*heartbeat) > 10*time.Second {
+		if mode != ModeCaptureOnly && (heartbeat == nil || s.clock.Now().Sub(*heartbeat) > 10*time.Second) {
 			runtime.ProcessStatus = "degraded"
 		}
 	}

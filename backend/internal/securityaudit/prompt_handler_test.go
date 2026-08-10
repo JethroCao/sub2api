@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -233,6 +234,64 @@ func validHandlerUpdateRequest(token string) UpdateConfigRequest {
 			TimeoutMS: 1000, InputLimit: 1024, Enabled: true,
 		}},
 	}
+}
+
+func TestPromptAdminConfigAuditFieldsIncludeCaptureModeWithoutSecrets(t *testing.T) {
+	request := validHandlerUpdateRequest("prompt-admin-token-canary")
+	request.CaptureOnly = true
+	fields := configAuditFields(request, &PublicConfig{ConfigVersion: 8})
+	require.Equal(t, true, fields["capture_only"])
+	require.Equal(t, int64(8), fields["config_version"])
+	require.NotContains(t, fmt.Sprint(fields), "prompt-admin-token-canary")
+}
+
+func TestPromptAdminCaptureOnlyEventListOmitsFullPromptAndDetailReturnsIt(t *testing.T) {
+	const promptCanary = "CAPTURE_ONLY_DETAIL_CANARY"
+	event := &Event{
+		ID: 71, JobID: 70,
+		Snapshot: PromptSnapshot{RequestID: "capture-request", FullPrompt: promptCanary},
+		Decision: EventUnreviewed, RiskLevel: RiskUnknown, Action: ActionRecord,
+		ScannerBackend: "capture-only", PolicyID: "capture-only", IssueSummaries: []IssueSummary{},
+	}
+	service := &fakePromptAdminService{
+		list: func(_ context.Context, filter EventFilter, page, pageSize int) (*EventPage, error) {
+			require.Equal(t, string(EventUnreviewed), filter.Decision)
+			require.Equal(t, string(RiskUnknown), filter.RiskLevel)
+			return &EventPage{Items: []*Event{event}, Total: 1, Page: page, PageSize: pageSize, Pages: 1}, nil
+		},
+		get: func(_ context.Context, id int64) (*Event, error) {
+			require.Equal(t, int64(71), id)
+			return event, nil
+		},
+	}
+	router := promptAdminRouter(service)
+
+	list := promptAdminRequest(t, router, http.MethodGet, "/admin/prompt-audit/events?decision=unreviewed&risk_level=unknown", nil)
+	require.Equal(t, http.StatusOK, list.Code)
+	require.Contains(t, list.Body.String(), `"decision":"unreviewed"`)
+	require.Contains(t, list.Body.String(), `"risk_level":"unknown"`)
+	require.Contains(t, list.Body.String(), `"action":"Record"`)
+	require.NotContains(t, list.Body.String(), "full_prompt")
+	require.NotContains(t, list.Body.String(), promptCanary)
+
+	detail := promptAdminRequest(t, router, http.MethodGet, "/admin/prompt-audit/events/71", nil)
+	require.Equal(t, http.StatusOK, detail.Code)
+	require.Contains(t, detail.Body.String(), `"full_prompt":"`+promptCanary+`"`)
+	require.Contains(t, detail.Body.String(), `"scanner_backend":"capture-only"`)
+	require.Contains(t, detail.Body.String(), `"issue_summaries":[]`)
+}
+
+func TestPromptAdminCaptureOnlyConfigAndRuntimeContract(t *testing.T) {
+	service := &fakePromptAdminService{
+		config:  PublicConfig{Enabled: true, CaptureOnly: true, EffectiveMode: ModeCaptureOnly, ConfigVersion: 3},
+		runtime: RuntimeSnapshot{ProcessStatus: "running", EffectiveMode: ModeCaptureOnly, CapturedTotal: 12},
+	}
+	router := promptAdminRouter(service)
+	config := promptAdminRequest(t, router, http.MethodGet, "/admin/prompt-audit/config", nil)
+	require.Contains(t, config.Body.String(), `"capture_only":true`)
+	require.Contains(t, config.Body.String(), `"effective_mode":"capture_only"`)
+	runtime := promptAdminRequest(t, router, http.MethodGet, "/admin/prompt-audit/runtime", nil)
+	require.Contains(t, runtime.Body.String(), `"captured_total":12`)
 }
 
 func TestPromptAdminDeleteConfirmationErrorsStayGeneric(t *testing.T) {
