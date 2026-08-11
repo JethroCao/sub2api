@@ -35,7 +35,7 @@ func TestAPIKeyAuthSnapshotVideoPermissionRoundtrip(t *testing.T) {
 	svc := &APIKeyService{}
 
 	snapshot := svc.snapshotFromAPIKey(context.Background(), apiKey)
-	require.Equal(t, 19, snapshot.Version, "v19 refreshes snapshots with the video permission")
+	require.Equal(t, 20, snapshot.Version, "v20 refreshes snapshots with video permission and Grok billing fields")
 	require.True(t, snapshot.Group.AllowVideoGeneration)
 
 	payload, err := json.Marshal(&APIKeyAuthCacheEntry{Snapshot: snapshot})

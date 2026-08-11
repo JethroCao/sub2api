@@ -120,7 +120,7 @@ func TestGrokVideoProviderSubmitPreservesCurrentWireContract(t *testing.T) {
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, "/v1/videos/generations", upstream.requests[0].URL.Path)
 	require.Equal(t, "Bearer api-key", upstream.requests[0].Header.Get("Authorization"))
-	require.JSONEq(t, `{"model":"grok-imagine-video","prompt":"waves","resolution":"720p","duration":10}`, string(upstream.bodies[0]))
+	require.JSONEq(t, `{"model":"grok-imagine-video-1.5","prompt":"waves","resolution":"720p","duration":10}`, string(upstream.bodies[0]))
 }
 
 func TestGrokVideoProviderSubmitPreservesImageAliasesAndMutationEndpoints(t *testing.T) {
@@ -201,7 +201,7 @@ func TestGrokVideoProviderUsesOAuthCustomBaseURLAndProxy(t *testing.T) {
 func TestGrokVideoProviderSubmitAppliesAccountMappingAfterBuiltinNormalization(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	account := grokAPIKeyAccount()
-	account.Credentials["model_mapping"] = map[string]any{"grok-imagine-video": "vendor-video"}
+	account.Credentials["model_mapping"] = map[string]any{"grok-imagine-video-1.5": "vendor-video"}
 	upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
 	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 

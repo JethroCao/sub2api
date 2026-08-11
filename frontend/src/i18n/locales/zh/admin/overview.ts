@@ -149,6 +149,7 @@ export default {
         status: '状态',
         fileName: '文件名',
         size: '大小',
+        parts: '分卷数',
         expiresAt: '过期时间',
         triggeredBy: '触发方式',
         startedAt: '开始时间',
@@ -173,6 +174,10 @@ export default {
       empty: '暂无备份记录',
       actions: {
         download: '下载',
+        downloadParts: '下载分卷',
+        downloadPartsHint: '请按顺序下载全部分卷后拼接 gzip 字节流：Linux/macOS 使用 cat payload.part-* > backup.sql.gz；Windows 使用 copy /b payload.part-000001+payload.part-000002 backup.sql.gz。',
+        partLabel: '第 {index} 卷',
+        downloadFailed: '下载地址为空',
         restore: '恢复',
         restoreConfirm: '确定要从此备份恢复吗？这将覆盖当前数据库！',
         restorePasswordPrompt: '请输入管理员密码以确认恢复操作',
@@ -988,6 +993,8 @@ export default {
         title: '视频生成计费',
         description:
           '配置 Grok 视频生成的每秒单价（USD/秒），留空则使用默认每秒价（grok-imagine-video：480p $0.05/s、720p $0.07/s；video-1.5：480p $0.08/s、720p $0.14/s、1080p $0.25/s）',
+        modelOverridesTitle: '按模型覆盖视频价格',
+        modelOverridesDescription: '已填写的单元格会覆盖该模型族的平面分辨率价格。video-1.5 的 preview 与 legacy 别名共用同一模型族；留空则回退到平面分辨率价格。',
         independentMultiplier: '视频倍率独立',
         videoMultiplier: '视频独立倍率',
         modeHint:
@@ -1048,6 +1055,20 @@ export default {
           loadFailed: '无法加载视频定价或权威账号能力。',
           generic: '无法保存视频定价，请检查规则后重试。'
         }
+      },
+      explicitPricing: {
+        title: 'Grok 搜索与 Voice 定价',
+        description: '分组级 web_search（每千次）与 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
+        searchPricePer1k: '搜索每千次价格（USD）',
+        pricePlaceholder: '可选'
+      },
+      voicePricing: {
+        title: 'Grok Voice 定价',
+        description: '分组级 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
+        audioRealtimePerMin: 'Realtime 每分钟价格（USD）',
+        audioTtsPerMillionChars: 'TTS 每百万字符价格（USD）',
+        audioSttPerHour: 'STT 每小时价格（USD）',
+        pricePlaceholder: '可选'
       },
       webSearchPricing: {
         title: 'Codex 网页搜索计费',
