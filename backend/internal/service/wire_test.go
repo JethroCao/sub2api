@@ -65,6 +65,46 @@ func TestProductionVideoRegistryCapabilityChainEnablesOnlyDeclaredModels(t *test
 	}), ErrVideoUnsupportedCapability)
 }
 
+func TestProductionVideoRegistryCapabilityChainEnablesOfficialSeedance25GenerationSubset(t *testing.T) {
+	registry, err := ProvideDurableVideoProviderRegistry(nil, nil)
+	require.NoError(t, err)
+	validator := ProvideVideoCapabilityValidator(ProvideVideoCapabilityCatalog(registry))
+	generatedAudio := true
+
+	accepted := []CanonicalVideoRequest{
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves"},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves", DurationSeconds: 4, Resolution: "480p", AspectRatio: "21:9"},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves", DurationSeconds: 30, Resolution: "720p", AspectRatio: "adaptive"},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", FirstFrame: []VideoAsset{{URL: "https://example.com/first.png"}}},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", FirstFrame: []VideoAsset{{URL: "https://example.com/first.png"}}, LastFrame: []VideoAsset{{URL: "https://example.com/last.png"}}},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", ReferenceImages: []VideoAsset{{URL: "https://example.com/reference.png"}}},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", ReferenceVideos: []VideoAsset{{URL: "https://example.com/reference.mp4"}}},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves", Audio: &generatedAudio},
+	}
+	for _, ratio := range []string{"16:9", "4:3", "1:1", "3:4", "9:16"} {
+		accepted = append(accepted, CanonicalVideoRequest{
+			Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves", AspectRatio: ratio,
+		})
+	}
+	for _, request := range accepted {
+		require.NoError(t, validator.Validate(VideoProviderSeedance, request), "request should match the verified Seedance 2.5 generation contract: %#v", request)
+	}
+
+	rejected := []CanonicalVideoRequest{
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", LastFrame: []VideoAsset{{URL: "https://example.com/last.png"}}},
+		{Operation: VideoOperationEdit, Model: "seedance-2.5", ReferenceVideos: []VideoAsset{{URL: "https://example.com/source.mp4"}}},
+		{Operation: VideoOperationExtension, Model: "seedance-2.5", ReferenceVideos: []VideoAsset{{URL: "https://example.com/source.mp4"}}},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves", DurationSeconds: 3},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves", DurationSeconds: 31},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves", Resolution: "1080p"},
+		{Operation: VideoOperationGeneration, Model: "seedance-2.5", Prompt: "waves", AspectRatio: "2:1"},
+		{Operation: VideoOperationGeneration, Model: "seedance-unknown", Prompt: "waves"},
+	}
+	for _, request := range rejected {
+		require.ErrorIs(t, validator.Validate(VideoProviderSeedance, request), ErrVideoUnsupportedCapability, "request must remain fail-closed: %#v", request)
+	}
+}
+
 func providerSetRegisters(t *testing.T, providerName string) bool {
 	t.Helper()
 	_, testFile, _, ok := runtime.Caller(0)

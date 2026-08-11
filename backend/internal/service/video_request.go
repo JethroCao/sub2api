@@ -143,7 +143,7 @@ func normalizeVideoJSONRequest(body []byte, request *CanonicalVideoRequest) erro
 	request.Model = strings.TrimSpace(request.Model)
 	request.Prompt = strings.TrimSpace(request.Prompt)
 	request.Resolution = strings.ToLower(strings.TrimSpace(request.Resolution))
-	request.AspectRatio = strings.TrimSpace(request.AspectRatio)
+	request.AspectRatio = strings.ToLower(strings.TrimSpace(request.AspectRatio))
 
 	if raw, exists := fields["duration"]; exists {
 		if err := json.Unmarshal(raw, &request.DurationSeconds); err != nil || request.DurationSeconds <= 0 {
@@ -286,7 +286,7 @@ func addVideoMultipartField(request *CanonicalVideoRequest, state *videoMultipar
 	case name == "resolution":
 		request.Resolution = strings.ToLower(value)
 	case name == "aspect_ratio":
-		request.AspectRatio = value
+		request.AspectRatio = strings.ToLower(value)
 	case name == "audio":
 		audio, err := strconv.ParseBool(value)
 		if err != nil {
@@ -580,7 +580,7 @@ func validateCanonicalVideoRequest(request *CanonicalVideoRequest) error {
 	if request.Resolution != "" && !videoResolutionPattern.MatchString(request.Resolution) {
 		return ErrVideoInvalidRequest
 	}
-	if request.AspectRatio != "" && !videoAspectRatioPattern.MatchString(request.AspectRatio) {
+	if request.AspectRatio != "" && request.AspectRatio != "adaptive" && !videoAspectRatioPattern.MatchString(request.AspectRatio) {
 		return ErrVideoInvalidRequest
 	}
 	if request.assetCount() > MaxVideoRequestAssets {

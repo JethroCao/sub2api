@@ -49,6 +49,14 @@ func TestNormalizeVideoRequestPreservesCurrentJSONImageForms(t *testing.T) {
 	require.JSONEq(t, `{"seed":42}`, string(req.ProviderOptions[VideoProviderSeedance]))
 }
 
+func TestNormalizeVideoRequestAcceptsAdaptiveAspectRatioForModelCapabilityValidation(t *testing.T) {
+	req, err := NormalizeVideoRequest(VideoOperationGeneration, "application/json", []byte(
+		`{"model":"seedance-2.5","prompt":"animate","aspect_ratio":"adaptive"}`,
+	))
+	require.NoError(t, err)
+	require.Equal(t, "adaptive", req.AspectRatio)
+}
+
 func TestNormalizeVideoRequestPreservesGrokMultipartAliases(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)

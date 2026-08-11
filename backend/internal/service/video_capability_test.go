@@ -141,6 +141,24 @@ func TestValidateVideoCapabilityChecksDerivedMediaAndOutputRequirements(t *testi
 	}
 }
 
+func TestValidateVideoCapabilityRequiresExplicitAdaptiveAspectRatioSupport(t *testing.T) {
+	request := CanonicalVideoRequest{
+		Operation:   VideoOperationGeneration,
+		Model:       "model",
+		Prompt:      "animate",
+		AspectRatio: "adaptive",
+	}
+	unconstrained := VideoCapabilityCatalog{"provider": {
+		VideoOperationGeneration: {Text: true},
+	}}
+	require.ErrorIs(t, unconstrained.Validate("provider", request), ErrVideoUnsupportedCapability)
+
+	explicit := VideoCapabilityCatalog{"provider": {
+		VideoOperationGeneration: {Text: true, AspectRatios: []string{"adaptive"}},
+	}}
+	require.NoError(t, explicit.Validate("provider", request))
+}
+
 func TestValidateVideoCapabilityRequiresTextOnlyForTextOnlyGeneration(t *testing.T) {
 	catalog := VideoCapabilityCatalog{VideoProviderSeedance: {
 		VideoOperationGeneration: {FirstFrame: true},

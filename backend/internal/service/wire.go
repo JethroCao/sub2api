@@ -134,6 +134,15 @@ func ProvideVideoCapabilityCatalog(registry *VideoProviderRegistry) VideoCapabil
 				ReferenceImages: true, ReferenceVideos: true, Audio: true,
 			},
 		}
+		catalog[VideoModelCapabilityKey(VideoProviderSeedance, "seedance-2.5")] = VideoProviderCapabilities{
+			VideoOperationGeneration: {
+				Text: true, FirstFrame: true, FirstAndLastFrame: true,
+				ReferenceImages: true, ReferenceVideos: true, Audio: true,
+				MinDurationSeconds: 4, MaxDurationSeconds: 30,
+				Resolutions:  []string{"480p", "720p"},
+				AspectRatios: []string{"21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "adaptive"},
+			},
+		}
 	}
 	return catalog
 }

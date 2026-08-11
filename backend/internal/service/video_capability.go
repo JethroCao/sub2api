@@ -102,8 +102,11 @@ func (catalog VideoCapabilityCatalog) Validate(provider string, request Canonica
 	if request.Resolution != "" && len(capability.Resolutions) > 0 && !containsVideoCapabilityValue(capability.Resolutions, request.Resolution) {
 		return ErrVideoUnsupportedCapability
 	}
-	if request.AspectRatio != "" && len(capability.AspectRatios) > 0 && !containsVideoCapabilityValue(capability.AspectRatios, request.AspectRatio) {
-		return ErrVideoUnsupportedCapability
+	if request.AspectRatio != "" {
+		adaptive := strings.EqualFold(strings.TrimSpace(request.AspectRatio), "adaptive")
+		if (adaptive || len(capability.AspectRatios) > 0) && !containsVideoCapabilityValue(capability.AspectRatios, request.AspectRatio) {
+			return ErrVideoUnsupportedCapability
+		}
 	}
 	return nil
 }
