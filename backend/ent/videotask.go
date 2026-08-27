@@ -4,6 +4,7 @@ package ent
 
 import (
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ type VideoTask struct {
 	// ProviderSubmissionToken holds the value of the "provider_submission_token" field.
 	ProviderSubmissionToken *string `json:"provider_submission_token,omitempty"`
 	// RequestPayload holds the value of the "request_payload" field.
-	RequestPayload json.RawMessage `json:"request_payload,omitempty"`
+	RequestPayload jsontext.Value `json:"request_payload,omitempty"`
 	// Status holds the value of the "status" field.
 	Status videotask.Status `json:"status,omitempty"`
 	// UpstreamTaskID holds the value of the "upstream_task_id" field.

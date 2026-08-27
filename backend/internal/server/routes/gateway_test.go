@@ -68,7 +68,7 @@ func (s gatewayRoutesVideoStub) Status(c *gin.Context)   { s.lookup(c) }
 func (s gatewayRoutesVideoStub) Content(c *gin.Context)  { s.lookup(c) }
 
 func (s gatewayRoutesVideoStub) submit(c *gin.Context) {
-	if s.platform == service.PlatformGrok {
+	if s.platform == service.PlatformGrok || s.platform == service.PlatformComposite {
 		c.Status(http.StatusAccepted)
 		return
 	}
@@ -177,7 +177,7 @@ func TestGatewayRoutesOpenAIAlphaSearchPathsAreRegistered(t *testing.T) {
 	}
 }
 
-func TestGatewayRoutesAlphaSearchRejectsNonOpenAIGroup(t *testing.T) {
+func TestGatewayRoutesAlphaSearchRejectsUnsupportedGroup(t *testing.T) {
 	router := newGatewayRoutesTestRouter(service.PlatformGrok)
 	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5.6-sol"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -186,7 +186,7 @@ func TestGatewayRoutesAlphaSearchRejectsNonOpenAIGroup(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusNotFound, w.Code)
-	require.Contains(t, w.Body.String(), "only available for OpenAI groups")
+	require.Contains(t, w.Body.String(), "only available for OpenAI and Composite groups")
 }
 
 func TestGatewayRoutesOpenAIImagesPathsAreRegistered(t *testing.T) {
@@ -426,6 +426,18 @@ func TestGatewayRoutesNonGrokVideosAreRejectedAtPlatformGate(t *testing.T) {
 		require.Equal(t, http.StatusNotFound, w.Code, "method=%s path=%s", tc.method, tc.path)
 		require.Contains(t, w.Body.String(), "Videos API is not supported for this platform")
 	}
+}
+
+func TestGatewayRoutesCompositeVideoGenerationAllowed(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{"model":"grok-imagine-video-1.5","prompt":"waves"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	require.NotEqual(t, http.StatusNotFound, w.Code)
+	require.NotContains(t, w.Body.String(), "not supported")
 }
 
 func TestGatewayRoutesCompositeOpenAIOnlyEndpointsRequireOpenAITarget(t *testing.T) {

@@ -4,7 +4,7 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 
@@ -58,13 +58,13 @@ func (_u *VideoTaskEventUpdate) SetNillableEventType(v *string) *VideoTaskEventU
 }
 
 // SetPayload sets the "payload" field.
-func (_u *VideoTaskEventUpdate) SetPayload(v json.RawMessage) *VideoTaskEventUpdate {
+func (_u *VideoTaskEventUpdate) SetPayload(v jsontext.Value) *VideoTaskEventUpdate {
 	_u.mutation.SetPayload(v)
 	return _u
 }
 
 // AppendPayload appends value to the "payload" field.
-func (_u *VideoTaskEventUpdate) AppendPayload(v json.RawMessage) *VideoTaskEventUpdate {
+func (_u *VideoTaskEventUpdate) AppendPayload(v jsontext.Value) *VideoTaskEventUpdate {
 	_u.mutation.AppendPayload(v)
 	return _u
 }
@@ -200,13 +200,13 @@ func (_u *VideoTaskEventUpdateOne) SetNillableEventType(v *string) *VideoTaskEve
 }
 
 // SetPayload sets the "payload" field.
-func (_u *VideoTaskEventUpdateOne) SetPayload(v json.RawMessage) *VideoTaskEventUpdateOne {
+func (_u *VideoTaskEventUpdateOne) SetPayload(v jsontext.Value) *VideoTaskEventUpdateOne {
 	_u.mutation.SetPayload(v)
 	return _u
 }
 
 // AppendPayload appends value to the "payload" field.
-func (_u *VideoTaskEventUpdateOne) AppendPayload(v json.RawMessage) *VideoTaskEventUpdateOne {
+func (_u *VideoTaskEventUpdateOne) AppendPayload(v jsontext.Value) *VideoTaskEventUpdateOne {
 	_u.mutation.AppendPayload(v)
 	return _u
 }

@@ -16,7 +16,7 @@ import (
 // These tests protect the Grok adapter's externally observable transport
 // contract. They fail if a future change alters routing, auth, request bytes,
 // upstream status mapping, or content download behavior.
-type recordingHTTPUpstream struct {
+type recordingGrokVideoHTTPUpstream struct {
 	requests  []*http.Request
 	bodies    [][]byte
 	proxyURL  string
@@ -34,7 +34,7 @@ func (b *grokVideoCloseTrackingBody) Close() error {
 	return nil
 }
 
-func (u *recordingHTTPUpstream) Do(req *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
+func (u *recordingGrokVideoHTTPUpstream) Do(req *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
 	u.requests = append(u.requests, req)
 	u.proxyURL = proxyURL
 	if req != nil && req.Body != nil {
@@ -56,7 +56,7 @@ func (u *recordingHTTPUpstream) Do(req *http.Request, proxyURL string, _ int64, 
 	return response, nil
 }
 
-func (u *recordingHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+func (u *recordingGrokVideoHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
 	return u.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
@@ -103,7 +103,7 @@ func grokAPIKeyAccount() *Account {
 
 func TestGrokVideoProviderSubmitPreservesCurrentWireContract(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
 	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 
 	got, err := provider.Submit(context.Background(), grokAPIKeyAccount(), CanonicalVideoRequest{
@@ -162,7 +162,7 @@ func TestGrokVideoProviderSubmitPreservesImageAliasesAndMutationEndpoints(t *tes
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
+			upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
 			provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 
 			_, err := provider.Submit(context.Background(), grokAPIKeyAccount(), tt.request, "submit-token")
@@ -184,7 +184,7 @@ func TestGrokVideoProviderUsesOAuthCustomBaseURLAndProxy(t *testing.T) {
 			"access_token": "stored-oauth-token", "base_url": "https://relay.example/v1",
 		},
 	}
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
 	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("oauth-token"))
 
 	_, err := provider.Submit(context.Background(), account, CanonicalVideoRequest{
@@ -202,7 +202,7 @@ func TestGrokVideoProviderSubmitAppliesAccountMappingAfterBuiltinNormalization(t
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	account := grokAPIKeyAccount()
 	account.Credentials["model_mapping"] = map[string]any{"grok-imagine-video-1.5": "vendor-video"}
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, `{"request_id":"up_123"}`)}}
 	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 
 	_, err := provider.Submit(context.Background(), account, CanonicalVideoRequest{
@@ -229,7 +229,7 @@ func TestGrokVideoProviderPollMapsUpstreamStatus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, tt.body)}}
+			upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, tt.body)}}
 			provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 
 			taskID := "up_123"
@@ -268,7 +268,7 @@ func TestGrokVideoProviderPollPersistsOnlyStrictPublicVidgenURL(t *testing.T) {
 		{name: "unsupported root public origin", account: grokAPIKeyAccount(), body: `{"status":"completed","url":"https://attacker.example/video.mp4"}`, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, tt.body)}}
+			upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusOK, tt.body)}}
 			provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 			upstreamID := "up_123"
 
@@ -288,7 +288,7 @@ func TestGrokVideoProviderPollPersistsOnlyStrictPublicVidgenURL(t *testing.T) {
 func TestGrokVideoProviderPollRejectsRedirectStatusResponse(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	body := &grokVideoCloseTrackingBody{Reader: strings.NewReader(`{"status":"completed"}`)}
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{{
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{{
 		StatusCode: http.StatusFound,
 		Header:     http.Header{"Location": []string{"https://unexpected.example/videos/up_123"}},
 		Body:       body,
@@ -308,7 +308,7 @@ func TestGrokVideoProviderPollRejectsRedirectStatusResponse(t *testing.T) {
 
 func TestGrokVideoProviderClassifiesFailoverAndDoesNotRecoverAmbiguousSubmission(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusTooManyRequests, `{"error":{"message":"limited"}}`)}}
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{grokVideoTestResponse(http.StatusTooManyRequests, `{"error":{"message":"limited"}}`)}}
 	provider := NewGrokVideoProvider(upstream, fakeGrokTokenProvider("token"))
 
 	_, err := provider.Submit(context.Background(), grokAPIKeyAccount(), CanonicalVideoRequest{
@@ -328,7 +328,7 @@ func TestGrokVideoProviderClassifiesFailoverAndDoesNotRecoverAmbiguousSubmission
 
 func TestGrokVideoProviderOpenContentPreservesRangeAndTemporaryVidgenURL(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{
 		grokVideoTestResponse(http.StatusOK, `{"status":"completed","video":{"url":"https://vidgen.x.ai/signed-token/xai-video-task.mp4"}}`),
 		{
 			StatusCode: http.StatusPartialContent,
@@ -369,7 +369,7 @@ func TestGrokVideoProviderOpenContentPreservesRangeAndTemporaryVidgenURL(t *test
 
 func TestGrokVideoProviderOpenContentWithStatusPreservesRequestedRangeNotSatisfiable(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{
 		grokVideoTestResponse(http.StatusOK, `{"status":"completed"}`),
 		{
 			StatusCode: http.StatusRequestedRangeNotSatisfiable,
@@ -395,7 +395,7 @@ func TestGrokVideoProviderOpenContentWithStatusPreservesRequestedRangeNotSatisfi
 func TestGrokVideoProviderOpenContentRejectsRedirectContentResponse(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	redirectBody := &grokVideoCloseTrackingBody{Reader: strings.NewReader("redirect")}
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{
 		grokVideoTestResponse(http.StatusOK, `{"status":"completed","video":{"url":"https://vidgen.x.ai/signed-token/xai-video-task.mp4"}}`),
 		{
 			StatusCode: http.StatusFound,
@@ -423,7 +423,7 @@ func TestGrokVideoProviderOpenContentRejectsRedirectContentResponse(t *testing.T
 func TestGrokVideoProviderOpenContentReusesOAuthCredentialForStatusAndRelay(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	tokens := &countingGrokVideoTokenProvider{token: "oauth-token"}
-	upstream := &recordingHTTPUpstream{responses: []*http.Response{
+	upstream := &recordingGrokVideoHTTPUpstream{responses: []*http.Response{
 		grokVideoTestResponse(http.StatusOK, `{"status":"completed"}`),
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"video/mp4"}}, Body: io.NopCloser(strings.NewReader("video-payload"))},
 	}}

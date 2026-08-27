@@ -4,6 +4,7 @@ package ent
 
 import (
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ type VideoTaskEvent struct {
 	// EventType holds the value of the "event_type" field.
 	EventType string `json:"event_type,omitempty"`
 	// Payload holds the value of the "payload" field.
-	Payload json.RawMessage `json:"payload,omitempty"`
+	Payload jsontext.Value `json:"payload,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt    time.Time `json:"created_at,omitempty"`
 	selectValues sql.SelectValues

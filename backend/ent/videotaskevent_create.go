@@ -4,7 +4,7 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"time"
@@ -36,7 +36,7 @@ func (_c *VideoTaskEventCreate) SetEventType(v string) *VideoTaskEventCreate {
 }
 
 // SetPayload sets the "payload" field.
-func (_c *VideoTaskEventCreate) SetPayload(v json.RawMessage) *VideoTaskEventCreate {
+func (_c *VideoTaskEventCreate) SetPayload(v jsontext.Value) *VideoTaskEventCreate {
 	_c.mutation.SetPayload(v)
 	return _c
 }
@@ -237,7 +237,7 @@ func (u *VideoTaskEventUpsert) UpdateEventType() *VideoTaskEventUpsert {
 }
 
 // SetPayload sets the "payload" field.
-func (u *VideoTaskEventUpsert) SetPayload(v json.RawMessage) *VideoTaskEventUpsert {
+func (u *VideoTaskEventUpsert) SetPayload(v jsontext.Value) *VideoTaskEventUpsert {
 	u.Set(videotaskevent.FieldPayload, v)
 	return u
 }
@@ -328,7 +328,7 @@ func (u *VideoTaskEventUpsertOne) UpdateEventType() *VideoTaskEventUpsertOne {
 }
 
 // SetPayload sets the "payload" field.
-func (u *VideoTaskEventUpsertOne) SetPayload(v json.RawMessage) *VideoTaskEventUpsertOne {
+func (u *VideoTaskEventUpsertOne) SetPayload(v jsontext.Value) *VideoTaskEventUpsertOne {
 	return u.Update(func(s *VideoTaskEventUpsert) {
 		s.SetPayload(v)
 	})
@@ -588,7 +588,7 @@ func (u *VideoTaskEventUpsertBulk) UpdateEventType() *VideoTaskEventUpsertBulk {
 }
 
 // SetPayload sets the "payload" field.
-func (u *VideoTaskEventUpsertBulk) SetPayload(v json.RawMessage) *VideoTaskEventUpsertBulk {
+func (u *VideoTaskEventUpsertBulk) SetPayload(v jsontext.Value) *VideoTaskEventUpsertBulk {
 	return u.Update(func(s *VideoTaskEventUpsert) {
 		s.SetPayload(v)
 	})

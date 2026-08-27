@@ -272,9 +272,12 @@ export interface PublicSettings {
   channel_monitor_default_interval_seconds: number
   /** When true, user monitor hides RPM/TPM so scale cannot be reverse-estimated. */
   channel_monitor_hide_throughput?: boolean
+  /** When true, user monitor shows account quota/balance snapshots (default off). */
+  channel_monitor_show_quota?: boolean
   available_channels_enabled: boolean
   model_plaza_enabled: boolean
   model_plaza_require_auth: boolean
+  plugin_management_enabled: boolean
   service_quota_enabled: boolean
   affiliate_enabled: boolean
   allow_user_view_error_requests?: boolean
@@ -529,7 +532,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video' | 'kimi' | 'zhipu' | 'deepseek' | 'composite'
 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -890,7 +893,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video' | 'kimi' | 'zhipu' | 'deepseek'
 export type VideoProvider = 'seedance' | 'kling'
 export type VideoPricingOperation = 'generation' | 'edit' | 'extension'
 export type VideoPricingResolution = '*' | '480p' | '720p' | '1080p'
@@ -1166,6 +1169,17 @@ export interface Account {
     codex_reset_credit_snapshot?: {
       available_count?: number
       credits?: { expires_at?: string }[]
+    }
+    auto_reset_credit_enabled?: boolean
+    auto_reset_credit_5h_threshold?: number
+    auto_reset_credit_7d_threshold?: number
+    codex_auto_reset_credit_state?: {
+      status?: 'checking' | 'available' | 'resetting' | 'success' | 'no_credit' | 'failed'
+      trigger_window?: string
+      available_count?: number
+      checked_at?: string
+      last_result_at?: string
+      error_code?: string
     }
   } & Record<string, unknown>)
   proxy_id: number | null

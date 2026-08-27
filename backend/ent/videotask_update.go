@@ -4,7 +4,7 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"time"
@@ -260,13 +260,13 @@ func (_u *VideoTaskUpdate) ClearProviderSubmissionToken() *VideoTaskUpdate {
 }
 
 // SetRequestPayload sets the "request_payload" field.
-func (_u *VideoTaskUpdate) SetRequestPayload(v json.RawMessage) *VideoTaskUpdate {
+func (_u *VideoTaskUpdate) SetRequestPayload(v jsontext.Value) *VideoTaskUpdate {
 	_u.mutation.SetRequestPayload(v)
 	return _u
 }
 
 // AppendRequestPayload appends value to the "request_payload" field.
-func (_u *VideoTaskUpdate) AppendRequestPayload(v json.RawMessage) *VideoTaskUpdate {
+func (_u *VideoTaskUpdate) AppendRequestPayload(v jsontext.Value) *VideoTaskUpdate {
 	_u.mutation.AppendRequestPayload(v)
 	return _u
 }
@@ -1648,13 +1648,13 @@ func (_u *VideoTaskUpdateOne) ClearProviderSubmissionToken() *VideoTaskUpdateOne
 }
 
 // SetRequestPayload sets the "request_payload" field.
-func (_u *VideoTaskUpdateOne) SetRequestPayload(v json.RawMessage) *VideoTaskUpdateOne {
+func (_u *VideoTaskUpdateOne) SetRequestPayload(v jsontext.Value) *VideoTaskUpdateOne {
 	_u.mutation.SetRequestPayload(v)
 	return _u
 }
 
 // AppendRequestPayload appends value to the "request_payload" field.
-func (_u *VideoTaskUpdateOne) AppendRequestPayload(v json.RawMessage) *VideoTaskUpdateOne {
+func (_u *VideoTaskUpdateOne) AppendRequestPayload(v jsontext.Value) *VideoTaskUpdateOne {
 	_u.mutation.AppendRequestPayload(v)
 	return _u
 }

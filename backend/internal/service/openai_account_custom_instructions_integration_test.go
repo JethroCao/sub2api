@@ -1140,6 +1140,7 @@ func accountInstructionsForwardWSMainWriteForTest(
 		c,
 		account,
 		payload,
+		"",
 		"sk-test",
 		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
 		false,

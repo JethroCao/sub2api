@@ -4,7 +4,7 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"time"
@@ -132,7 +132,7 @@ func (_c *VideoTaskCreate) SetNillableProviderSubmissionToken(v *string) *VideoT
 }
 
 // SetRequestPayload sets the "request_payload" field.
-func (_c *VideoTaskCreate) SetRequestPayload(v json.RawMessage) *VideoTaskCreate {
+func (_c *VideoTaskCreate) SetRequestPayload(v jsontext.Value) *VideoTaskCreate {
 	_c.mutation.SetRequestPayload(v)
 	return _c
 }
@@ -1330,7 +1330,7 @@ func (u *VideoTaskUpsert) ClearProviderSubmissionToken() *VideoTaskUpsert {
 }
 
 // SetRequestPayload sets the "request_payload" field.
-func (u *VideoTaskUpsert) SetRequestPayload(v json.RawMessage) *VideoTaskUpsert {
+func (u *VideoTaskUpsert) SetRequestPayload(v jsontext.Value) *VideoTaskUpsert {
 	u.Set(videotask.FieldRequestPayload, v)
 	return u
 }
@@ -2245,7 +2245,7 @@ func (u *VideoTaskUpsertOne) ClearProviderSubmissionToken() *VideoTaskUpsertOne 
 }
 
 // SetRequestPayload sets the "request_payload" field.
-func (u *VideoTaskUpsertOne) SetRequestPayload(v json.RawMessage) *VideoTaskUpsertOne {
+func (u *VideoTaskUpsertOne) SetRequestPayload(v jsontext.Value) *VideoTaskUpsertOne {
 	return u.Update(func(s *VideoTaskUpsert) {
 		s.SetRequestPayload(v)
 	})
@@ -3432,7 +3432,7 @@ func (u *VideoTaskUpsertBulk) ClearProviderSubmissionToken() *VideoTaskUpsertBul
 }
 
 // SetRequestPayload sets the "request_payload" field.
-func (u *VideoTaskUpsertBulk) SetRequestPayload(v json.RawMessage) *VideoTaskUpsertBulk {
+func (u *VideoTaskUpsertBulk) SetRequestPayload(v jsontext.Value) *VideoTaskUpsertBulk {
 	return u.Update(func(s *VideoTaskUpsert) {
 		s.SetRequestPayload(v)
 	})
