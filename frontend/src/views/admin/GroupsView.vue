@@ -4506,6 +4506,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
+import { extractApiErrorMessage } from "@/utils/apiError";
 import type {
   AdminGroup,
   CompositeModelRoute,
@@ -6406,7 +6407,10 @@ const handleCreateGroup = async () => {
       closeCreateModal();
       await loadGroups();
     } else {
-      appStore.showError(t("admin.groups.failedToCreate"));
+      appStore.showError(
+        extractApiErrorMessage(error, t("admin.groups.failedToCreate")),
+      );
+      console.error("Error creating group:", error);
     }
     // Don't advance tour on error
   } finally {
@@ -6717,7 +6721,10 @@ const handleUpdateGroup = async () => {
       closeEditModal();
       await loadGroups();
     } else {
-      appStore.showError(t("admin.groups.failedToUpdate"));
+      appStore.showError(
+        extractApiErrorMessage(error, t("admin.groups.failedToUpdate")),
+      );
+      console.error("Error updating group:", error);
     }
   } finally {
     submitting.value = false;

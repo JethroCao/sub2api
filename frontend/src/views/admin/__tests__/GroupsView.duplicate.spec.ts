@@ -11,6 +11,7 @@ const {
   duplicateGroup,
   listVideoPricingRules,
   replaceVideoPricingRules,
+  updateGroup,
   getModelsListCandidates,
   getLiveCapability,
   getUsageSummary,
@@ -23,6 +24,7 @@ const {
   duplicateGroup: vi.fn(),
   listVideoPricingRules: vi.fn(),
   replaceVideoPricingRules: vi.fn(),
+  updateGroup: vi.fn(),
   getModelsListCandidates: vi.fn(),
   getLiveCapability: vi.fn(),
   getUsageSummary: vi.fn(),
@@ -48,7 +50,7 @@ vi.mock('@/api/admin', () => ({
       getCapacitySummary,
       getAll: vi.fn(),
       create: vi.fn(),
-      update: vi.fn(),
+      update: updateGroup,
       delete: vi.fn(),
       updateSortOrder: vi.fn()
     },
@@ -166,6 +168,13 @@ const TotpStepUpDialogStub = defineComponent({
   template: '<div data-testid="step-up-dialog" />'
 })
 
+const BaseDialogStub = defineComponent({
+  props: {
+    show: { type: Boolean, default: false }
+  },
+  template: '<div v-if="show"><slot /><slot name="footer" /></div>'
+})
+
 function mountView() {
   return mount(GroupsView, {
     global: {
@@ -174,7 +183,7 @@ function mountView() {
         TablePageLayout: TablePageLayoutStub,
         DataTable: DataTableStub,
         Pagination: true,
-        BaseDialog: true,
+        BaseDialog: BaseDialogStub,
         ConfirmDialog: true,
         EmptyState: true,
         Select: true,
@@ -200,11 +209,11 @@ describe('GroupsView duplicate action', () => {
       duplicateGroup,
       listVideoPricingRules,
       replaceVideoPricingRules,
+      updateGroup,
       getModelsListCandidates,
       getLiveCapability,
       getUsageSummary,
       getCapacitySummary,
-      getLiveCapability,
       showSuccess,
       showError,
       apiPut
@@ -486,6 +495,35 @@ describe('GroupsView duplicate action', () => {
         'Idempotency-Key': 'group-video-pricing-43-33333333-3333-4333-8333-333333333333'
       } }
     ])
+    wrapper.unmount()
+  })
+
+  it('shows the standardized API message when updating a group fails', async () => {
+    listGroups.mockResolvedValueOnce({
+      items: [legacySourceGroup],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    updateGroup.mockRejectedValueOnce({
+      status: 409,
+      code: 409,
+      message: 'group name already exists',
+      reason: 'GROUP_EXISTS'
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const editButton = wrapper.findAll('button').find((button) => button.text() === 'common.edit')
+    expect(editButton).toBeTruthy()
+    await editButton!.trigger('click')
+    await flushPromises()
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+
+    expect(updateGroup).toHaveBeenCalledTimes(1)
+    expect(showError).toHaveBeenCalledWith('group name already exists')
     wrapper.unmount()
   })
 })
