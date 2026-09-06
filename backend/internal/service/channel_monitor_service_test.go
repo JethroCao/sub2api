@@ -110,6 +110,10 @@ func TestChannelMonitorService_RunCheckDoesNotRejectDisabledManualCheck(t *testi
 		IntervalSeconds: 60,
 	}}
 	svc := NewChannelMonitorService(repo, &plainEncryptor{})
+	svc.SetRuntimeReader(channelMonitorRuntimeStub{rt: ChannelMonitorRuntime{
+		Enabled: true,
+		Mode:    ChannelMonitorModeV1,
+	}})
 
 	_, err := svc.RunCheck(context.Background(), 42)
 

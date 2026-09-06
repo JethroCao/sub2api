@@ -314,6 +314,11 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	platform := NormalizeGroupPlatform(input.Platform)
+	// 固定账号 manifest 配置：账号绑定发生在创建之后，创建时无法校验成员关系，
+	// 拒绝开启并在创建后的编辑里配置。
+	if normalizeCodexModelsManifestConfig(platform, input.CodexModelsManifestConfig).Enabled {
+		return nil, infraerrors.New(http.StatusBadRequest, "INVALID_CODEX_MODELS_MANIFEST_CONFIG", "codex models manifest config cannot be enabled at group creation; configure it after creation in the group editor")
+	}
 	modelPricing, err := normalizeGroupModelPricing(platform, input.ModelPricing)
 	if err != nil {
 		return nil, err
@@ -525,10 +530,13 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		DefaultMappedModel:              input.DefaultMappedModel,
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
 		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
-		RPMLimit:                        input.RPMLimit,
-		MaxReasoningEffort:              maxReasoningEffort,
-		MaxReasoningEffortOverLimit:     maxReasoningEffortOverLimit,
-		ReasoningEffortMappings:         reasoningEffortMappings,
+		// 固定账号 manifest 配置：账号绑定发生在分组创建之后，创建路径禁止开启，
+		// 成员关系无从校验（前端创建对话框也不展示）。
+		CodexModelsManifestConfig:   normalizeCodexModelsManifestConfig(platform, input.CodexModelsManifestConfig),
+		RPMLimit:                    input.RPMLimit,
+		MaxReasoningEffort:          maxReasoningEffort,
+		MaxReasoningEffortOverLimit: maxReasoningEffortOverLimit,
+		ReasoningEffortMappings:     reasoningEffortMappings,
 	}
 	sanitizeGroupMessagesDispatchFields(group)
 	sanitizeGroupOpenAIFast(group)
@@ -908,6 +916,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.ModelsListConfig != nil {
 		group.ModelsListConfig = normalizeGroupModelsListConfig(*input.ModelsListConfig)
 	}
+	if input.CodexModelsManifestConfig != nil {
+		group.CodexModelsManifestConfig = *input.CodexModelsManifestConfig
+	}
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit
 	}
@@ -938,6 +949,34 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.AllowLive = false
 	}
 	sanitizeGroupReasoningEffortPolicy(group)
+	// 固定账号 manifest 配置：按最终平台归一化（切出 openai 平台时静默归零，
+	// 与 ForceOpenAIFast 同一收口）；校验仅在本次显式携带配置时进行，
+	// 避免脏 ID 阻塞无关字段更新。
+	group.CodexModelsManifestConfig = normalizeCodexModelsManifestConfig(group.Platform, group.CodexModelsManifestConfig)
+	copyAccountsRequested := len(input.CopyAccountsFromGroupIDs) > 0
+	var accountIDsToCopy []int64
+	if copyAccountsRequested {
+		accountIDsToCopy, err = s.resolveGroupAccountIDsToCopy(
+			ctx,
+			id,
+			group.Platform,
+			group.RequireOAuthOnly,
+			input.CopyAccountsFromGroupIDs,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if input.CodexModelsManifestConfig != nil || copyAccountsRequested {
+		if copyAccountsRequested {
+			err = s.validateCodexModelsManifestConfigForAccountIDs(ctx, accountIDsToCopy, group.CodexModelsManifestConfig)
+		} else {
+			err = s.validateCodexModelsManifestConfig(ctx, id, group.CodexModelsManifestConfig)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if err := s.groupRepo.Update(ctx, group); err != nil {
 		return nil, err
@@ -955,65 +994,11 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 
 	// 如果指定了复制账号的源分组，同步绑定（替换当前分组的账号）
-	if len(input.CopyAccountsFromGroupIDs) > 0 {
-		// 去重源分组 IDs
-		seen := make(map[int64]struct{})
-		uniqueSourceGroupIDs := make([]int64, 0, len(input.CopyAccountsFromGroupIDs))
-		for _, srcGroupID := range input.CopyAccountsFromGroupIDs {
-			// 校验：源分组不能是自身
-			if srcGroupID == id {
-				return nil, fmt.Errorf("cannot copy accounts from self")
-			}
-			// 去重
-			if _, exists := seen[srcGroupID]; !exists {
-				seen[srcGroupID] = struct{}{}
-				uniqueSourceGroupIDs = append(uniqueSourceGroupIDs, srcGroupID)
-			}
-		}
-
-		// 校验源分组的平台是否与当前分组一致
-		for _, srcGroupID := range uniqueSourceGroupIDs {
-			srcGroup, err := s.groupRepo.GetByIDLite(ctx, srcGroupID)
-			if err != nil {
-				return nil, fmt.Errorf("source group %d not found: %w", srcGroupID, err)
-			}
-			if !canCopyAccountsFromGroupPlatform(group.Platform, srcGroup.Platform) {
-				return nil, fmt.Errorf("source group %d platform mismatch: expected %s, got %s", srcGroupID, group.Platform, srcGroup.Platform)
-			}
-		}
-
-		// 获取所有源分组的账号（去重）
-		accountIDsToCopy, err := s.groupRepo.GetAccountIDsByGroupIDs(ctx, uniqueSourceGroupIDs)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get accounts from source groups: %w", err)
-		}
-
+	if copyAccountsRequested {
 		// 先清空当前分组的所有账号绑定
 		if _, err := s.groupRepo.DeleteAccountGroupsByGroupID(ctx, id); err != nil {
 			return nil, fmt.Errorf("failed to clear existing account bindings: %w", err)
 		}
-
-		// require_oauth_only: 过滤掉 apikey 类型账号
-		if group.RequireOAuthOnly && groupSupportsOAuthOnlyFilter(group.Platform) && len(accountIDsToCopy) > 0 {
-			accounts, err := s.accountRepo.GetByIDs(ctx, accountIDsToCopy)
-			if err != nil {
-				return nil, fmt.Errorf("failed to fetch accounts for oauth filter: %w", err)
-			}
-			oauthIDs := make(map[int64]struct{}, len(accounts))
-			for _, acc := range accounts {
-				if acc.Type != AccountTypeAPIKey {
-					oauthIDs[acc.ID] = struct{}{}
-				}
-			}
-			var filtered []int64
-			for _, aid := range accountIDsToCopy {
-				if _, ok := oauthIDs[aid]; ok {
-					filtered = append(filtered, aid)
-				}
-			}
-			accountIDsToCopy = filtered
-		}
-
 		// 再绑定源分组的账号
 		if len(accountIDsToCopy) > 0 {
 			if err := s.groupRepo.BindAccountsToGroup(ctx, id, accountIDsToCopy); err != nil {
@@ -1023,6 +1008,53 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 
 	return group, nil
+}
+
+func (s *adminServiceImpl) resolveGroupAccountIDsToCopy(ctx context.Context, targetGroupID int64, targetPlatform string, requireOAuthOnly bool, sourceGroupIDs []int64) ([]int64, error) {
+	seen := make(map[int64]struct{}, len(sourceGroupIDs))
+	uniqueSourceGroupIDs := make([]int64, 0, len(sourceGroupIDs))
+	for _, sourceGroupID := range sourceGroupIDs {
+		if sourceGroupID == targetGroupID {
+			return nil, fmt.Errorf("cannot copy accounts from self")
+		}
+		if _, exists := seen[sourceGroupID]; !exists {
+			seen[sourceGroupID] = struct{}{}
+			uniqueSourceGroupIDs = append(uniqueSourceGroupIDs, sourceGroupID)
+		}
+	}
+	for _, sourceGroupID := range uniqueSourceGroupIDs {
+		sourceGroup, err := s.groupRepo.GetByIDLite(ctx, sourceGroupID)
+		if err != nil {
+			return nil, fmt.Errorf("source group %d not found: %w", sourceGroupID, err)
+		}
+		if !canCopyAccountsFromGroupPlatform(targetPlatform, sourceGroup.Platform) {
+			return nil, fmt.Errorf("source group %d platform mismatch: expected %s, got %s", sourceGroupID, targetPlatform, sourceGroup.Platform)
+		}
+	}
+	accountIDs, err := s.groupRepo.GetAccountIDsByGroupIDs(ctx, uniqueSourceGroupIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get accounts from source groups: %w", err)
+	}
+	if !requireOAuthOnly || !groupSupportsOAuthOnlyFilter(targetPlatform) || len(accountIDs) == 0 {
+		return accountIDs, nil
+	}
+	accounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch accounts for oauth filter: %w", err)
+	}
+	oauthIDs := make(map[int64]struct{}, len(accounts))
+	for _, account := range accounts {
+		if account != nil && account.Type != AccountTypeAPIKey {
+			oauthIDs[account.ID] = struct{}{}
+		}
+	}
+	filtered := make([]int64, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if _, ok := oauthIDs[accountID]; ok {
+			filtered = append(filtered, accountID)
+		}
+	}
+	return filtered, nil
 }
 
 func normalizeGroupModelPricing(platform string, pricing []ChannelModelPricing) ([]ChannelModelPricing, error) {

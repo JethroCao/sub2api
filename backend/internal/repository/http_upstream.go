@@ -372,19 +372,26 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	return resp, nil
 }
 
+// httpClientForUpstreamRequest derives a request-scoped client for redirect
+// policy and destination validation without mutating the cached client.
 func (s *httpUpstreamService) httpClientForUpstreamRequest(client *http.Client, req *http.Request) (*http.Client, error) {
 	if client == nil || req == nil {
 		return client, nil
 	}
-	requireBoundDial := service.HTTPUpstreamResolvedIPValidationRequired(req.Context())
-	if !service.HTTPUpstreamRedirectsDisabled(req.Context()) && !requireBoundDial {
+	ctx := req.Context()
+	disableRedirects := service.HTTPUpstreamRedirectsDisabled(ctx)
+	publicHostsOnly := service.HTTPUpstreamPublicHostsOnly(ctx)
+	requireBoundDial := service.HTTPUpstreamResolvedIPValidationRequired(ctx) || publicHostsOnly
+	if !disableRedirects && !(publicHostsOnly && client.CheckRedirect == nil) && !requireBoundDial {
 		return client, nil
 	}
 	clone := *client
-	if service.HTTPUpstreamRedirectsDisabled(req.Context()) {
+	if disableRedirects {
 		clone.CheckRedirect = func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
+	} else if publicHostsOnly && clone.CheckRedirect == nil {
+		clone.CheckRedirect = s.redirectChecker
 	}
 	if !requireBoundDial {
 		return &clone, nil
@@ -681,14 +688,19 @@ func (s *httpUpstreamService) shouldValidateResolvedIP() bool {
 	return !s.cfg.Security.URLAllowlist.AllowPrivateHosts
 }
 
+// validateRequestHost 校验请求主机的解析结果不落在回环、私网、链路本地或未指定地址。
+// 是否全局启用由 security.url_allowlist 决定；请求级安全标记无论全局配置如何都校验。
 func (s *httpUpstreamService) validateRequestHost(req *http.Request) error {
+	globalValidation := s.shouldValidateResolvedIP()
+	resolvedValidation := req != nil && service.HTTPUpstreamResolvedIPValidationRequired(req.Context())
+	publicHostsOnly := req != nil && service.HTTPUpstreamPublicHostsOnly(req.Context())
 	if req == nil || req.URL == nil {
-		if s.shouldValidateResolvedIP() {
+		if globalValidation || resolvedValidation || publicHostsOnly {
 			return errors.New("request url is nil")
 		}
 		return nil
 	}
-	if !s.shouldValidateResolvedIP() && !service.HTTPUpstreamResolvedIPValidationRequired(req.Context()) {
+	if !globalValidation && !resolvedValidation && !publicHostsOnly {
 		return nil
 	}
 	host := strings.TrimSpace(req.URL.Hostname())

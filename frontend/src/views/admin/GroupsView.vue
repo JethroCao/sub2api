@@ -775,10 +775,10 @@
           <div class="mb-3 flex items-center justify-between gap-3">
             <div>
               <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {{ t("admin.groups.modelsList.title") }}
+                {{ t("admin.groups.modelsList.title", { endpoint: modelsListEndpoint(createForm.platform) }) }}
               </label>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ t("admin.groups.modelsList.hint") }}
+                {{ t("admin.groups.modelsList.hint", { endpoint: modelsListEndpoint(createForm.platform) }) }}
               </p>
             </div>
             <button
@@ -2617,10 +2617,10 @@
           <div class="mb-3 flex items-center justify-between gap-3">
             <div>
               <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {{ t("admin.groups.modelsList.title") }}
+                {{ t("admin.groups.modelsList.title", { endpoint: modelsListEndpoint(editForm.platform) }) }}
               </label>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ t("admin.groups.modelsList.hint") }}
+                {{ t("admin.groups.modelsList.hint", { endpoint: modelsListEndpoint(editForm.platform) }) }}
               </p>
             </div>
             <button
@@ -3378,6 +3378,15 @@
             </div>
           </div>
         </div>
+
+        <!-- 固定账号获取 Codex Model Manifest（仅 openai 平台，仅编辑对话框） -->
+        <CodexManifestAccountsField
+          v-if="editForm.platform === 'openai' && editingGroup"
+          ref="editCodexManifestRef"
+          :group-id="editingGroup.id"
+          v-model="editCodexManifestConfig"
+          :account-names="editCodexManifestAccountNames"
+        />
 
 
         <div class="border-t border-gray-200 pt-4 mt-4 dark:border-dark-400">
@@ -4647,6 +4656,7 @@ import { adminAPI } from "@/api/admin";
 import { extractApiErrorMessage } from "@/utils/apiError";
 import type {
   AdminGroup,
+  CodexModelsManifestConfig,
   CompositeModelRoute,
   CompositeModelRouteInput,
   CompositeRouteDecision,
@@ -4679,6 +4689,7 @@ import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import VideoPricingRulesEditor from "@/components/admin/group/VideoPricingRulesEditor.vue";
 import TotpStepUpDialog from "@/components/auth/TotpStepUpDialog.vue";
+import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
 import PricingEntryCard from "@/components/admin/channel/PricingEntryCard.vue";
 import type { PricingFormEntry } from "@/components/admin/channel/types";
 import {
@@ -5276,6 +5287,8 @@ const createMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const editMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const createModelsListState = reactive(createInitialModelsListState());
 const editModelsListState = reactive(createInitialModelsListState());
+const modelsListEndpoint = (platform: string) =>
+  platform === "gemini" ? "/v1beta/models" : "/v1/models";
 const createModelsListLoading = ref(false);
 const editModelsListLoading = ref(false);
 type ReasoningEffortPolicyFieldsExpose = {
@@ -5284,6 +5297,20 @@ type ReasoningEffortPolicyFieldsExpose = {
 };
 const createReasoningEffortPolicyRef = ref<ReasoningEffortPolicyFieldsExpose | null>(null);
 const editReasoningEffortPolicyRef = ref<ReasoningEffortPolicyFieldsExpose | null>(null);
+
+// 固定账号获取 Codex Model Manifest（仅 openai 分组编辑对话框）
+type CodexManifestAccountsFieldExpose = {
+  validate: () => boolean;
+  resetValidation: () => void;
+};
+const editCodexManifestRef = ref<CodexManifestAccountsFieldExpose | null>(null);
+const createCodexManifestDefaults = (): CodexModelsManifestConfig => ({
+  enabled: false,
+  account_ids: [],
+  fallback_to_scheduler: false,
+});
+const editCodexManifestConfig = reactive<CodexModelsManifestConfig>(createCodexManifestDefaults());
+const editCodexManifestAccountNames = ref<Record<number, string>>({});
 const modelsListCandidatesTracker = createModelsListCandidatesTracker();
 const createModelsListSelectedCount = computed(
   () => createModelsListState.items.filter((item) => item.selected).length,
@@ -6477,6 +6504,8 @@ const handleCreateGroup = async () => {
         createModelRoutingRules.value,
       ),
       models_list_config: buildModelsListConfig(createModelsListState),
+      // 创建时固定账号 manifest 固定发送关闭状态（后端创建路径禁止开启）
+      codex_models_manifest_config: createCodexManifestDefaults(),
       supported_model_scopes: normalizeSupportedModelScopesForPlatform(
         createForm.platform,
         createForm.supported_model_scopes,
@@ -6688,6 +6717,28 @@ const handleEdit = async (group: AdminGroup) => {
     );
     if (!isCurrentEdit) return;
   }
+  // 固定账号 manifest 配置：回显配置并异步解析已存账号名称（失败显示 #<id>）
+  const savedCodexManifestConfig =
+    group.codex_models_manifest_config ?? createCodexManifestDefaults();
+  Object.assign(editCodexManifestConfig, {
+    enabled: savedCodexManifestConfig.enabled ?? false,
+    account_ids: [...(savedCodexManifestConfig.account_ids ?? [])],
+    fallback_to_scheduler: savedCodexManifestConfig.fallback_to_scheduler ?? false,
+  });
+  editCodexManifestAccountNames.value = {};
+  for (const id of editCodexManifestConfig.account_ids) {
+    adminAPI.accounts
+      .getById(id)
+      .then((account) => {
+        editCodexManifestAccountNames.value = {
+          ...editCodexManifestAccountNames.value,
+          [id]: account.name,
+        };
+      })
+      .catch(() => {
+        // 无法解析名称时由组件回退展示 #<id>，提示管理员清理脏 ID。
+      });
+  }
   // 加载模型路由规则（异步加载账号名称）
   editModelRoutingRules.value = await convertApiFormatToRoutingRules(
     group.model_routing,
@@ -6741,6 +6792,9 @@ const closeEditModal = () => {
   resetMessagesDispatchFormState(editForm);
   editForm.allow_live = false;
   resetModelsListState(editModelsListState);
+  Object.assign(editCodexManifestConfig, createCodexManifestDefaults());
+  editCodexManifestAccountNames.value = {};
+  editCodexManifestRef.value?.resetValidation?.();
 };
 
 const handleUpdateGroup = async () => {
@@ -6765,6 +6819,16 @@ const handleUpdateGroup = async () => {
   }
   if (editForm.platform === "video" && !editVideoPricingEditorRef.value?.validate()) {
     appStore.showError(t("admin.groups.videoPricing.errors.validation"));
+    return;
+  }
+  // 固定账号 manifest：开启后至少一个账号，前端阻止提交并提示。
+  if (
+    editForm.platform === "openai" &&
+    editCodexManifestConfig.enabled &&
+    editCodexManifestConfig.account_ids.length === 0
+  ) {
+    appStore.showError(t("admin.groups.codexModelsManifest.selectAtLeastOne"));
+    editCodexManifestRef.value?.validate();
     return;
   }
 
@@ -6808,6 +6872,15 @@ const handleUpdateGroup = async () => {
         editModelRoutingRules.value,
       ),
       models_list_config: buildModelsListConfig(editModelsListState),
+      // 非 openai 平台提交关闭状态，与后端归一化一致
+      codex_models_manifest_config:
+        editForm.platform === "openai"
+          ? {
+              enabled: editCodexManifestConfig.enabled,
+              account_ids: [...editCodexManifestConfig.account_ids],
+              fallback_to_scheduler: editCodexManifestConfig.fallback_to_scheduler,
+            }
+          : createCodexManifestDefaults(),
       supported_model_scopes: normalizeSupportedModelScopesForPlatform(
         editForm.platform,
         editForm.supported_model_scopes,
