@@ -2053,6 +2053,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				capacityFailoverSuppressedLogged = true
 			}
 			cyberHit := false
+			upstreamErrorKind := "http_error"
 			if eventType == "response.failed" || eventType == "error" {
 				dataBytes = redactOpenAIAccountInstructionsFromUpstreamBody(account, dataBytes)
 				trimmedData = strings.TrimSpace(string(dataBytes))
@@ -2099,6 +2100,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 						s.handleOpenAIStreamTerminalAccountSideEffects(c, account, dataBytes, failedMessage, resp.Header, mappedModel)
 						bareErrorAccountSideEffectsPending = false
 					}
+					if eventType == "response.failed" {
+						// The stream cannot be replayed after semantic output. Preserve the
+						// terminal event, while making the upstream failure queryable.
+						upstreamErrorKind = "stream_failed"
+					}
 				}
 				if !outputStarted {
 					shouldFailover := false
@@ -2130,7 +2136,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 						}
 					}
 				}
-				failedMessage = s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "http_error", dataBytes, failedMessage)
+				failedMessage = s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, upstreamErrorKind, dataBytes, failedMessage)
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
 			}

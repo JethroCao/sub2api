@@ -12,7 +12,7 @@ const {
   listVideoPricingRules,
   replaceVideoPricingRules,
   listAccounts,
-  getModelsListCandidates,
+  getModelAllowlistCandidates,
   getLiveCapability,
   showSuccess,
   showError
@@ -23,7 +23,7 @@ const {
   listVideoPricingRules: vi.fn(),
   replaceVideoPricingRules: vi.fn(),
   listAccounts: vi.fn(),
-  getModelsListCandidates: vi.fn(),
+  getModelAllowlistCandidates: vi.fn(),
   getLiveCapability: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
@@ -37,7 +37,7 @@ vi.mock('@/api/admin', () => ({
       update: updateGroup,
       listVideoPricingRules,
       replaceVideoPricingRules,
-      getModelsListCandidates,
+      getModelAllowlistCandidates,
       getLiveCapability,
       getUsageSummary: vi.fn().mockResolvedValue([]),
       getCapacitySummary: vi.fn().mockResolvedValue([]),
@@ -52,6 +52,10 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ showSuccess, showError })
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({ isSimpleMode: false })
 }))
 
 vi.mock('@/stores/onboarding', () => ({
@@ -228,7 +232,7 @@ describe('GroupsView video pricing safety and permissions', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     for (const fn of [
       listGroups, createGroup, updateGroup, listVideoPricingRules,
-      replaceVideoPricingRules, listAccounts, getModelsListCandidates,
+      replaceVideoPricingRules, listAccounts, getModelAllowlistCandidates,
       getLiveCapability, showSuccess, showError
     ]) fn.mockReset()
 
@@ -253,7 +257,7 @@ describe('GroupsView video pricing safety and permissions', () => {
       page_size: 100,
       pages: 1
     })
-    getModelsListCandidates.mockResolvedValue([])
+    getModelAllowlistCandidates.mockResolvedValue([])
     getLiveCapability.mockResolvedValue({ supported: false })
   })
 

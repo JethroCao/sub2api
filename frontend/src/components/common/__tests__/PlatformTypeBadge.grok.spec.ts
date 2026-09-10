@@ -126,3 +126,19 @@ describe('PlatformTypeBadge Video accounts', () => {
     expect(wrapper.find('.bg-rose-100').exists()).toBe(true)
   })
 })
+
+describe('PlatformTypeBadge MiniMax', () => {
+  it('labels MiniMax API keys as MiniMax, not Gemini', () => {
+    const wrapper = mount(PlatformTypeBadge, {
+      props: {
+        platform: 'minimax',
+        type: 'apikey',
+      },
+    })
+
+    expect(wrapper.text()).toContain('MiniMax')
+    expect(wrapper.text()).toContain('Key')
+    expect(wrapper.text()).not.toContain('Gemini')
+    expect(wrapper.html()).toContain('bg-rose-100')
+  })
+})

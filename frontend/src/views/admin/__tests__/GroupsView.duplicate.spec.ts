@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AdminGroup } from '@/types'
 import GroupsView from '@/views/admin/GroupsView.vue'
+import { adminAPI } from '@/api/admin'
 
 const {
   apiPut,
@@ -12,8 +13,8 @@ const {
   listVideoPricingRules,
   replaceVideoPricingRules,
   updateGroup,
-  getModelsListCandidates,
   getLiveCapability,
+  getModelAllowlistCandidates,
   getUsageSummary,
   getCapacitySummary,
   showSuccess,
@@ -25,8 +26,8 @@ const {
   listVideoPricingRules: vi.fn(),
   replaceVideoPricingRules: vi.fn(),
   updateGroup: vi.fn(),
-  getModelsListCandidates: vi.fn(),
   getLiveCapability: vi.fn(),
+  getModelAllowlistCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   showSuccess: vi.fn(),
@@ -37,6 +38,8 @@ vi.mock('@/api/client', () => ({
   apiClient: { put: apiPut }
 }))
 
+const authState = vi.hoisted(() => ({ isSimpleMode: false }))
+
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     groups: {
@@ -44,8 +47,8 @@ vi.mock('@/api/admin', () => ({
       duplicate: duplicateGroup,
       listVideoPricingRules,
       replaceVideoPricingRules,
-      getModelsListCandidates,
       getLiveCapability,
+      getModelAllowlistCandidates,
       getUsageSummary,
       getCapacitySummary,
       getAll: vi.fn(),
@@ -63,6 +66,10 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ showSuccess, showError })
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => authState
 }))
 
 vi.mock('@/stores/onboarding', () => ({
@@ -135,7 +142,7 @@ const sourceGroup: AdminGroup = {
   account_count: 1,
   active_account_count: 1,
   rate_limited_account_count: 0,
-  models_list_config: undefined,
+  model_allowlist: undefined,
   sort_order: 10
 }
 
@@ -202,6 +209,7 @@ function mountView() {
 
 describe('GroupsView duplicate action', () => {
   beforeEach(() => {
+    authState.isSimpleMode = false
     localStorage.clear()
     vi.spyOn(console, 'error').mockImplementation(() => {})
     for (const fn of [
@@ -210,8 +218,8 @@ describe('GroupsView duplicate action', () => {
       listVideoPricingRules,
       replaceVideoPricingRules,
       updateGroup,
-      getModelsListCandidates,
       getLiveCapability,
+      getModelAllowlistCandidates,
       getUsageSummary,
       getCapacitySummary,
       showSuccess,
@@ -247,8 +255,7 @@ describe('GroupsView duplicate action', () => {
       enabled: true
     }])
     replaceVideoPricingRules.mockResolvedValue([])
-    getModelsListCandidates.mockResolvedValue([])
-    getLiveCapability.mockResolvedValue({ supported: false })
+    getModelAllowlistCandidates.mockResolvedValue([])
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
     getLiveCapability.mockResolvedValue({ supported: false })
@@ -308,6 +315,20 @@ describe('GroupsView duplicate action', () => {
     expect(listVideoPricingRules).not.toHaveBeenCalled()
     expect(replaceVideoPricingRules).not.toHaveBeenCalled()
     expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess:Primary (Copy)')
+    wrapper.unmount()
+  })
+
+  it('hides advanced group actions in simple mode', async () => {
+    authState.isSimpleMode = true
+    const compositeGroup = { ...sourceGroup, platform: 'composite' }
+    listGroups.mockResolvedValueOnce({ items: [compositeGroup], total: 1, page: 1, page_size: 20, pages: 1 })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="group-duplicate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="group-composite-routes"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="group-rate-multipliers"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="group-rpm-overrides"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -526,4 +547,77 @@ describe('GroupsView duplicate action', () => {
     expect(showError).toHaveBeenCalledWith('group name already exists')
     wrapper.unmount()
   })
+
+  it('updates manifest controls immediately and submits the displayed selection', async () => {
+    vi.useFakeTimers()
+    listGroups.mockResolvedValue({
+      items: [legacySourceGroup],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    vi.mocked(adminAPI.accounts.list).mockResolvedValue({
+      items: [{ id: 5, name: 'Manifest account' }]
+    } as never)
+    updateGroup.mockResolvedValue(legacySourceGroup)
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      const editButton = wrapper.findAll('button').find((button) => button.text() === 'common.edit')!
+      await editButton.trigger('click')
+      await flushPromises()
+
+      const toggle = wrapper.get('[data-testid="codex-manifest-toggle"]')
+      await toggle.trigger('click')
+      expect(toggle.attributes('aria-checked')).toBe('true')
+      const search = wrapper.get('[data-testid="codex-manifest-search"]')
+      await search.trigger('focus')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(adminAPI.accounts.list).toHaveBeenCalledWith(
+        1, 20, { search: '', platform: 'openai', group: '42' }, expect.anything()
+      )
+      await wrapper.get('[data-testid="codex-manifest-dropdown"] button').trigger('click')
+      expect(wrapper.get('[data-testid="codex-manifest-selected-tags"]').text()).toContain('Manifest account')
+
+      await wrapper.get('[aria-label="remove account 5"]').trigger('click')
+      expect(wrapper.find('[data-testid="codex-manifest-selected-tags"]').exists()).toBe(false)
+      await wrapper.get('#edit-group-form').trigger('submit')
+      expect(updateGroup).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="codex-manifest-validation-error"]').exists()).toBe(true)
+
+      await search.trigger('focus')
+      await wrapper.get('[data-testid="codex-manifest-dropdown"] button').trigger('click')
+      expect(wrapper.get('[data-testid="codex-manifest-selected-tags"]').text()).toContain('Manifest account')
+      const fallback = wrapper.get('[data-testid="codex-manifest-fallback-toggle"]')
+      await fallback.trigger('click')
+      expect(fallback.attributes('aria-checked')).toBe('true')
+      await fallback.trigger('click')
+      expect(fallback.attributes('aria-checked')).toBe('false')
+      await fallback.trigger('click')
+
+      await toggle.trigger('click')
+      expect(wrapper.find('[data-testid="codex-manifest-search"]').exists()).toBe(false)
+      await toggle.trigger('click')
+      expect(wrapper.get('[data-testid="codex-manifest-selected-tags"]').text()).toContain('Manifest account')
+      await wrapper.get('#edit-group-form').trigger('submit')
+      await flushPromises()
+      expect(updateGroup).toHaveBeenCalledWith(42, expect.objectContaining({
+        codex_models_manifest_config: {
+          enabled: true, account_ids: [5], fallback_to_scheduler: true
+        }
+      }))
+
+      // Reopening reads the saved group afresh, without retaining the prior draft.
+      await editButton.trigger('click')
+      await flushPromises()
+      expect(wrapper.get('[data-testid="codex-manifest-toggle"]').attributes('aria-checked')).toBe('false')
+      expect(wrapper.find('[data-testid="codex-manifest-search"]').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
 })
