@@ -954,7 +954,7 @@ func filterSchedulerCredentials(account service.Account) map[string]any {
 	if len(account.Credentials) == 0 {
 		return nil
 	}
-	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type"}
+	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold"}
 	if account.QuotaDimensionOrDefault() != service.QuotaDimensionSpark && service.SupportsOpenAICustomInstructions(account.Platform, account.Type) {
 		keys = append(keys, service.OpenAICustomInstructionsCredentialKey)
 	}
@@ -975,6 +975,13 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		return nil
 	}
 	keys := []string{
+		// Anthropic shared-window and Fable-only threshold checks run on this
+		// projection. UpdateExtra refreshes both payloads without a bucket rebuild.
+		"session_window_utilization",
+		"passive_usage_7d_utilization",
+		"passive_usage_7d_reset",
+		"passive_usage_7d_oi_utilization",
+		"passive_usage_7d_oi_reset",
 		"quota_limit",
 		"quota_used",
 		"quota_daily_limit",
