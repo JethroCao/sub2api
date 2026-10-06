@@ -115,18 +115,6 @@ describe('PlatformTypeBadge OpenAI authentication modes', () => {
   })
 })
 
-describe('PlatformTypeBadge Video accounts', () => {
-  it('uses the Video label and existing rose platform treatment', () => {
-    const wrapper = mount(PlatformTypeBadge, {
-      props: { platform: 'video', type: 'apikey' },
-    })
-
-    expect(wrapper.text()).toContain('admin.accounts.platforms.video')
-    expect(wrapper.text()).not.toContain('Gemini')
-    expect(wrapper.find('.bg-rose-100').exists()).toBe(true)
-  })
-})
-
 describe('PlatformTypeBadge MiniMax', () => {
   it('labels MiniMax API keys as MiniMax, not Gemini', () => {
     const wrapper = mount(PlatformTypeBadge, {

@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -149,6 +150,21 @@ func requireMigration199CurrentState(t *testing.T, userID int64) {
 	`, userID).Scan(&balance, &frozenBalance))
 	require.Equal(t, "123.25000001", balance)
 	require.Equal(t, "0.00000001", frozenBalance)
+}
+
+func requireNumericColumnOnDB(t *testing.T, table, column string, precision, scale int) {
+	t.Helper()
+	var actualType string
+	var actualPrecision, actualScale sql.NullInt64
+	err := integrationDB.QueryRowContext(context.Background(), `
+		SELECT data_type, numeric_precision, numeric_scale
+		FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+	`, table, column).Scan(&actualType, &actualPrecision, &actualScale)
+	require.NoError(t, err)
+	require.Equal(t, "numeric", actualType)
+	require.Equal(t, int64(precision), actualPrecision.Int64)
+	require.Equal(t, int64(scale), actualScale.Int64)
 }
 
 func prepareOriginalMigration199State(t *testing.T, userID int64) {

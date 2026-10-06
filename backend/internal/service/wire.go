@@ -2,16 +2,15 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"os"
-	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/google/wire"
@@ -108,98 +107,6 @@ func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo Acco
 	return svc
 }
 
-// ProvideDurableVideoProviderRegistry contains only providers whose recovery
-// contract is safe for distributed workers. Kling remains deliberately gated.
-func ProvideDurableVideoProviderRegistry(openAIGateway *OpenAIGatewayService, upstream HTTPUpstream) (*VideoProviderRegistry, error) {
-	return NewVideoProviderRegistry(
-		openAIGateway.GrokVideoProvider(),
-		NewSeedanceVideoProvider(upstream),
-	)
-}
-
-func ProvideVideoCapabilityCatalog(registry *VideoProviderRegistry) VideoCapabilityCatalog {
-	catalog := make(VideoCapabilityCatalog)
-	if registry == nil {
-		return catalog
-	}
-	for name, provider := range registry.providers {
-		if provider != nil {
-			catalog[name] = provider.Capabilities()
-		}
-	}
-	if _, registered := registry.Get(VideoProviderSeedance); registered {
-		catalog[VideoModelCapabilityKey(VideoProviderSeedance, "seedance-2.0")] = VideoProviderCapabilities{
-			VideoOperationGeneration: {
-				Text: true, FirstFrame: true, LastFrame: true, FirstAndLastFrame: true,
-				ReferenceImages: true, ReferenceVideos: true, Audio: true,
-			},
-		}
-		catalog[VideoModelCapabilityKey(VideoProviderSeedance, "seedance-2.5")] = VideoProviderCapabilities{
-			VideoOperationGeneration: {
-				Text: true, FirstFrame: true, FirstAndLastFrame: true,
-				ReferenceImages: true, ReferenceVideos: true, Audio: true,
-				MinDurationSeconds: 4, MaxDurationSeconds: 30,
-				Resolutions:  []string{"480p", "720p"},
-				AspectRatios: []string{"21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "adaptive"},
-			},
-		}
-	}
-	return catalog
-}
-
-func ProvideVideoCapabilityValidator(catalog VideoCapabilityCatalog) VideoCapabilityValidator {
-	return catalog
-}
-
-func ProvideAdminVideoService(repo AdminVideoRepository, catalog VideoCapabilityCatalog, cfg *config.Config) *AdminVideoService {
-	var key AdminVideoURLHashKey
-	if cfg != nil && strings.TrimSpace(cfg.JWT.Secret) != "" {
-		sum := sha256.Sum256([]byte("sub2api:admin-video:result-url:v1\x00" + cfg.JWT.Secret))
-		key = append(key, sum[:]...)
-	}
-	return NewAdminVideoService(repo, catalog, nil, key)
-}
-
-func ProvideVideoReconciler(
-	repo VideoTaskRepository,
-	accounts AccountRepository,
-	billing *VideoBillingService,
-	providers *VideoProviderRegistry,
-	cfg *config.Config,
-) *VideoReconciler {
-	videoCfg := config.VideoConfig{}
-	if cfg != nil {
-		videoCfg = cfg.Video
-	}
-	return NewVideoReconciler(repo, accounts, billing, providers, videoCfg)
-}
-
-func ProvideVideoTaskService(
-	submissions VideoSubmissionRepository,
-	tasks VideoTaskRepository,
-	pricing *VideoPricingService,
-	billing *VideoBillingService,
-	providers *VideoProviderRegistry,
-	capabilities VideoCapabilityValidator,
-	scheduler VideoAccountScheduler,
-	subscriptions VideoSubscriptionWindowMaintainer,
-	cfg *config.Config,
-) *VideoTaskService {
-	videoCfg := config.VideoConfig{}
-	if cfg != nil {
-		videoCfg = cfg.Video
-	}
-	return NewVideoTaskService(submissions, tasks, pricing, billing, providers, capabilities, scheduler, subscriptions, videoCfg)
-}
-
-func ProvideVideoRetention(repo VideoTaskRepository, cfg *config.Config) *VideoRetention {
-	videoCfg := config.VideoConfig{}
-	if cfg != nil {
-		videoCfg = cfg.Video
-	}
-	return NewVideoRetention(repo, videoCfg)
-}
-
 // ProvideOpenAIOAuthService creates OpenAIOAuthService with privacy/account enrichment support.
 func ProvideOpenAIOAuthService(
 	proxyRepo ProxyRepository,
@@ -268,6 +175,13 @@ func ProvideOpenAITokenProvider(
 	return p
 }
 
+// ProvidePluginManager preserves account-directory wiring when regenerating Wire.
+func ProvidePluginManager(repo PluginRepository, encryptor SecretEncryptor, cfg *config.Config, hostInfo PluginHostInfo, kvStore PluginKVStore, gateway *OpenAIGatewayService) *PluginManager {
+	manager := NewPluginManager(repo, encryptor, cfg, hostInfo, kvStore)
+	manager.SetAccountDirectory(gateway)
+	return manager
+}
+
 // ProvideOpenAIQuotaService wires the OpenAI quota query/reset service.
 // It depends on the OpenAI token provider for refreshed access tokens and the
 // privacy client factory for the impersonated upstream HTTP client.
@@ -276,9 +190,10 @@ func ProvideOpenAIQuotaService(
 	proxyRepo ProxyRepository,
 	tokenProvider *OpenAITokenProvider,
 	privacyClientFactory PrivacyClientFactory,
+	referralClient OpenAIReferralClient,
 	openAIGatewayService *OpenAIGatewayService,
 ) *OpenAIQuotaService {
-	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
+	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory, referralClient)
 	service.agentIdentityWS = openAIGatewayService
 	return service
 }
@@ -467,8 +382,9 @@ func ProvideGrokTokenProvider(
 }
 
 // ProvideDashboardAggregationService 创建并启动仪表盘聚合服务
-func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, lockCache LeaderLockCache, db *sql.DB, cfg *config.Config) *DashboardAggregationService {
+func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, lockCache LeaderLockCache, db *sql.DB, cfg *config.Config, settingRepo SettingRepository) *DashboardAggregationService {
 	svc := NewDashboardAggregationService(repo, timingWheel, cfg)
+	svc.settingRepo = settingRepo
 	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
@@ -496,6 +412,18 @@ func ProvideOpenAICodexVersionSyncService(
 	githubClient GitHubReleaseClient,
 ) *OpenAICodexVersionSyncService {
 	svc := NewOpenAICodexVersionSyncService(settingRepo, settingService, githubClient, openAICodexVersionSyncInterval)
+	svc.Start()
+	return svc
+}
+
+// ProvideClaudeCodeVersionSyncService creates and starts ClaudeCodeVersionSyncService.
+// 出站 Claude Code 身份的版本号靠它跟随官方发布，无需为了跟版本而发新版本；面板可关闭。
+func ProvideClaudeCodeVersionSyncService(
+	settingRepo SettingRepository,
+	settingService *SettingService,
+	githubClient GitHubReleaseClient,
+) *ClaudeCodeVersionSyncService {
+	svc := NewClaudeCodeVersionSyncService(settingRepo, settingService, githubClient, claudeCodeVersionSyncInterval)
 	svc.Start()
 	return svc
 }
@@ -798,12 +726,10 @@ func ProvideBackupService(
 	encryptor SecretEncryptor,
 	storeFactory BackupObjectStoreFactory,
 	dumper DBDumper,
-	recordRepo BackupRecordRepository,
 	lockCache LeaderLockCache,
 	db *sql.DB,
 ) *BackupService {
 	svc := NewBackupService(settingRepo, cfg, encryptor, storeFactory, dumper)
-	svc.SetBackupRecordRepository(recordRepo)
 	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
@@ -890,6 +816,11 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	SetCodexCanonicalUserAgentResolver(func() string {
 		return svc.GetOpenAICodexCanonicalUserAgent(context.Background())
 	})
+	// Claude CLI 伪装版本号同理：运行期解析（面板手动值 → 后台同步值 → 内置基线），
+	// 解析器内部自带 60s TTL 缓存，热路径不触库。
+	claude.SetCLIVersionResolver(func() string {
+		return svc.GetClaudeCodeClientVersion(context.Background())
+	})
 	return svc
 }
 
@@ -955,24 +886,11 @@ var ProviderSet = wire.NewSet(
 	ProvideBatchImageModelPricingResolver,
 	NewBatchImagePublicService,
 	NewBatchImageDownloadService,
-	NewVideoPricingService,
-	NewVideoBillingService,
-	ProvideAdminVideoService,
-	NewVideoContentFetcher,
-	ProvideDurableVideoProviderRegistry,
-	ProvideVideoCapabilityCatalog,
-	ProvideVideoCapabilityValidator,
-	NewOpenAIVideoAccountScheduler,
-	wire.Bind(new(VideoAccountScheduler), new(*OpenAIVideoAccountScheduler)),
-	wire.Bind(new(VideoSubscriptionWindowMaintainer), new(*SubscriptionService)),
-	ProvideVideoTaskService,
-	ProvideVideoReconciler,
-	ProvideVideoRetention,
-	ProvideVideoRuntime,
 	ProvideBatchImageCleanupService,
 	ProvideBatchImageWorkerRuntime,
 	wire.Bind(new(AccountRuntimeBlocker), new(*OpenAIGatewayService)),
 	NewOAuthService,
+	ProvideClaudeResetCreditService,
 	ProvideOpenAIOAuthService,
 	ProvideGrokOAuthService,
 	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
@@ -1000,6 +918,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountTestService,
 	ProvideUpstreamBillingProbeService,
 	ProvideOllamaCloudUsageService,
+	ProvideOpenCodeGoUsageService,
 	ProvideSettingService,
 	NewDataManagementService,
 	ProvideBackupService,
@@ -1031,6 +950,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	ProvideAccountExpiryService,
 	ProvideOpenAICodexVersionSyncService,
+	ProvideClaudeCodeVersionSyncService,
 	ProvideProxyExpiryService,
 	ProvideSubscriptionExpiryService,
 	ProvideTimingWheelService,
@@ -1044,7 +964,7 @@ var ProviderSet = wire.NewSet(
 	NewTotpService,
 	NewErrorPassthroughService,
 	NewTLSFingerprintProfileService,
-	NewPluginManager,
+	ProvidePluginManager,
 	NewDigestSessionStore,
 	ProvideIdempotencyCoordinator,
 	ProvideSystemOperationLockService,
@@ -1163,4 +1083,12 @@ func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.
 	}
 	aggregator.Start()
 	return aggregator
+}
+
+// ProvideClaudeResetCreditService wires the Claude reset query and, with the
+// idempotency store and Redis leases, manual redemption.
+func ProvideClaudeResetCreditService(accounts AccountRepository, tokens *ClaudeTokenProvider, proxies ProxyRepository, settings *SettingService, idem *IdempotencyCoordinator, locks LeaderLockCache) *ClaudeResetCreditService {
+	s := NewClaudeResetCreditService(accounts, tokens, proxies, settings)
+	s.ConfigureRedemption(idem, locks)
+	return s
 }

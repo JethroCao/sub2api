@@ -160,19 +160,6 @@
             <PlatformIcon platform="grok" size="sm" />
             Grok
           </button>
-          <button
-            type="button"
-            @click="form.platform = 'video'"
-            :class="[
-              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
-              form.platform === 'video'
-                ? 'bg-white text-rose-600 shadow-sm dark:bg-dark-600 dark:text-rose-400'
-                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
-            ]"
-          >
-            <PlatformIcon platform="video" size="sm" />
-            {{ t('admin.accounts.platforms.video') }}
-          </button>
         </div>
         <!-- Multi-protocol API-key providers: Kimi / Zhipu GLM / DeepSeek / OpenCode -->
         <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
@@ -240,6 +227,19 @@
           >
             <PlatformIcon platform="opencode_go" size="sm" />
             OpenCode
+          </button>
+          <button
+            type="button"
+            @click="selectTypeSafePlatform()"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'typesafe'
+                ? 'bg-white text-sky-700 shadow-sm dark:bg-dark-600 dark:text-sky-300'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="typesafe" size="sm" />
+            TypeSafe / Jev
           </button>
         </div>
       </div>
@@ -1370,16 +1370,8 @@
         </div>
       </div>
 
-      <VideoProviderFields
-        v-if="form.platform === 'video'"
-        v-model:provider="videoProvider"
-        v-model:credentials="videoCredentials"
-        v-model:extra="videoExtra"
-        mode="create"
-      />
-
-      <!-- API Key input (only for apikey type, excluding platforms with their own fields) -->
-      <div v-if="form.type === 'apikey' && form.platform !== 'antigravity' && form.platform !== 'video'" class="space-y-4">
+      <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
+      <div v-if="form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
         <div v-if="!isMultiProtocolPlatform || apiProtocol !== 'adaptive'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -1539,6 +1531,7 @@
             <div v-if="modelRestrictionMode === 'whitelist'">
               <ModelWhitelistSelector
                 v-model="allowedModels"
+                :model-mappings="modelMappings"
                 :platform="form.platform"
                 :sync-credentials="syncPreviewCredentials"
                 @upstream-synced="upstreamModelsPreviewed = true"
@@ -2026,6 +2019,7 @@
           <div v-if="modelRestrictionMode === 'whitelist'">
             <ModelWhitelistSelector
               v-model="allowedModels"
+              :model-mappings="modelMappings"
               platform="anthropic"
               :sync-credentials="syncPreviewCredentials"
               @upstream-synced="upstreamModelsPreviewed = true"
@@ -2183,7 +2177,7 @@
 
       <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
       <div
-        v-else-if="(form.type === 'apikey' || form.type === 'bedrock') && form.platform !== 'video'"
+        v-else-if="form.type === 'apikey' || form.type === 'bedrock'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -2367,6 +2361,7 @@
           <div v-if="modelRestrictionMode === 'whitelist'">
             <ModelWhitelistSelector
               v-model="allowedModels"
+              :model-mappings="modelMappings"
               :platform="form.platform"
               :sync-credentials="syncPreviewCredentials"
               @upstream-synced="upstreamModelsPreviewed = true"
@@ -2460,7 +2455,7 @@
       </div>
 
       <!-- Temp Unschedulable Rules -->
-      <div v-if="form.platform !== 'video'" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.title') }}</label>
@@ -4062,8 +4057,7 @@ import type {
   OpenAIResponsesMode,
   OpenAIJSONSchemaMode,
   OpenAIImageInputMode,
-  OpenAIEndpointCapability,
-  VideoProvider
+  OpenAIEndpointCapability
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -4082,7 +4076,6 @@ import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
-import VideoProviderFields from '@/components/account/VideoProviderFields.vue'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import {
   applyAntigravityProjectID,
@@ -4097,9 +4090,6 @@ import {
   isCNProviderPlatform,
   isHeaderOverrideCapable,
   validateHeaderOverrideRows,
-  buildVideoCredentials,
-  buildVideoExtra,
-  isValidVideoBaseURL,
   type CnAccountMode,
   type CnApiProtocol,
   type CnNativeApiProtocol,
@@ -4190,6 +4180,8 @@ const apiKeyBaseUrlPlaceholder = computed(() => {
       return 'https://generativelanguage.googleapis.com'
     case 'grok':
       return 'https://api.x.ai/v1'
+    case 'typesafe':
+      return 'https://api.typesafe.ai'
     default:
       return 'https://api.anthropic.com'
   }
@@ -4212,6 +4204,8 @@ const apiKeyValuePlaceholder = computed(() => {
     case 'minimax':
     case 'opencode_go':
       return 'sk-...'
+    case 'typesafe':
+      return 'ts-...'
     default:
       return 'sk-ant-...'
   }
@@ -4298,9 +4292,6 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
-const videoProvider = ref<VideoProvider>('seedance')
-const videoCredentials = ref<Record<string, unknown>>({})
-const videoExtra = ref<Record<string, unknown>>({ model_mapping: {} })
 const upstreamBillingAutoProbeEnabled = ref(true)
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）账号类型、API 协议与端点 ──
@@ -4420,6 +4411,13 @@ function selectOpenCodeGoPlatform() {
   apiKeyBaseUrl.value = defaultCNBaseUrl('opencode_go', openCodeAccountMode.value, 'adaptive')
   resetAdaptiveBaseUrls('opencode_go', openCodeAccountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(openCodeAccountMode.value))
+}
+function selectTypeSafePlatform() {
+  form.platform = 'typesafe'
+  form.type = 'apikey'
+  accountCategory.value = 'apikey'
+  apiKeyBaseUrl.value = 'https://api.typesafe.ai'
+  allowedModels.value = ['jev-latest']
 }
 // 账号类型 / 协议变更时同步默认 base url。
 watch(openCodeAccountMode, (mode, previousMode) => {
@@ -4710,16 +4708,17 @@ const openAITextEndpointCapabilityLabel = computed(() => {
 })
 const openAIEndpointCapabilityOptions = computed<{ value: OpenAIEndpointCapability; label: string }[]>(() => [
   { value: 'chat_completions', label: openAITextEndpointCapabilityLabel.value },
-  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') }
+  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') },
+  { value: 'seedance', label: 'Seedance (Ark)' }
 ])
 const openAITextGenerationCapabilityEnabled = computed(() =>
   openAIEndpointCapabilities.value.includes('chat_completions')
 )
 
 const normalizeOpenAIEndpointCapabilities = (values: OpenAIEndpointCapability[]) => {
-  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings']
+  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance']
   const selected = allowed.filter((value) => values.includes(value))
-  return selected.length > 0 ? selected : allowed
+  return selected.length > 0 ? selected : ['chat_completions', 'embeddings'] as OpenAIEndpointCapability[]
 }
 
 const toggleOpenAIEndpointCapability = (capability: OpenAIEndpointCapability, event?: Event) => {
@@ -4745,7 +4744,7 @@ const toggleOpenAIEndpointCapability = (capability: OpenAIEndpointCapability, ev
 
 const applyOpenAIEndpointCapabilities = (credentials: Record<string, unknown>) => {
   const capabilities = normalizeOpenAIEndpointCapabilities(openAIEndpointCapabilities.value)
-  if (capabilities.length === 2) {
+  if (capabilities.length === 2 && !capabilities.includes('seedance')) {
     delete credentials.openai_capabilities
     return
   }
@@ -4992,10 +4991,6 @@ watch(
 watch(
   [accountCategory, addMethod, antigravityAccountType, () => form.platform],
   ([category, method, agType]) => {
-    if (form.platform === 'video') {
-      form.type = 'apikey'
-      return
-    }
     // Antigravity upstream 类型（实际创建为 apikey）
     if (form.platform === 'antigravity' && agType === 'upstream') {
       form.type = 'apikey'
@@ -5021,17 +5016,6 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
-    if (newPlatform === 'video') {
-      accountCategory.value = 'apikey'
-      form.type = 'apikey'
-      videoProvider.value = 'seedance'
-      videoCredentials.value = {}
-      videoExtra.value = { model_mapping: {} }
-    } else {
-      videoProvider.value = 'seedance'
-      videoCredentials.value = {}
-      videoExtra.value = { model_mapping: {} }
-    }
     // Reset base URL based on platform
     if (isCNProviderPlatform(newPlatform) || newPlatform === 'opencode_go') {
       const mode = newPlatform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
@@ -5044,12 +5028,20 @@ watch(
             ? 'https://generativelanguage.googleapis.com'
             : newPlatform === 'grok'
               ? 'https://api.x.ai/v1'
+              : newPlatform === 'typesafe'
+                ? 'https://api.typesafe.ai'
               : 'https://api.anthropic.com'
     }
     // Clear model-related settings
     allowedModels.value = []
     upstreamModelsPreviewed.value = false
     modelMappings.value = []
+    if (newPlatform === 'typesafe') {
+      accountCategory.value = 'apikey'
+      // Grok 等平台会把模式切到映射；TypeSafe 只用白名单写入 jev-latest。
+      modelRestrictionMode.value = 'whitelist'
+      allowedModels.value = ['jev-latest']
+    }
     // Antigravity: 默认使用映射模式并填充默认映射
     if (newPlatform === 'antigravity') {
       antigravityModelRestrictionMode.value = 'mapping'
@@ -5515,9 +5507,6 @@ const resetForm = () => {
   adaptiveBaseUrls.value = { chat_completions: '', anthropic: '', responses: '' }
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
-  videoProvider.value = 'seedance'
-  videoCredentials.value = {}
-  videoExtra.value = { model_mapping: {} }
   upstreamRequestIdHeader.value = ''
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
@@ -5862,50 +5851,6 @@ const handleSubmit = async () => {
     return
   }
 
-  if (form.platform === 'video') {
-    if (!form.name.trim()) {
-      appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
-      return
-    }
-    try {
-      const credentials = buildVideoCredentials({
-        platform: 'video',
-        provider: videoProvider.value,
-        apiKey: videoCredentials.value.api_key,
-        accessKey: videoCredentials.value.access_key,
-        secretKey: videoCredentials.value.secret_key,
-        baseUrl: videoCredentials.value.base_url
-      })
-      if (!isValidVideoBaseURL(String(videoCredentials.value.base_url || ''))) {
-        appStore.showError(t('admin.accounts.video.invalidBaseUrl'))
-        return
-      }
-      if (videoProvider.value === 'seedance' && !credentials.api_key) {
-        appStore.showError(t('admin.accounts.video.apiKeyRequired'))
-        return
-      }
-      if (videoProvider.value === 'kling' && (!credentials.access_key || !credentials.secret_key)) {
-        appStore.showError(t('admin.accounts.video.klingCredentialsRequired'))
-        return
-      }
-      const extra = buildVideoExtra({
-        provider: videoProvider.value,
-        modelMapping: videoExtra.value.model_mapping,
-        disabledCapabilities: videoExtra.value.video_disabled_capabilities
-      })
-      await doCreateAccount({
-        ...form,
-        type: 'apikey',
-        credentials,
-        extra,
-        group_ids: form.group_ids,
-        auto_pause_on_expired: autoPauseOnExpired.value
-      })
-    } catch {
-      appStore.showError(t('admin.accounts.video.invalidConfiguration'))
-    }
-    return
-  }
 
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
@@ -6060,6 +6005,8 @@ const handleSubmit = async () => {
         ? 'https://generativelanguage.googleapis.com'
         : form.platform === 'grok'
           ? 'https://api.x.ai/v1'
+          : form.platform === 'typesafe'
+            ? 'https://api.typesafe.ai'
           : 'https://api.anthropic.com'
 
   // Build credentials with optional model mapping

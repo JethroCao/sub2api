@@ -542,7 +542,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe' | 'composite'
 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -583,8 +583,6 @@ export interface Group {
   long_context_pricing_enabled: boolean
   // 图片生成计费配置
   allow_image_generation: boolean
-  // 视频生成权限与图片生成权限完全独立
-  allow_video_generation: boolean
   allow_batch_image_generation: boolean
   image_rate_independent: boolean
   image_rate_multiplier: number
@@ -807,7 +805,6 @@ export interface CreateGroupRequest {
   free_openai_fast?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
-  allow_video_generation?: boolean
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
@@ -874,7 +871,6 @@ export interface UpdateGroupRequest {
   free_openai_fast?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
-  allow_video_generation?: boolean
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
@@ -926,33 +922,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'video' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go'
-export type VideoProvider = 'seedance' | 'kling'
-export type VideoPricingOperation = 'generation' | 'edit' | 'extension'
-export type VideoPricingResolution = '*' | '480p' | '720p' | '1080p'
-export type VideoPricingAudioMode = 'any' | 'with_audio' | 'without_audio'
-export type VideoPricingUnit = 'per_request' | 'per_output_second'
-
-export interface VideoPricingRuleInput {
-  external_model: string
-  operation: VideoPricingOperation
-  resolution: VideoPricingResolution
-  audio_mode: VideoPricingAudioMode
-  unit: VideoPricingUnit
-  unit_price: number
-  upstream_unit_cost: number | null
-  enabled: boolean
-}
-
-export interface VideoPricingRule extends VideoPricingRuleInput {
-  id: number
-  group_id: number
-}
-
-export interface VideoPricingCapability {
-  external_model: string
-  operation: VideoPricingOperation
-}
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1189,6 +1159,46 @@ export interface OllamaCloudUsageSettings {
   debounce_minutes: number
 }
 
+export type OpenCodeGoUsageStatus = 'ok' | 'unauthorized' | 'failed'
+
+export interface OpenCodeGoUsageWindow {
+  status?: string
+  percent: number
+  resets_at?: string
+}
+
+export interface OpenCodeGoUsageData {
+  rolling?: OpenCodeGoUsageWindow
+  weekly?: OpenCodeGoUsageWindow
+  monthly?: OpenCodeGoUsageWindow
+}
+
+export interface OpenCodeGoUsageSnapshot {
+  status: OpenCodeGoUsageStatus
+  data?: OpenCodeGoUsageData
+  fetched_at?: string
+  last_attempt_at?: string
+  next_refresh_at?: string
+  failure_count?: number
+  http_status?: number
+  last_error?: string
+}
+
+export interface OpenCodeGoUsageState {
+  account_id: number
+  eligible: boolean
+  auto_refresh_enabled: boolean
+  snapshot?: OpenCodeGoUsageSnapshot
+}
+
+export interface OpenCodeGoUsageSettings {
+  enabled: boolean
+  /** Max wait while model requests keep arriving (minutes). */
+  interval_minutes: number
+  /** Trailing quiet period after the latest model request (minutes). */
+  debounce_minutes: number
+}
+
 export interface Account {
   id: number
   name: string
@@ -1201,9 +1211,8 @@ export interface Account {
   // 改为通过 credentials_status.has_<key> 暴露存在性。
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
-  video_provider?: VideoProvider
-  video_capabilities?: string[]
   ollama_cloud_usage?: OllamaCloudUsageState
+  opencode_go_usage?: OpenCodeGoUsageState
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
@@ -1215,6 +1224,11 @@ export interface Account {
       available_count?: number
       credits?: { expires_at?: string }[]
     }
+    codex_credits_snapshot?: {
+      credits: { has_credits: boolean; unlimited: boolean; balance: string | null } | null
+      fetched_at: number
+    }
+    codex_referral_snapshot?: import('./openaiReferrals').OpenAIReferralEligibility | null
     auto_reset_credit_enabled?: boolean
     auto_reset_credit_5h_threshold?: number
     auto_reset_credit_7d_threshold?: number
@@ -1493,7 +1507,7 @@ export type OpenAICompactMode = 'auto' | 'force_on' | 'force_off'
 export type OpenAIResponsesMode = 'auto' | 'force_responses' | 'force_chat_completions'
 export type OpenAIJSONSchemaMode = 'auto' | 'passthrough' | 'force_json_object'
 export type OpenAIImageInputMode = 'auto' | 'multimodal' | 'text_only'
-export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings'
+export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings' | 'seedance'
 
 export interface OpenAICompactState {
   openai_compact_mode?: OpenAICompactMode

@@ -190,6 +190,27 @@ func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_ImageResultUsesMandator
 	require.True(t, called.Load(), "image usage task must be mandatory when async submit is dropped")
 }
 
+func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_SeedanceUsesMandatoryFallback(t *testing.T) {
+	pool := service.NewUsageRecordWorkerPoolWithOptions(service.UsageRecordWorkerPoolOptions{
+		WorkerCount: 1, QueueSize: 1, TaskTimeout: time.Second,
+		OverflowPolicy: "drop", AutoScaleEnabled: false,
+	})
+	t.Cleanup(pool.Stop)
+	h := &OpenAIGatewayHandler{usageRecordWorkerPool: pool}
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	pool.Submit(func(context.Context) { close(started); <-release })
+	<-started
+	pool.Submit(func(context.Context) {})
+	var settled atomic.Bool
+	h.submitOpenAIUsageRecordTask(context.Background(), &service.OpenAIForwardResult{
+		RequestID:  service.StableGrokVideoBillingRequestID(service.SeedanceTaskKey("task-native")),
+		ResponseID: service.SeedanceTaskKey("task-native"),
+		Usage:      service.OpenAIUsage{OutputTokens: 400},
+	}, func(context.Context) { settled.Store(true) })
+	require.True(t, settled.Load(), "native Seedance token settlement must not disappear when the regular usage queue overflows")
+}
+
 func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_SearchCountUsesMandatoryFallback(t *testing.T) {
 	pool := service.NewUsageRecordWorkerPoolWithOptions(service.UsageRecordWorkerPoolOptions{
 		WorkerCount:           1,

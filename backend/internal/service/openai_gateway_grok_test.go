@@ -1579,28 +1579,6 @@ func TestForwardGrokMediaVideoGenerationReturnsUsageAndResponseID(t *testing.T) 
 	require.Equal(t, 10, result.VideoDurationSeconds)
 }
 
-func TestOpenAIGatewayServiceGrokVideoProviderUsesGatewayDependencies(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"request_id":"video-provider-123"}`)),
-	}}
-	svc := &OpenAIGatewayService{
-		httpUpstream:      upstream,
-		grokTokenProvider: NewGrokTokenProvider(nil, nil),
-	}
-
-	_, err := svc.GrokVideoProvider().Submit(context.Background(), healthyGrokOAuthGatewayTestAccount(63, "oauth-access-token"), CanonicalVideoRequest{
-		Operation: VideoOperationGeneration,
-		Model:     "grok-imagine-video",
-		Prompt:    "waves",
-	}, "submit-token")
-
-	require.NoError(t, err)
-	require.Equal(t, "Bearer oauth-access-token", upstream.lastReq.Header.Get("Authorization"))
-}
-
 func TestForwardGrokMediaVideoGenerationReturnsTaskIDAsResponseID(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 	gin.SetMode(gin.TestMode)

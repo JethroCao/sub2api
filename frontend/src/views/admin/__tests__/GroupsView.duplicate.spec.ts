@@ -7,35 +7,25 @@ import GroupsView from '@/views/admin/GroupsView.vue'
 import { adminAPI } from '@/api/admin'
 
 const {
-  apiPut,
   listGroups,
   duplicateGroup,
-  listVideoPricingRules,
-  replaceVideoPricingRules,
   updateGroup,
-  getLiveCapability,
   getModelAllowlistCandidates,
   getUsageSummary,
   getCapacitySummary,
+  getLiveCapability,
   showSuccess,
   showError
 } = vi.hoisted(() => ({
-  apiPut: vi.fn(),
   listGroups: vi.fn(),
   duplicateGroup: vi.fn(),
-  listVideoPricingRules: vi.fn(),
-  replaceVideoPricingRules: vi.fn(),
   updateGroup: vi.fn(),
-  getLiveCapability: vi.fn(),
   getModelAllowlistCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
+  getLiveCapability: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
-}))
-
-vi.mock('@/api/client', () => ({
-  apiClient: { put: apiPut }
 }))
 
 const authState = vi.hoisted(() => ({ isSimpleMode: false }))
@@ -45,12 +35,10 @@ vi.mock('@/api/admin', () => ({
     groups: {
       list: listGroups,
       duplicate: duplicateGroup,
-      listVideoPricingRules,
-      replaceVideoPricingRules,
-      getLiveCapability,
       getModelAllowlistCandidates,
       getUsageSummary,
       getCapacitySummary,
+      getLiveCapability,
       getAll: vi.fn(),
       create: vi.fn(),
       update: updateGroup,
@@ -83,20 +71,15 @@ vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   return {
     ...actual,
-    useI18n: () => ({
-      t: (key: string, params?: Record<string, unknown>) =>
-        params ? `${key}:${Object.values(params).join(':')}` : key
-    })
+    useI18n: () => ({ t: (key: string) => key })
   }
 })
-
-import { replaceVideoPricingRules as replaceVideoPricingRulesThroughClient } from '@/api/admin/groups'
 
 const sourceGroup: AdminGroup = {
   id: 42,
   name: 'Primary',
   description: null,
-  platform: 'video',
+  platform: 'openai',
   rate_multiplier: 1,
   rpm_limit: 0,
   is_exclusive: false,
@@ -106,7 +89,6 @@ const sourceGroup: AdminGroup = {
   weekly_limit_usd: null,
   monthly_limit_usd: null,
   allow_image_generation: false,
-  allow_video_generation: false,
   allow_batch_image_generation: false,
   image_rate_independent: false,
   image_rate_multiplier: 1,
@@ -146,12 +128,6 @@ const sourceGroup: AdminGroup = {
   sort_order: 10
 }
 
-const legacySourceGroup: AdminGroup = {
-  ...sourceGroup,
-  platform: 'openai',
-  allow_video_generation: false
-}
-
 const AppLayoutStub = defineComponent({
   template: '<main><slot /></main>'
 })
@@ -167,12 +143,6 @@ const DataTableStub = defineComponent({
     loading: { type: Boolean, default: false }
   },
   template: '<div><div v-for="row in data" :key="row.id"><slot name="cell-actions" :row="row" /></div></div>'
-})
-
-const TotpStepUpDialogStub = defineComponent({
-  name: 'TotpStepUpDialog',
-  props: { controller: { type: Object, required: true } },
-  template: '<div data-testid="step-up-dialog" />'
 })
 
 const BaseDialogStub = defineComponent({
@@ -199,8 +169,6 @@ function mountView() {
         GroupCapacityBadge: true,
         GroupRateMultipliersModal: true,
         GroupRPMOverridesModal: true,
-        VideoPricingRulesEditor: true,
-        TotpStepUpDialog: TotpStepUpDialogStub,
         VueDraggable: true
       }
     }
@@ -215,16 +183,13 @@ describe('GroupsView duplicate action', () => {
     for (const fn of [
       listGroups,
       duplicateGroup,
-      listVideoPricingRules,
-      replaceVideoPricingRules,
       updateGroup,
-      getLiveCapability,
       getModelAllowlistCandidates,
       getUsageSummary,
       getCapacitySummary,
+      getLiveCapability,
       showSuccess,
-      showError,
-      apiPut
+      showError
     ]) {
       fn.mockReset()
     }
@@ -242,19 +207,6 @@ describe('GroupsView duplicate action', () => {
       name: 'Primary (Copy)',
       status: 'inactive'
     })
-    listVideoPricingRules.mockResolvedValue([{
-      id: 9,
-      group_id: 42,
-      external_model: 'seedance-2.0',
-      operation: 'generation',
-      resolution: '*',
-      audio_mode: 'any',
-      unit: 'per_output_second',
-      unit_price: 0.1,
-      upstream_unit_cost: null,
-      enabled: true
-    }])
-    replaceVideoPricingRules.mockResolvedValue([])
     getModelAllowlistCandidates.mockResolvedValue([])
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
@@ -274,47 +226,8 @@ describe('GroupsView duplicate action', () => {
 
     expect(duplicateGroup).toHaveBeenCalledTimes(1)
     expect(duplicateGroup).toHaveBeenCalledWith(42)
-    expect(listVideoPricingRules).toHaveBeenCalledWith(42)
-    expect(replaceVideoPricingRules).toHaveBeenCalledTimes(1)
-    expect(replaceVideoPricingRules).toHaveBeenCalledWith(43, [{
-      external_model: 'seedance-2.0',
-      operation: 'generation',
-      resolution: '*',
-      audio_mode: 'any',
-      unit: 'per_output_second',
-      unit_price: 0.1,
-      upstream_unit_cost: null,
-      enabled: true
-    }])
-    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess:Primary (Copy)')
+    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess')
     expect(listGroups).toHaveBeenCalledTimes(2)
-    wrapper.unmount()
-  })
-
-  it('duplicates a legacy non-video group without video pricing side effects', async () => {
-    listGroups.mockResolvedValueOnce({
-      items: [legacySourceGroup],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1
-    })
-    duplicateGroup.mockResolvedValueOnce({
-      ...legacySourceGroup,
-      id: 43,
-      name: 'Primary (Copy)',
-      status: 'inactive'
-    })
-    const wrapper = mountView()
-    await flushPromises()
-
-    await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
-    await flushPromises()
-
-    expect(duplicateGroup).toHaveBeenCalledWith(42)
-    expect(listVideoPricingRules).not.toHaveBeenCalled()
-    expect(replaceVideoPricingRules).not.toHaveBeenCalled()
-    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess:Primary (Copy)')
     wrapper.unmount()
   })
 
@@ -363,7 +276,7 @@ describe('GroupsView duplicate action', () => {
     await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
     await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('admin.groups.duplicateFailed')
+    expect(showError).toHaveBeenCalledWith('duplicate failed')
     expect(wrapper.get('[data-testid="group-duplicate"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
@@ -384,149 +297,13 @@ describe('GroupsView duplicate action', () => {
     await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
     await flushPromises()
 
-    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess:Primary (Copy)')
+    expect(showSuccess).toHaveBeenCalledWith('admin.groups.duplicateSuccess')
     expect(showError).toHaveBeenCalledWith('admin.groups.failedToLoad')
     expect(showError).not.toHaveBeenCalledWith('admin.groups.duplicateFailed')
     wrapper.unmount()
   })
 
-  it('keeps and reloads the duplicate while reporting localized partial success when pricing copy fails', async () => {
-    replaceVideoPricingRules.mockRejectedValueOnce({
-      status: 500,
-      code: 'UNKNOWN_BACKEND_FAILURE',
-      message: 'raw backend detail with secret=do-not-show'
-    })
-    const wrapper = mountView()
-    await flushPromises()
-
-    await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
-    await flushPromises()
-
-    expect(duplicateGroup).toHaveBeenCalledTimes(1)
-    expect(replaceVideoPricingRules).toHaveBeenCalledTimes(1)
-    expect(listGroups).toHaveBeenCalledTimes(2)
-    expect(showSuccess).not.toHaveBeenCalled()
-    expect(showError).toHaveBeenCalledWith(
-      'admin.groups.videoPricing.duplicatePartialSuccess:admin.groups.videoPricing.errors.generic'
-    )
-    expect(showError).not.toHaveBeenCalledWith(expect.stringContaining('secret'))
-    wrapper.unmount()
-  })
-
-  it('waits for the new group ID before reading and replacing source pricing', async () => {
-    let resolveDuplicate!: (value: AdminGroup) => void
-    duplicateGroup.mockImplementationOnce(
-      () => new Promise<AdminGroup>((resolve) => { resolveDuplicate = resolve })
-    )
-    const wrapper = mountView()
-    await flushPromises()
-
-    void wrapper.get('[data-testid="group-duplicate"]').trigger('click')
-    await wrapper.vm.$nextTick()
-    expect(listVideoPricingRules).not.toHaveBeenCalled()
-    expect(replaceVideoPricingRules).not.toHaveBeenCalled()
-
-    resolveDuplicate({ ...sourceGroup, id: 43, name: 'Primary (Copy)', status: 'inactive' })
-    await flushPromises()
-    expect(listVideoPricingRules).toHaveBeenCalledWith(42)
-    expect(replaceVideoPricingRules).toHaveBeenCalledWith(43, expect.any(Array))
-    wrapper.unmount()
-  })
-
-  it('filters dormant Kling rows before copying pricing to the duplicate', async () => {
-    listVideoPricingRules.mockResolvedValueOnce([
-      {
-        id: 8,
-        group_id: 42,
-        external_model: 'kling-3.0',
-        operation: 'generation',
-        resolution: '*',
-        audio_mode: 'any',
-        unit: 'per_output_second',
-        unit_price: 0.3,
-        upstream_unit_cost: null,
-        enabled: false
-      },
-      {
-        id: 9,
-        group_id: 42,
-        external_model: 'seedance-2.0',
-        operation: 'generation',
-        resolution: '*',
-        audio_mode: 'any',
-        unit: 'per_output_second',
-        unit_price: 0.1,
-        upstream_unit_cost: null,
-        enabled: true
-      }
-    ])
-    const wrapper = mountView()
-    await flushPromises()
-
-    await wrapper.get('[data-testid="group-duplicate"]').trigger('click')
-    await flushPromises()
-
-    expect(replaceVideoPricingRules).toHaveBeenCalledWith(43, [{
-      external_model: 'seedance-2.0',
-      operation: 'generation',
-      resolution: '*',
-      audio_mode: 'any',
-      unit: 'per_output_second',
-      unit_price: 0.1,
-      upstream_unit_cost: null,
-      enabled: true
-    }])
-    wrapper.unmount()
-  })
-
-  it('automatically retries pricing after step-up with the same PUT idempotency key', async () => {
-    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
-      '33333333-3333-4333-8333-333333333333'
-    )
-    replaceVideoPricingRules.mockImplementation(replaceVideoPricingRulesThroughClient)
-    apiPut
-      .mockRejectedValueOnce({ status: 403, code: 'STEP_UP_REQUIRED' })
-      .mockResolvedValueOnce({ data: [] })
-    const wrapper = mountView()
-    await flushPromises()
-
-    void wrapper.get('[data-testid="group-duplicate"]').trigger('click')
-    await vi.waitFor(() => expect(apiPut).toHaveBeenCalledTimes(1))
-    const controller = wrapper.getComponent(TotpStepUpDialogStub).props('controller') as {
-      onVerified: () => void
-    }
-    controller.onVerified()
-    await flushPromises()
-
-    expect(apiPut).toHaveBeenCalledTimes(2)
-    expect(apiPut.mock.calls[0][2].headers).toEqual(apiPut.mock.calls[1][2].headers)
-    expect(apiPut.mock.calls[1]).toEqual([
-      '/admin/groups/43/video-pricing-rules',
-      { rules: [{
-        external_model: 'seedance-2.0',
-        operation: 'generation',
-        resolution: '*',
-        audio_mode: 'any',
-        unit: 'per_output_second',
-        unit_price: 0.1,
-        upstream_unit_cost: null,
-        enabled: true
-      }] },
-      { headers: {
-        'Idempotency-Key': 'group-video-pricing-43-33333333-3333-4333-8333-333333333333'
-      } }
-    ])
-    wrapper.unmount()
-  })
-
   it('shows the standardized API message when updating a group fails', async () => {
-    listGroups.mockResolvedValueOnce({
-      items: [legacySourceGroup],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1
-    })
     updateGroup.mockRejectedValueOnce({
       status: 409,
       code: 409,
@@ -548,19 +325,71 @@ describe('GroupsView duplicate action', () => {
     wrapper.unmount()
   })
 
+  it('loads, edits, and saves custom reasoning multipliers for group pricing', async () => {
+    const group = {
+      ...sourceGroup,
+      model_pricing: [{
+        platform: 'openai', models: ['example-model'], billing_mode: 'token',
+        input_price: 3e-6, output_price: 15e-6, cache_write_price: null, cache_read_price: null,
+        image_input_price: null, image_output_price: null, per_request_price: null,
+        reasoning_effort_multipliers: { high: 1.5, max: 3 }, intervals: [], time_pricing: null,
+      }],
+    }
+    listGroups.mockResolvedValue({ items: [group], total: 1, page: 1, page_size: 20, pages: 1 })
+    updateGroup.mockResolvedValue(group)
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get<HTMLInputElement>('[data-reasoning-effort="high"]').element.value).toBe('1.5')
+    await wrapper.get('[data-reasoning-effort="high"]').setValue('0.5')
+    await wrapper.get('[data-reasoning-effort="max"]').setValue('')
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup).toHaveBeenCalledWith(42, expect.objectContaining({
+      model_pricing: [expect.objectContaining({ reasoning_effort_multipliers: { high: 0.5 } })],
+    }))
+    wrapper.unmount()
+  })
+
+  it('blocks saving an invalid group reasoning multiplier and allows clearing it', async () => {
+    const group = {
+      ...sourceGroup,
+      model_pricing: [{
+        platform: 'openai', models: ['example-model'], billing_mode: 'token',
+        input_price: 3e-6, output_price: 15e-6, cache_write_price: null, cache_read_price: null,
+        image_input_price: null, image_output_price: null, per_request_price: null,
+        reasoning_effort_multipliers: { high: 1.5 }, intervals: [], time_pricing: null,
+      }],
+    }
+    listGroups.mockResolvedValue({ items: [group], total: 1, page: 1, page_size: 20, pages: 1 })
+    updateGroup.mockResolvedValue(group)
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-reasoning-effort="high"]').setValue('0')
+    await wrapper.get('#edit-group-form').trigger('submit')
+    expect(updateGroup).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith(expect.stringContaining('reasoningEffortMultiplierPositive'))
+
+    await wrapper.get('[data-testid="reasoning-effort-multipliers"] button').trigger('click')
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup).toHaveBeenCalledWith(42, expect.objectContaining({
+      model_pricing: [expect.objectContaining({ reasoning_effort_multipliers: null })],
+    }))
+    wrapper.unmount()
+  })
+
   it('updates manifest controls immediately and submits the displayed selection', async () => {
     vi.useFakeTimers()
-    listGroups.mockResolvedValue({
-      items: [legacySourceGroup],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1
-    })
     vi.mocked(adminAPI.accounts.list).mockResolvedValue({
       items: [{ id: 5, name: 'Manifest account' }]
     } as never)
-    updateGroup.mockResolvedValue(legacySourceGroup)
+    updateGroup.mockResolvedValue(sourceGroup)
     const wrapper = mountView()
     try {
       await flushPromises()

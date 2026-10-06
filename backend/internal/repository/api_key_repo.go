@@ -182,7 +182,6 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldWeeklyLimitUsd,
 				group.FieldMonthlyLimitUsd,
 				group.FieldAllowImageGeneration,
-				group.FieldAllowVideoGeneration,
 				group.FieldAllowBatchImageGeneration,
 				group.FieldImageRateIndependent,
 				group.FieldImageRateMultiplier,
@@ -653,6 +652,17 @@ func apiKeyListOrder(params pagination.PaginationParams) []func(*entsql.Selector
 	sortBy := strings.ToLower(strings.TrimSpace(params.SortBy))
 	sortOrder := params.NormalizedSortOrder(pagination.SortOrderDesc)
 
+	if sortBy == "group" {
+		// Sort before pagination, keeping ungrouped keys last in either direction.
+		opts := []entsql.OrderTermOption{entsql.OrderNullsLast()}
+		tieOrder := dbent.Asc(apikey.FieldID)
+		if sortOrder == pagination.SortOrderDesc {
+			opts = append(opts, entsql.OrderDesc())
+			tieOrder = dbent.Desc(apikey.FieldID)
+		}
+		return []func(*entsql.Selector){apikey.ByGroupField(group.FieldName, opts...), tieOrder}
+	}
+
 	var field string
 	switch sortBy {
 	case "name":
@@ -980,7 +990,6 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		WeeklyLimitUSD:                  g.WeeklyLimitUsd,
 		MonthlyLimitUSD:                 g.MonthlyLimitUsd,
 		AllowImageGeneration:            g.AllowImageGeneration,
-		AllowVideoGeneration:            g.AllowVideoGeneration,
 		AllowBatchImageGeneration:       g.AllowBatchImageGeneration,
 		ImageRateIndependent:            g.ImageRateIndependent,
 		ImageRateMultiplier:             g.ImageRateMultiplier,

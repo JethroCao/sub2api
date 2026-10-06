@@ -368,61 +368,6 @@ func seedBackupSchedule(t *testing.T, repo *mockSettingRepo, cfg BackupScheduleC
 	require.NoError(t, repo.Set(context.Background(), settingKeyBackupSchedule, string(data)))
 }
 
-type memoryBackupRecordRepo struct {
-	mu      sync.Mutex
-	records map[string]BackupRecord
-}
-
-func newMemoryBackupRecordRepo() *memoryBackupRecordRepo {
-	return &memoryBackupRecordRepo{records: make(map[string]BackupRecord)}
-}
-
-func (r *memoryBackupRecordRepo) List(context.Context) ([]BackupRecord, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]BackupRecord, 0, len(r.records))
-	for _, record := range r.records {
-		out = append(out, record)
-	}
-	return out, nil
-}
-
-func (r *memoryBackupRecordRepo) Get(_ context.Context, id string) (*BackupRecord, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	record, ok := r.records[id]
-	if !ok {
-		return nil, ErrBackupNotFound
-	}
-	return &record, nil
-}
-
-func (r *memoryBackupRecordRepo) Upsert(_ context.Context, record *BackupRecord) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.records[record.ID] = *record
-	return nil
-}
-
-func (r *memoryBackupRecordRepo) Update(_ context.Context, record *BackupRecord) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.records[record.ID]; !ok {
-		return ErrBackupNotFound
-	}
-	r.records[record.ID] = *record
-	return nil
-}
-
-func (r *memoryBackupRecordRepo) Delete(_ context.Context, id string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.records[id]; !ok {
-		return ErrBackupNotFound
-	}
-	delete(r.records, id)
-	return nil
-}
 
 // ─── Tests ───
 
@@ -521,6 +466,53 @@ func TestBackupService_RecreatesObjectStoreWhenS3ConfigChangesInSettings(t *test
 	require.Equal(t, "bucket-b", factory.configs[1].Bucket)
 }
 
+// 一次不带 secret 的保存（表单第二次提交、改端点、存定时配置）继承的是 loadS3Config
+// 解密后的明文。若那条路径跳过加密，明文就会覆盖库里的密文，而读取侧“兼容未加密旧
+// 数据”的回退会把它掩盖成一条日志，功能照常，密钥却是明文落库的。
+func TestBackupService_S3ConfigStaysEncryptedAfterSecondSave(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupService(repo, &mockDumper{}, newMockObjectStore())
+
+	_, err := svc.UpdateS3Config(context.Background(), BackupS3Config{
+		Bucket:          "my-bucket",
+		AccessKeyID:     "AKID",
+		SecretAccessKey: "original-secret",
+	})
+	require.NoError(t, err)
+
+	storedSecret := func() string {
+		raw, _ := repo.GetValue(context.Background(), settingKeyBackupS3Config)
+		var stored BackupS3Config
+		require.NoError(t, json.Unmarshal([]byte(raw), &stored))
+		return stored.SecretAccessKey
+	}
+	require.Equal(t, "ENC:original-secret", storedSecret())
+
+	// 第二次保存不带 secret，只改别的字段。
+	_, err = svc.UpdateS3Config(context.Background(), BackupS3Config{
+		Bucket:      "my-bucket",
+		AccessKeyID: "AKID-NEW",
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, "ENC:original-secret", storedSecret(),
+		"secret must stay encrypted at rest after a save that inherits it")
+	require.NotEqual(t, "original-secret", storedSecret(), "secret must never be stored as plaintext")
+
+	// 第三次保存，确认不会反复套壳加密。
+	_, err = svc.UpdateS3Config(context.Background(), BackupS3Config{
+		Bucket:      "my-bucket",
+		AccessKeyID: "AKID-THIRD",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ENC:original-secret", storedSecret(), "secret must not be double-encrypted")
+
+	internal, err := svc.loadS3Config(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "original-secret", internal.SecretAccessKey)
+	require.Equal(t, "AKID-THIRD", internal.AccessKeyID)
+}
+
 func TestBackupService_UpdateS3Config_RejectsEphemeralKey(t *testing.T) {
 	repo := newMockSettingRepo()
 	svc := newTestBackupServiceEphemeralKey(repo)
@@ -582,47 +574,6 @@ func TestBackupService_SaveRecordConcurrency(t *testing.T) {
 	require.Len(t, records, n)
 }
 
-func TestBackupService_UsesRecordRepositoryWhenConfigured(t *testing.T) {
-	settingRepo := newMockSettingRepo()
-	recordRepo := newMemoryBackupRecordRepo()
-	svc := newTestBackupService(settingRepo, &mockDumper{}, newMockObjectStore())
-	svc.SetBackupRecordRepository(recordRepo)
-
-	err := svc.saveRecord(context.Background(), &BackupRecord{
-		ID:        "repo-1",
-		Status:    "completed",
-		StartedAt: time.Now().Format(time.RFC3339),
-	})
-
-	require.NoError(t, err)
-	raw, _ := settingRepo.GetValue(context.Background(), settingKeyBackupRecords)
-	require.Empty(t, raw, "backup records must not be written to settings when repository is configured")
-	record, err := recordRepo.Get(context.Background(), "repo-1")
-	require.NoError(t, err)
-	require.Equal(t, "completed", record.Status)
-}
-
-func TestBackupService_UpdateRecordDoesNotRecreateDeletedRecord(t *testing.T) {
-	settingRepo := newMockSettingRepo()
-	recordRepo := newMemoryBackupRecordRepo()
-	svc := newTestBackupService(settingRepo, &mockDumper{}, newMockObjectStore())
-	svc.SetBackupRecordRepository(recordRepo)
-
-	record := &BackupRecord{
-		ID:        "running-1",
-		Status:    "running",
-		StartedAt: time.Now().Format(time.RFC3339),
-	}
-	require.NoError(t, svc.saveRecord(context.Background(), record))
-	require.NoError(t, svc.deleteRecord(context.Background(), record.ID))
-
-	record.Status = "completed"
-	err := svc.updateRecord(context.Background(), record)
-
-	require.ErrorIs(t, err, ErrBackupNotFound)
-	_, err = svc.GetBackupRecord(context.Background(), record.ID)
-	require.ErrorIs(t, err, ErrBackupNotFound)
-}
 
 func TestBackupService_LoadRecords_Empty(t *testing.T) {
 	repo := newMockSettingRepo()
@@ -1428,10 +1379,11 @@ func TestRecoverStaleRecords(t *testing.T) {
 	})
 	// 模拟一条孤立的恢复中记录
 	_ = svc.saveRecord(context.Background(), &BackupRecord{
-		ID:            "stale-2",
-		Status:        "completed",
-		RestoreStatus: "running",
-		StartedAt:     time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+		ID:               "stale-2",
+		Status:           "completed",
+		RestoreStatus:    "running",
+		RestoreStartedAt: time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+		StartedAt:        time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
 	})
 
 	svc.recoverStaleRecords()

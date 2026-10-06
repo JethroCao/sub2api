@@ -213,7 +213,7 @@ export default {
     feishuOrg: '飞书组织权限',
     orgManager: '部门成员授权',
     securityAudit: '安全审计',
-    contentModeration: '内容审核',
+    contentModeration: '内容审计',
     promptAudit: '提示词审计',
     auditLogs: '操作日志',
   },

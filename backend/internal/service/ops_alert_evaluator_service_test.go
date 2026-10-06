@@ -12,6 +12,8 @@ import (
 
 var _ OpsRepository = (*stubOpsRepo)(nil)
 
+func timePtr(value time.Time) *time.Time { return &value }
+
 type stubOpsRepo struct {
 	OpsRepository
 	overview *OpsDashboardOverview

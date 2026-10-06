@@ -7,12 +7,12 @@ const concretePlatforms = [
   'gemini',
   'antigravity',
   'grok',
-  'video',
   'kimi',
   'zhipu',
   'deepseek',
   'minimax',
-  'opencode_go'
+  'opencode_go',
+  'typesafe'
 ]
 
 describe('platform option catalogs', () => {

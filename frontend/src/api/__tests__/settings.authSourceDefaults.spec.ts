@@ -9,14 +9,14 @@ import {
   type DefaultPlatformQuotasMap,
 } from "@/api/admin/settings";
 
-/** 全 null 的 5 平台 map，用于断言归一化默认值 */
+/** 全 null 的平台 map，用于断言归一化默认值 */
 const allNullQuotas: DefaultPlatformQuotasMap = {
   anthropic: { daily: null, weekly: null, monthly: null },
   openai:    { daily: null, weekly: null, monthly: null },
   gemini:    { daily: null, weekly: null, monthly: null },
   antigravity: { daily: null, weekly: null, monthly: null },
   grok: { daily: null, weekly: null, monthly: null },
-  video: { daily: null, weekly: null, monthly: null },
+  typesafe: { daily: null, weekly: null, monthly: null },
 }
 
 describe("admin settings auth source defaults helpers", () => {
@@ -96,7 +96,6 @@ describe("admin settings auth source defaults helpers", () => {
     // 未出现的平台（gemini/antigravity）归一化为 null
     expect(state.email.platform_quotas.gemini).toEqual({ daily: null, weekly: null, monthly: null });
     expect(state.email.platform_quotas.antigravity).toEqual({ daily: null, weekly: null, monthly: null });
-    expect(state.email.platform_quotas.video).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("appends auth source defaults back onto update payload", () => {
@@ -229,7 +228,6 @@ describe("admin settings auth source defaults helpers", () => {
     // 缺失平台归一化为全 null
     expect(emailQuotas.gemini).toEqual({ daily: null, weekly: null, monthly: null });
     expect(emailQuotas.antigravity).toEqual({ daily: null, weekly: null, monthly: null });
-    expect(emailQuotas.video).toEqual({ daily: null, weekly: null, monthly: null });
   });
 });
 
@@ -241,7 +239,6 @@ describe("normalizePlatformQuotasMap", () => {
     expect(result.gemini).toEqual({ daily: null, weekly: null, monthly: null });
     expect(result.antigravity).toEqual({ daily: null, weekly: null, monthly: null });
     expect(result.grok).toEqual({ daily: null, weekly: null, monthly: null });
-    expect(result.video).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
   it("无参数时返回全 6 平台全 null", () => {

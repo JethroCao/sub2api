@@ -1,132 +1,155 @@
 package service
 
 import (
-	"context"
-	"errors"
-	"math"
-	"net/http"
+	"log/slog"
+	"sort"
 	"strings"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
+// Canonical video price family keys used in groups.video_model_prices JSONB.
 const (
-	videoHoldRequestPrefix    = "video_hold:"
-	videoCaptureRequestPrefix = "video_capture:"
-	videoReleaseRequestPrefix = "video_release:"
+	VideoPriceFamilyGrokImagineVideo   = "grok-imagine-video"
+	VideoPriceFamilyGrokImagineVideo15 = "grok-imagine-video-1.5"
 )
 
-var (
-	ErrVideoFinalCostExceedsHold      = infraerrors.New(http.StatusConflict, "VIDEO_FINAL_COST_EXCEEDS_HOLD", "video final cost exceeds the held amount")
-	ErrVideoInsufficientBalance       = infraerrors.New(http.StatusPaymentRequired, "VIDEO_INSUFFICIENT_BALANCE", "insufficient balance for video hold")
-	ErrVideoSubscriptionQuotaExceeded = infraerrors.New(http.StatusPaymentRequired, "VIDEO_SUBSCRIPTION_QUOTA_EXCEEDED", "subscription quota is insufficient for video hold")
-	ErrVideoBillingAlreadyFinalized   = infraerrors.New(http.StatusConflict, "VIDEO_BILLING_ALREADY_FINALIZED", "video billing hold was already captured or released")
-	ErrVideoBillingUnavailable        = errors.New("video billing repository is not configured")
-)
-
-func VideoHoldRequestID(requestID string) string {
-	return videoHoldRequestPrefix + strings.TrimSpace(requestID)
-}
-
-func VideoCaptureRequestID(requestID string) string {
-	return videoCaptureRequestPrefix + strings.TrimSpace(requestID)
-}
-
-func VideoReleaseRequestID(requestID string) string {
-	return videoReleaseRequestPrefix + strings.TrimSpace(requestID)
-}
-
-type VideoBillingService struct {
-	repo UsageBillingRepository
-}
-
-func NewVideoBillingService(repo UsageBillingRepository) *VideoBillingService {
-	return &VideoBillingService{repo: repo}
-}
-
-func (s *VideoBillingService) Reserve(ctx context.Context, task VideoTask) error {
-	if s == nil || s.repo == nil {
-		return ErrVideoBillingUnavailable
+// CanonicalGrokImagineVideoPriceFamily normalizes model aliases / preview / legacy
+// IDs onto the price-family keys stored in video_model_prices.
+func CanonicalGrokImagineVideoPriceFamily(model string) string {
+	if model == "" {
+		return ""
 	}
-	cmd, err := buildVideoHoldCommand(task, VideoHoldRequestID(task.RequestID), 0)
-	if err != nil {
-		return err
-	}
-	_, err = s.repo.ReserveVideo(ctx, cmd)
-	return err
-}
-
-func (s *VideoBillingService) Capture(ctx context.Context, task VideoTask, actualAmount float64) error {
-	if s == nil || s.repo == nil {
-		return ErrVideoBillingUnavailable
-	}
-	if !validVideoBillingAmount(actualAmount) || actualAmount > task.FrozenAmount {
-		return ErrVideoFinalCostExceedsHold
-	}
-	cmd, err := buildVideoHoldCommand(task, VideoCaptureRequestID(task.RequestID), actualAmount)
-	if err != nil {
-		return err
-	}
-	_, err = s.repo.CaptureVideo(ctx, cmd)
-	return err
-}
-
-func (s *VideoBillingService) Release(ctx context.Context, task VideoTask) error {
-	if s == nil || s.repo == nil {
-		return ErrVideoBillingUnavailable
-	}
-	cmd, err := buildVideoHoldCommand(task, VideoReleaseRequestID(task.RequestID), 0)
-	if err != nil {
-		return err
-	}
-	_, err = s.repo.ReleaseVideo(ctx, cmd)
-	return err
-}
-
-func (s *VideoBillingService) HandleTerminal(ctx context.Context, task VideoTask) error {
-	switch task.Status {
-	case VideoTaskUnknown:
-		return nil
-	case VideoTaskFailed, VideoTaskCancelled:
-		return s.Release(ctx, task)
-	case VideoTaskSucceeded:
-		if task.SettledAmount == nil {
-			return ErrVideoTaskInvalidRequest
+	// Prefer shared xAI helper for known aliases. Keep future native Imagine
+	// models distinct so operators can assign them independent prices.
+	if c := xai.CanonicalImagineVideoModel(model); c != "" {
+		switch c {
+		case xai.DefaultImagineVideo15Model:
+			return VideoPriceFamilyGrokImagineVideo15
+		case xai.DefaultImagineVideoModel:
+			return VideoPriceFamilyGrokImagineVideo
 		}
-		return s.Capture(ctx, task, *task.SettledAmount)
+		if strings.HasPrefix(c, "grok-imagine-video-") {
+			return c
+		}
+	}
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, prefix := range []string{"xai/", "x-ai/", "grok/"} {
+		if strings.HasPrefix(m, prefix) {
+			m = strings.TrimPrefix(m, prefix)
+			break
+		}
+	}
+	switch {
+	case m == "grok-imagine-video-1.5" || m == "grok-imagine-video-1.5-preview" ||
+		m == "grok-video-1.5" || strings.Contains(m, "video-1.5"):
+		return VideoPriceFamilyGrokImagineVideo15
+	case m == "grok-imagine-video" || m == "grok-imagine-video-preview" ||
+		m == "grok-video" || m == "grok-video-latest":
+		return VideoPriceFamilyGrokImagineVideo
 	default:
-		return ErrVideoTaskInvalidTransition
+		return ""
 	}
 }
 
-func buildVideoHoldCommand(task VideoTask, requestID string, actualAmount float64) (*VideoHoldCommand, error) {
-	if strings.TrimSpace(task.RequestID) == "" || task.UserID <= 0 || task.APIKeyID <= 0 ||
-		!validVideoBillingAmount(task.FrozenAmount) || !validVideoBillingAmount(actualAmount) {
-		return nil, ErrVideoTaskInvalidRequest
+// NormalizeVideoModelPrices cleans and canonicalizes a per-model resolution map.
+// Keys become price families; tiers use 480p/720p/1080p. Negative prices dropped.
+//
+// Model keys are walked in sorted order rather than in Go map order: several
+// aliases can canonicalize onto the same family, and an unordered walk would
+// make the winning price for a conflicting tier vary between processes.
+// Unrecognized tiers are dropped with a warning instead of silently collapsing
+// into the 480p bucket.
+func NormalizeVideoModelPrices(in map[string]map[string]float64) map[string]map[string]float64 {
+	if len(in) == 0 {
+		return nil
 	}
-	billingMode := strings.ToLower(strings.TrimSpace(task.BillingMode))
-	if billingMode == "" {
-		billingMode = "balance"
+	modelKeys := make([]string, 0, len(in))
+	for modelKey := range in {
+		modelKeys = append(modelKeys, modelKey)
 	}
-	if billingMode != "balance" && billingMode != "subscription" {
-		return nil, ErrVideoTaskInvalidRequest
+	sort.Strings(modelKeys)
+	out := make(map[string]map[string]float64)
+	for _, modelKey := range modelKeys {
+		tierPrices := in[modelKey]
+		if len(tierPrices) == 0 {
+			continue
+		}
+		family := CanonicalGrokImagineVideoPriceFamily(modelKey)
+		if family == "" {
+			key := strings.ToLower(strings.TrimSpace(modelKey))
+			switch key {
+			case VideoPriceFamilyGrokImagineVideo, VideoPriceFamilyGrokImagineVideo15:
+				family = key
+			default:
+				if key == "" {
+					continue
+				}
+				family = key
+			}
+		}
+		normalizedTiers := out[family]
+		if normalizedTiers == nil {
+			normalizedTiers = make(map[string]float64)
+		}
+		tierKeys := make([]string, 0, len(tierPrices))
+		for tierKey := range tierPrices {
+			tierKeys = append(tierKeys, tierKey)
+		}
+		sort.Strings(tierKeys)
+		for _, tierKey := range tierKeys {
+			price := tierPrices[tierKey]
+			if price < 0 {
+				continue
+			}
+			tier, ok := LookupVideoBillingResolution(tierKey)
+			if !ok {
+				slog.Warn("video_model_prices_unknown_resolution_dropped",
+					"model_key", modelKey,
+					"family", family,
+					"resolution", tierKey)
+				continue
+			}
+			if existing, exists := normalizedTiers[tier]; exists && existing != price {
+				slog.Warn("video_model_prices_conflicting_tier_price",
+					"model_key", modelKey,
+					"family", family,
+					"resolution", tier,
+					"previous_price", existing,
+					"price", price)
+			}
+			normalizedTiers[tier] = price
+		}
+		if len(normalizedTiers) > 0 {
+			out[family] = normalizedTiers
+		}
 	}
-	if billingMode == "subscription" && (task.SubscriptionID == nil || *task.SubscriptionID <= 0) {
-		return nil, ErrVideoTaskInvalidRequest
+	if len(out) == 0 {
+		return nil
 	}
-	return &VideoHoldCommand{
-		RequestID:          requestID,
-		RequestPayloadHash: strings.TrimSpace(task.RequestHash),
-		UserID:             task.UserID,
-		APIKeyID:           task.APIKeyID,
-		SubscriptionID:     task.SubscriptionID,
-		VideoRequestID:     task.RequestID,
-		BillingMode:        billingMode,
-		HoldAmount:         task.FrozenAmount,
-		ActualAmount:       actualAmount,
-	}, nil
+	return out
 }
 
-func validVideoBillingAmount(value float64) bool {
-	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
+// LookupVideoModelPrice returns a per-second price from a model×resolution map, or nil.
+func LookupVideoModelPrice(prices map[string]map[string]float64, model, resolution string) *float64 {
+	if len(prices) == 0 {
+		return nil
+	}
+	family := CanonicalGrokImagineVideoPriceFamily(model)
+	if family == "" {
+		family = strings.ToLower(strings.TrimSpace(model))
+	}
+	if family == "" {
+		return nil
+	}
+	tierPrices, ok := prices[family]
+	if !ok || len(tierPrices) == 0 {
+		return nil
+	}
+	tier := NormalizeVideoBillingResolutionOrDefault(resolution)
+	if price, ok := tierPrices[tier]; ok {
+		p := price
+		return &p
+	}
+	return nil
 }

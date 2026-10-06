@@ -16,26 +16,6 @@ func NewCompositeRouteResolver(repo CompositeModelRouteRepository) *CompositeRou
 	return &CompositeRouteResolver{repo: repo}
 }
 
-// CanRoutePlatform reports whether a composite group has at least one enabled
-// explicit route to a concrete platform. Model-less legacy task lookups use
-// this narrow check instead of guessing from a request body that does not exist.
-func (r *CompositeRouteResolver) CanRoutePlatform(ctx context.Context, groupID int64, platform string) (bool, error) {
-	platform = strings.TrimSpace(platform)
-	if r == nil || r.repo == nil || groupID <= 0 || !isConcreteRequestPlatform(platform) {
-		return false, nil
-	}
-	routes, err := r.repo.ListByGroup(ctx, groupID, false)
-	if err != nil {
-		return false, fmt.Errorf("list composite routes: %w", err)
-	}
-	for _, route := range routes {
-		if route.Enabled && strings.TrimSpace(route.TargetPlatform) == platform {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func (r *CompositeRouteResolver) SetModelOwnershipResolver(resolver CompositeModelOwnershipResolver) {
 	if r != nil {
 		r.modelOwnershipResolver = resolver

@@ -90,7 +90,6 @@ func mustCreateGroup(t *testing.T, client *dbent.Client, g *service.Group) *serv
 		SetSubscriptionType(g.SubscriptionType).
 		SetRateMultiplier(g.RateMultiplier).
 		SetIsExclusive(g.IsExclusive).
-		SetAllowVideoGeneration(g.AllowVideoGeneration).
 		SetForceOpenaiFast(g.ForceOpenAIFast).
 		SetFreeOpenaiFast(g.FreeOpenAIFast).
 		SetModelAllowlist(service.DomainGroupModelAllowlist(g.ModelAllowlist)).

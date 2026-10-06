@@ -744,16 +744,18 @@ func normalizeGrokReasoningEffortValue(raw, model string) (string, bool) {
 }
 
 // GrokSupportsXHighReasoningEffort reports whether the model advertises and
-// forwards the xhigh reasoning effort (Grok 4.6 and its undated alias).
+// forwards the xhigh reasoning effort (Grok 4.6/4.7 and their aliases).
 func GrokSupportsXHighReasoningEffort(model string) bool {
 	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
-	return model == "grok-4.6" || model == "grok-4.6-latest"
+	return model == "grok-4.7" || model == "grok-4.7-latest" ||
+		model == "grok-4.6" || model == "grok-4.6-latest"
 }
 
 func grokSupportsReasoningEffort(model string) bool {
 	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
 	switch model {
 	case "grok-4.5", "grok-4.5-latest", "grok-4.6", "grok-4.6-latest",
+		"grok-4.7", "grok-4.7-latest",
 		"grok-4.3", "grok-4.3-latest",
 		"grok-3-mini", "grok-3-mini-fast", "grok-4.20-0309-reasoning",
 		"grok-4.20-reasoning", "grok-4.20-multi-agent-0309":
@@ -1598,17 +1600,6 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	return req, nil
 }
 
-// GrokVideoProvider exposes the durable-video adapter with the gateway's
-// established upstream transport, OAuth token lifecycle, and URL policy. The
-// legacy media forwarding path remains in place until durable routing takes
-// over in a later migration.
-func (s *OpenAIGatewayService) GrokVideoProvider() *GrokVideoProvider {
-	if s == nil {
-		return NewGrokVideoProvider(nil, nil)
-	}
-	return NewGrokVideoProvider(s.httpUpstream, s.grokTokenProvider, s.cfg)
-}
-
 // applyGrokCLIHeaders identifies subscription traffic as a supported Grok CLI
 // version. The CLI gateway rejects otherwise valid OAuth requests without it.
 // Identity pins come from package xai so service-layer headers match the final
@@ -1622,8 +1613,8 @@ func applyGrokCLIHeaders(headers http.Header) {
 	headers.Set("X-Grok-Client-Version", version)
 	headers.Set("x-grok-client-version", version)
 	headers.Set("x-grok-client-identifier", xai.CLIClientIdentifier)
-	// Historical mode value expected by some unit tests / older CLI probes.
-	headers.Set("X-Grok-Client-Mode", "interactive")
+	// 对齐官方 CLI 交互模式，网关请求与额度探测共用身份。
+	headers.Set("X-Grok-Client-Mode", xai.CLIClientMode)
 }
 
 func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, account *Account, snapshot *xai.QuotaSnapshot) {

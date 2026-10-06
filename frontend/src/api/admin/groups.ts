@@ -13,9 +13,7 @@ import type {
   CompositeRouteDecision,
   CreateGroupRequest,
   UpdateGroupRequest,
-  PaginatedResponse,
-  VideoPricingRule,
-  VideoPricingRuleInput
+  PaginatedResponse
 } from '@/types'
 
 export interface LiveCapability {
@@ -220,83 +218,6 @@ export async function duplicate(id: number): Promise<AdminGroup> {
 export async function update(id: number, updates: UpdateGroupRequest): Promise<AdminGroup> {
   const { data } = await apiClient.put<AdminGroup>(`/admin/groups/${id}`, updates)
   return data
-}
-
-type VideoPricingRuleWire = Partial<Record<
-  | 'id' | 'ID' | 'group_id' | 'GroupID' | 'external_model' | 'ExternalModel'
-  | 'operation' | 'Operation' | 'resolution' | 'Resolution' | 'audio_mode' | 'AudioMode'
-  | 'unit' | 'Unit' | 'unit_price' | 'UnitPrice' | 'upstream_unit_cost' | 'UpstreamUnitCost'
-  | 'enabled' | 'Enabled',
-  unknown
->>
-
-function normalizeVideoPricingRule(value: unknown): VideoPricingRule {
-  const rule = (typeof value === 'object' && value !== null ? value : {}) as VideoPricingRuleWire
-  const field = (snake: keyof VideoPricingRuleWire, go: keyof VideoPricingRuleWire) =>
-    rule[snake] ?? rule[go]
-  return {
-    id: Number(field('id', 'ID')),
-    group_id: Number(field('group_id', 'GroupID')),
-    external_model: String(field('external_model', 'ExternalModel') ?? ''),
-    operation: String(field('operation', 'Operation') ?? '') as VideoPricingRule['operation'],
-    resolution: String(field('resolution', 'Resolution') ?? '') as VideoPricingRule['resolution'],
-    audio_mode: String(field('audio_mode', 'AudioMode') ?? '') as VideoPricingRule['audio_mode'],
-    unit: String(field('unit', 'Unit') ?? '') as VideoPricingRule['unit'],
-    unit_price: Number(field('unit_price', 'UnitPrice')),
-    upstream_unit_cost: field('upstream_unit_cost', 'UpstreamUnitCost') == null
-      ? null
-      : Number(field('upstream_unit_cost', 'UpstreamUnitCost')),
-    enabled: field('enabled', 'Enabled') === true
-  }
-}
-
-export async function listVideoPricingRules(id: number): Promise<VideoPricingRule[]> {
-  const { data } = await apiClient.get<unknown[]>(`/admin/groups/${id}/video-pricing-rules`)
-  if (!Array.isArray(data)) {
-    throw { code: 'VIDEO_PRICING_RULES_RESPONSE_INVALID' }
-  }
-  return data.map(normalizeVideoPricingRule)
-}
-
-const videoPricingOperationKeys = new Map<number, { fingerprint: string; key: string }>()
-
-function videoPricingOperationKey(id: number, rules: VideoPricingRuleInput[]) {
-  const fingerprint = JSON.stringify(rules)
-  const existing = videoPricingOperationKeys.get(id)
-  if (existing?.fingerprint === fingerprint) return existing
-  const requestID = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  const operation = { fingerprint, key: `group-video-pricing-${id}-${requestID}` }
-  videoPricingOperationKeys.set(id, operation)
-  return operation
-}
-
-export async function replaceVideoPricingRules(
-  id: number,
-  rules: VideoPricingRuleInput[]
-): Promise<VideoPricingRule[]> {
-  const operation = videoPricingOperationKey(id, rules)
-  try {
-    const { data } = await apiClient.put<unknown[]>(
-      `/admin/groups/${id}/video-pricing-rules`,
-      { rules },
-      { headers: { 'Idempotency-Key': operation.key } }
-    )
-    if (videoPricingOperationKeys.get(id) === operation) videoPricingOperationKeys.delete(id)
-    return Array.isArray(data) ? data.map(normalizeVideoPricingRule) : []
-  } catch (error) {
-    const marker = typeof error === 'object' && error !== null
-      ? String((error as { reason?: unknown; code?: unknown }).reason
-        ?? (error as { code?: unknown }).code
-        ?? '')
-      : ''
-    if (
-      marker === 'IDEMPOTENCY_KEY_CONFLICT'
-      && videoPricingOperationKeys.get(id) === operation
-    ) {
-      videoPricingOperationKeys.delete(id)
-    }
-    throw error
-  }
 }
 
 /**
@@ -560,8 +481,6 @@ export const groupsAPI = {
   create,
   duplicate,
   update,
-  listVideoPricingRules,
-  replaceVideoPricingRules,
   delete: deleteGroup,
   toggleStatus,
   getStats,

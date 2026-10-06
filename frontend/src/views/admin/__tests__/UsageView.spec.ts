@@ -4,7 +4,7 @@ import { defineComponent, ref } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, listVideoTasks, getVideoTask, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
+const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -19,8 +19,6 @@ const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listE
     getById: vi.fn(),
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
-    listVideoTasks: vi.fn(),
-    getVideoTask: vi.fn(),
     routeQuery: {} as Record<string, string>,
 		aoaToSheet: vi.fn(() => ({})),
 		sheetAddAoa: vi.fn(),
@@ -70,8 +68,6 @@ vi.mock('@/api/admin', () => ({
 vi.mock('@/api/admin/usage', () => ({
   adminUsageAPI: {
 		list: exportList,
-    listVideoTasks,
-    getVideoTask,
   },
 }))
 
@@ -177,64 +173,6 @@ const mountRouteFilteredUsageView = () => mount(UsageView, {
     ModelDistributionChart: true, GroupDistributionChart: true,
     EndpointDistributionChart: true, UserTokenRanking: true,
   } },
-})
-
-describe('admin UsageView video tasks tab', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-    list.mockResolvedValue({ items: [], total: 0, pages: 0 })
-    getStats.mockResolvedValue({ total_requests: 0, total_input_tokens: 0, total_output_tokens: 0, total_cache_tokens: 0, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0 })
-    getSnapshotV2.mockResolvedValue({ trend: [], models: [], groups: [] })
-    getModelStats.mockResolvedValue({ models: [] })
-    listVideoTasks.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 })
-  })
-
-  afterEach(() => vi.useRealTimers())
-
-  it('loads video tasks only after the video tab is opened', async () => {
-    const wrapper = mount(UsageView, {
-      global: { stubs: {
-        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
-        UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
-        UserBalanceHistoryModal: true, Pagination: true, Select: true, DateRangePicker: true,
-        Icon: true, TokenUsageTrend: true, ModelDistributionChart: true,
-        GroupDistributionChart: true, EndpointDistributionChart: true, UserTokenRanking: true,
-        VideoTasksTable: true, VideoTaskDetailModal: true,
-      } },
-    })
-    await flushPromises()
-    expect(listVideoTasks).not.toHaveBeenCalled()
-    await wrapper.get('[data-testid="usage-detail-tab-video"]').trigger('click')
-    await flushPromises()
-    expect(listVideoTasks).toHaveBeenCalledTimes(1)
-  })
-
-  it('reloads an acted-on detail even when the task leaves the current page', async () => {
-    const detail = { task: { request_id: 'vid_00000000000000000000000000000001' }, events: [], result_url_summary: '' }
-    getVideoTask.mockResolvedValue(detail)
-    const wrapper = mount(UsageView, {
-      global: { stubs: {
-        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
-        UsageTable: true, UsageExportProgress: true, UsageCleanupDialog: true,
-        UserBalanceHistoryModal: true, Pagination: true, Select: true, DateRangePicker: true,
-        Icon: true, TokenUsageTrend: true, ModelDistributionChart: true,
-        GroupDistributionChart: true, EndpointDistributionChart: true, UserTokenRanking: true,
-        VideoTasksTable: { emits: ['open'], template: '<button data-testid="open-video" @click="$emit(\'open\', { request_id: \'vid_00000000000000000000000000000001\' })" />' },
-        VideoTaskDetailModal: { props: ['show'], emits: ['refreshed'], template: '<button v-if="show" data-testid="refresh-video" @click="$emit(\'refreshed\', \'vid_00000000000000000000000000000001\')" />' },
-      } },
-    })
-    await flushPromises()
-    await wrapper.get('[data-testid="usage-detail-tab-video"]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-testid="open-video"]').trigger('click')
-    await flushPromises()
-    expect(getVideoTask).toHaveBeenCalledTimes(1)
-
-    // The refreshed list remains empty, simulating a task leaving the active filter/page.
-    await wrapper.get('[data-testid="refresh-video"]').trigger('click')
-    await flushPromises()
-    expect(getVideoTask).toHaveBeenCalledTimes(2)
-  })
 })
 
 describe('admin UsageView route filters', () => {
@@ -782,7 +720,7 @@ describe('admin UsageView ranking tab', () => {
     expect(wrapper.find('[data-test="ranking"]').exists()).toBe(false)
 
     const tabs = wrapper.findAll('[data-testid^="usage-detail-tab-"]')
-    expect(tabs).toHaveLength(4)
+    expect(tabs).toHaveLength(3)
     await tabs[2].trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-test="ranking"]').exists()).toBe(true)
