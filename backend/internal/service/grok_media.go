@@ -310,7 +310,7 @@ func (s *OpenAIGatewayService) BindGrokMediaVideoRequestAccount(
 	}
 	// Video jobs may complete well after WS sticky TTL (default 1h). Bind at least
 	// as long as the pending-billing snapshot so late status/content polls resolve.
-	ttl := grokVideoPendingBillingTTL(s.cfg)
+	ttl := mediaVideoPendingBillingTTL(requestID, s.cfg)
 	if s.cfg != nil && s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds > 0 {
 		if sticky := time.Duration(s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds) * time.Second; sticky > ttl {
 			ttl = sticky
@@ -375,12 +375,13 @@ func (s *OpenAIGatewayService) SelectMediaVideoRequestAccount(
 // first observes a completed video URL. Status may omit model/duration; we fall
 // back to this snapshot, then defaults.
 type GrokVideoPendingBilling struct {
-	Model                string `json:"model"`
-	BillingModel         string `json:"billing_model,omitempty"`
-	UpstreamModel        string `json:"upstream_model,omitempty"`
-	VideoResolution      string `json:"video_resolution,omitempty"`
-	VideoDurationSeconds int    `json:"video_duration_seconds,omitempty"`
-	OriginalModel        string `json:"original_model,omitempty"`
+	Model                string                   `json:"model"`
+	BillingModel         string                   `json:"billing_model,omitempty"`
+	UpstreamModel        string                   `json:"upstream_model,omitempty"`
+	VideoResolution      string                   `json:"video_resolution,omitempty"`
+	VideoDurationSeconds int                      `json:"video_duration_seconds,omitempty"`
+	OriginalModel        string                   `json:"original_model,omitempty"`
+	SeedanceBilling      *SeedanceBillingSnapshot `json:"seedance_billing,omitempty"`
 	// CreatedAt is when the gateway accepted the async create (RFC3339Nano UTC).
 	// duration_ms for deferred billing is measured from this instant until the
 	// first official done+video.url observation (status poll or content download),
@@ -439,6 +440,22 @@ func grokVideoBilledClaimTTL(cfg *config.Config) time.Duration {
 	return 48 * time.Hour
 }
 
+func mediaVideoPendingBillingTTL(requestID string, cfg *config.Config) time.Duration {
+	// Ark tasks can run for 72 hours, while draft IDs remain usable for 7 days.
+	// Retain ownership and the immutable price snapshot beyond that lifecycle.
+	if strings.HasPrefix(strings.TrimSpace(requestID), "seedance:") {
+		return 8 * 24 * time.Hour
+	}
+	return grokVideoPendingBillingTTL(cfg)
+}
+
+func mediaVideoBilledClaimTTL(requestID string, cfg *config.Config) time.Duration {
+	if strings.HasPrefix(strings.TrimSpace(requestID), "seedance:") {
+		return 8 * 24 * time.Hour
+	}
+	return grokVideoBilledClaimTTL(cfg)
+}
+
 // StoreGrokVideoPendingBilling persists create-time billing params for deferred status billing.
 func (s *OpenAIGatewayService) StoreGrokVideoPendingBilling(
 	ctx context.Context,
@@ -473,7 +490,7 @@ func (s *OpenAIGatewayService) StoreGrokVideoPendingBilling(
 	if err != nil {
 		return err
 	}
-	return s.cache.SetGrokVideoPendingBilling(ctx, key, payload, grokVideoPendingBillingTTL(s.cfg))
+	return s.cache.SetGrokVideoPendingBilling(ctx, key, payload, mediaVideoPendingBillingTTL(requestID, s.cfg))
 }
 
 // LoadGrokVideoPendingBilling returns the create-time snapshot (may be nil on miss).
@@ -514,7 +531,7 @@ func (s *OpenAIGatewayService) ClaimGrokVideoBilling(
 	if key == "" {
 		return false, fmt.Errorf("grok video billing claim key is invalid")
 	}
-	return s.cache.ClaimGrokVideoBilled(ctx, key, grokVideoBilledClaimTTL(s.cfg))
+	return s.cache.ClaimGrokVideoBilled(ctx, key, mediaVideoBilledClaimTTL(requestID, s.cfg))
 }
 
 // ReleaseGrokVideoBilling clears a claim after a failed durable RecordUsage so a

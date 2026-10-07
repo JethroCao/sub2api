@@ -275,7 +275,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		result.UpstreamResponseModel,
 		result.UpstreamResponseModelConflict,
 		result.ImageCount > 0 || result.VideoCount > 0 || result.WebSearchCalls > 0 ||
-			result.AudioUsage != nil || result.SearchCount > 0,
+			result.AudioUsage != nil || result.SearchCount > 0 || result.SeedanceBilling != nil,
 	); responseModel != "" && !strings.EqualFold(responseModel, baselineBillingModel) {
 		if identified, responseChannelPriced := s.hasIdentifiedOpenAIResponsePricing(ctx, responseModel, apiKey); identified {
 			responseModels := s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, usageBillingModelCandidates(responseModel))
@@ -425,7 +425,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		usageLog.ActualCost = cost.ActualCost
 		usageLog.LongContextBillingApplied = cost.LongContextBillingApplied
 	}
-	if isVideoUsage && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
+	if result.SeedanceBilling != nil {
+		usageLog.RateMultiplier = baseMultiplier
+		usageLog.VideoResolution = optionalTrimmedStringPtr(result.SeedanceBilling.Resolution)
+	} else if isVideoUsage && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
 		usageLog.RateMultiplier = videoMultiplier
 	} else if result.ImageCount > 0 && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
 		usageLog.RateMultiplier = imageMultiplier
@@ -572,6 +575,10 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	pricingAt time.Time,
 ) (*CostBreakdown, error) {
 	billingModel := firstUsageBillingModel(billingModels)
+	if result != nil && result.SeedanceBilling != nil {
+		// Native Ark media uses the base group/user rate without token peak factors.
+		return calculateSeedanceOfficialCost(result.SeedanceBilling, tokens.OutputTokens, webSearchMultiplier)
+	}
 	if result != nil && result.WebSearchCalls > 0 {
 		// Codex alpha/search 网页搜索按次计费：上游不返回 usage/token 字段，单价只取
 		// 分组覆盖价（nil 时默认 0.01 = 官方 $10/1000 次），不参与渠道级模型定价。

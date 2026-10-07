@@ -38,8 +38,37 @@ curl -X DELETE "$SUB2API_BASE_URL/api/v3/contents/generations/tasks/$TASK_ID" \
 
 - 查询和删除只能访问同一用户、同一 API Key、同一分组创建的任务，并始终使用原提交账号；不会转到其他账号查询。
 - 创建时不扣 token 用量。首次查询到 `succeeded` 后，根据上游 `usage.completion_tokens` 计费；重复查询由共享缓存声明和持久化用量去重共同保护。失败、排队及运行中的任务不计费。
-- Redis 保存任务绑定及创建时的模型快照，默认 24 小时。需保留 Redis 状态并在有效期内查询完成结果。当前不会后台轮询；只使用回调而不查询的任务不会自动结算。
+- Redis 保存任务绑定及创建时的模型快照 8 天，覆盖 Ark 最长 72 小时任务和 7 天样片有效期。需保留 Redis 状态并在有效期内查询完成结果。当前不会后台轮询；只使用回调而不查询的任务不会自动结算。
 - 不开放上游的任务列表接口，防止共享账号的任务泄露给其他用户。删除遵循上游语义，不自动退款。
 - 异步创建的上游错误不自动重试，以免重复创建付费任务。
 
 协议依据：[火山官方 Go SDK](https://github.com/volcengine/volcengine-go-sdk/blob/master/service/arkruntime/model/content_generation.go)、[创建任务文档](https://www.volcengine.com/docs/82379/1520757)、[查询任务文档](https://www.volcengine.com/docs/82379/1521309)。
+
+## Seedance 2.0 / 2.5 官方分档计费
+
+OpenAI API Key 账号可在 `credentials` 中显式配置下面两个字符串字段，启用火山官方刊例价；未启用的账号继续使用原来的分组/渠道 token 定价。
+
+```json
+{
+  "seedance_official_pricing": "true",
+  "seedance_usd_to_cny_rate": "6.7351"
+}
+```
+
+汇率是 **1 美元对应的人民币金额**。上例取 2026-10-07 [中国银行中行折算价](https://www.boc.cn/sourcedb/whpj/)；它是可调整的固定配置，不是每天自动刷新的汇率。不要把人民币单价直接填进美元账本。每个任务创建时保存完整价格档位和汇率快照，后续调整不会追溯修改旧任务。
+
+[火山官方价格](https://docs.volcengine.com/docs/ark/model-pricing)（2026-10-07 核对，人民币 / 百万 `completion_tokens`）：
+
+| 模型 | 输出分辨率 | 不含输入视频 | 含输入视频 |
+| --- | --- | ---: | ---: |
+| Seedance 2.0 | 480p / 720p | 46 | 28 |
+| Seedance 2.0 | 1080p | 51 | 31 |
+| Seedance 2.0 | 4k | 26 | 16 |
+| Seedance 2.5 | 480p / 720p | 70 | 42 |
+| Seedance 2.5 | 1080p | 77 | 46 |
+
+- 美元费用 = 官方实际 `usage.completion_tokens` × 对应人民币单价 ÷ 1,000,000 ÷ 汇率；再应用基础分组/用户倍率。倍率 1 即不加价，不叠加文本 token 高峰倍率，也不使用 Grok 按秒价。
+- 公开模型名支持 `seedance-2.0` / `seedance-2.5` 及官方 `doubao-seedance-2-0-*` / `doubao-seedance-2-5-*` 名称。映射到 `ep-*` 时按公开名识别模型版本；管理员须确保接入点对应正确版本。fast / mini 和其他版本不套用本表。
+- 输入中有 `content[].type=video_url` 才用含视频价；图片和音频不会被当成视频。分辨率优先使用成功查询响应的 `resolution`；缺省按请求参数（含 `--rs` 文本参数）及官方默认 720p。
+- 2.5 Draft 按 480p；正式视频的 `content[].type=draft_task` 引用同一用户、API Key、分组创建的样片，调度固定到原提交账号，默认且仅支持 1080p，按样片原始请求是否含视频决定价格。两步各自按官方实际 token 独立结算，样片产物本身不算输入视频。
+- 缺少汇率、没有对应价格或无法验证样片归属时，在创建付费上游任务之前拒绝请求，不静默生成免费任务。本模式覆盖上述两种模型的在线 token 刊例价，不代替上游合同折扣或其他增值服务收费。

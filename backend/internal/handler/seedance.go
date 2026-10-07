@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // SeedanceTasks exposes Ark's native asynchronous video task protocol.
@@ -48,11 +50,20 @@ func prepareSeedanceCompletionBilling(ctx context.Context, h *OpenAIGatewayHandl
 	if err != nil || pending == nil {
 		return nil
 	}
+	var pricing *service.SeedanceBillingSnapshot
+	if pending.SeedanceBilling != nil {
+		pricing, err = pending.SeedanceBilling.WithResolution(result.VideoResolution)
+		if err != nil {
+			logger.L().Error("seedance.completion_pricing_invalid", zap.String("task_id", taskID), zap.Error(err))
+			return nil // Do not consume the billing claim on invalid/missing prices.
+		}
+	}
 	claimed, err := h.gatewayService.ClaimGrokVideoBilling(ctx, taskID, subject.UserID, key.ID)
 	if err != nil || !claimed {
 		return nil
 	}
 	merged := *result
+	merged.SeedanceBilling = pricing
 	merged.Model = pending.Model
 	merged.BillingModel = firstNonEmptyString(pending.BillingModel, pending.Model)
 	merged.UpstreamModel = firstNonEmptyString(pending.UpstreamModel, result.UpstreamModel)

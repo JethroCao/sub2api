@@ -191,6 +191,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 	sessionHash := h.gatewayService.GenerateExplicitSessionHash(c, sessionSeed)
 	boundLookupAccountID := int64(0)
+	var seedanceDraftBilling *service.SeedanceBillingSnapshot
 	if endpoint.IsVideoLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
 		boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
@@ -200,6 +201,30 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
 			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
 			return
+		}
+	}
+	if endpoint == service.SeedanceEndpointCreate {
+		draftID, draftErr := service.SeedanceDraftTaskID(body)
+		if draftErr != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", draftErr.Error())
+			return
+		}
+		if draftID != "" {
+			parentTask := service.SeedanceTaskKey(draftID)
+			sessionHash = service.GrokMediaVideoRequestSessionHash(parentTask, subject.UserID, apiKey.ID)
+			boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(c.Request.Context(), apiKey.GroupID, parentTask, subject.UserID, apiKey.ID)
+			if err != nil || boundLookupAccountID <= 0 {
+				h.errorResponse(c, http.StatusNotFound, "not_found_error", "Seedance draft task not found")
+				return
+			}
+			pending, loadErr := h.gatewayService.LoadGrokVideoPendingBilling(c.Request.Context(), parentTask, subject.UserID, apiKey.ID)
+			if loadErr != nil {
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Seedance draft pricing snapshot is unavailable")
+				return
+			}
+			if pending != nil {
+				seedanceDraftBilling = pending.SeedanceBilling
+			}
 		}
 	}
 	// Grok 媒体（图片/视频生成与视频查询）按媒体倍率计费，不在 token 利润门
@@ -386,7 +411,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer releaseAccount()
 			if endpoint.IsSeedance() {
-				return h.gatewayService.ForwardSeedance(requestCtx, c, account, endpoint, requestID, body)
+				return h.gatewayService.ForwardSeedance(requestCtx, c, account, endpoint, requestID, body, seedanceDraftBilling)
 			}
 			return h.gatewayService.ForwardGrokMedia(requestCtx, c, account, endpoint, requestID, body, contentType)
 		}()
@@ -400,6 +425,15 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, responseLatencyMs)
 
 		if err != nil {
+			if errors.Is(err, service.ErrSeedancePricingRequest) {
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+				return
+			}
+			if errors.Is(err, service.ErrSeedancePricingConfiguration) {
+				reqLog.Error("seedance.pricing_configuration_invalid", zap.Int64("account_id", account.ID), zap.Error(err))
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Seedance official pricing is not configured correctly")
+				return
+			}
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				if failoverClientGone(c) {
@@ -496,6 +530,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				VideoResolution:      result.VideoResolution,
 				VideoDurationSeconds: result.VideoDurationSeconds,
 				OriginalModel:        clientRequestedModel(c, requestModel),
+				SeedanceBilling:      result.SeedanceBilling,
 				// Wall-clock start for usage duration_ms: create accepted → first done discovery.
 				CreatedAt: videoCreateStartedAt,
 			}

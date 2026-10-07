@@ -295,6 +295,9 @@ type OpenAIForwardResult struct {
 	SearchCount int
 	// AudioUsage carries Voice billing units when present.
 	AudioUsage *AudioUsage
+	// SeedanceBilling is the create-time official tariff/FX snapshot, reused
+	// only on a succeeded native Ark task. It never enables Grok per-second billing.
+	SeedanceBilling *SeedanceBillingSnapshot
 
 	wsReplayInput                []json.RawMessage
 	wsReplayInputExists          bool
