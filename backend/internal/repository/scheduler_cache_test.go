@@ -37,6 +37,36 @@ func TestSchedulerMetadataAccountKeepsOpenAISubscriptionIdentity(t *testing.T) {
 	require.Empty(t, metadata.GetCredential("access_token"))
 }
 
+func TestSchedulerMetadataAccountRetainsSeedanceEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		capabilities any
+		baseURL      string
+		want         bool
+	}{
+		{"array capability", []any{"seedance"}, "https://ark.cn-beijing.volces.com/api/v3", true},
+		{"map capability", map[string]any{"seedance": true}, "https://ark.cn-beijing.volces.com/api/v3", true},
+		{"disabled capability", map[string]any{"seedance": false}, "https://ark.cn-beijing.volces.com/api/v3", false},
+		{"missing capability", []any{"chat_completions"}, "https://ark.cn-beijing.volces.com/api/v3", false},
+		{"missing base URL", []any{"seedance"}, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := service.Account{ID: 15, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+				Credentials: map[string]any{"openai_capabilities": tc.capabilities, "base_url": tc.baseURL,
+					"model_mapping": map[string]any{"seedance-2.0": "ep-seedance"},
+					"access_token":  "must-not-be-projected", "refresh_token": "must-not-be-projected"}}
+			_, payload, err := marshalSchedulerCacheAccount(account)
+			require.NoError(t, err)
+			metadata, err := decodeCachedAccount(string(payload))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, metadata.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilitySeedance))
+			require.Equal(t, "ep-seedance", metadata.GetMappedModel("seedance-2.0"))
+			require.Empty(t, metadata.GetCredential("access_token"))
+			require.Empty(t, metadata.GetCredential("refresh_token"))
+		})
+	}
+}
+
 func TestSchedulerMetadataAccountProjectsUpstreamBillingProbe(t *testing.T) {
 	lastError := strings.Repeat("upstream diagnostic ", 512)
 	probe := map[string]any{

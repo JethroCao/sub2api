@@ -33,6 +33,34 @@ func newSchedulerCacheUnitWithRedis(t *testing.T) (*schedulerCache, *miniredis.M
 	return cache, mr
 }
 
+func TestSchedulerCacheSnapshotPreservesSeedanceCapability(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	bucket := service.SchedulerBucket{GroupID: 12, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	account := service.Account{ID: 15, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+		Status: service.StatusActive, Schedulable: true, GroupIDs: []int64{12},
+		Credentials: map[string]any{"openai_capabilities": []any{"seedance"},
+			"base_url":      "https://ark.cn-beijing.volces.com/api/v3",
+			"model_mapping": map[string]any{"seedance-2.0": "ep-seedance"}}}
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{account}))
+	accounts, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, accounts, 1)
+	require.Equal(t, int64(15), accounts[0].ID)
+	require.True(t, accounts[0].SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilitySeedance), "Redis metadata must keep the account eligible for native Seedance scheduling")
+
+	account.Credentials["openai_capabilities"] = []any{"chat_completions"}
+	require.NoError(t, cache.SetAccount(ctx, &account))
+	accounts, hit, err = cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, accounts, 1)
+	require.False(t, accounts[0].SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilitySeedance), "explicitly removing Seedance must refresh the metadata gate")
+}
+
 func TestSchedulerCacheWriteAccountIDsSkipsUnencodableTimes(t *testing.T) {
 	ctx := context.Background()
 	cache := newSchedulerCacheUnit(t)
