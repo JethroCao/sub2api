@@ -6,6 +6,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"os/exec"
+	"regexp"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -434,6 +437,19 @@ func attachInflightSnapshot(svc *GatewayService, snap *inflightSnapshotCacheStub
 
 // 已定价模型永不查账号映射；随机未定价模型名不直接查库、不产生按模型名的缓存（内存有界）。
 func TestInflightEstimate_AccountMappingNoDBAndBoundedMemory(t *testing.T) {
+	// HeapAlloc is process-wide. Run this check in a fresh test process so cache
+	// janitors and timers started by other service tests cannot affect the delta.
+	const childEnv = "SUB2API_INFLIGHT_MEMORY_TEST_CHILD"
+	if os.Getenv(childEnv) != t.Name() {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.timeout=30s")
+		cmd.Env = append(os.Environ(), childEnv+"="+t.Name())
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "isolated memory check failed:\n%s", output)
+		return
+	}
+
 	groupID := int64(40)
 	svc := newInflightEstimateGateway(t, nil)
 	snap := &inflightSnapshotCacheStub{byBucket: map[string][]Account{inflightBucketKey(groupID, PlatformAnthropic): {
