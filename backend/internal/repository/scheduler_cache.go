@@ -956,7 +956,9 @@ func filterSchedulerCredentials(account service.Account) map[string]any {
 	}
 	// Endpoint admission runs against this projection before loading the full
 	// account. Seedance needs both its explicit capability and custom base URL.
-	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold", "openai_capabilities", "base_url"}
+	keys := []string{"model_mapping", "compact_model_mapping", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold", "openai_capabilities",
+		// Gemini explicit-cache admission also runs before full hydration.
+		"base_url", "auth_mode", service.GeminiExplicitCacheUpstreamCredentialKey, service.GeminiExplicitCacheUpstreamMaxTTLCredentialKey}
 	if account.QuotaDimensionOrDefault() != service.QuotaDimensionSpark && service.SupportsOpenAICustomInstructions(account.Platform, account.Type) {
 		keys = append(keys, service.OpenAICustomInstructionsCredentialKey)
 	}

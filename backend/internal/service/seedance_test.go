@@ -171,7 +171,7 @@ func TestSeedanceOfficialTariffsAndDollarConversion(t *testing.T) {
 			require.Equal(t, tc.video, result.SeedanceBilling.HasInputVideo)
 			// The existing unified usage cost path must use the Seedance snapshot,
 			// not missing catalog prices, Grok seconds, or token peak surcharges.
-			cost, err := svc.calculateOpenAIRecordUsageCost(context.Background(), result, nil, []string{model}, 3, 5, 7, 1, UsageTokens{OutputTokens: 1_000_000}, "", nil, time.Now())
+			cost, err := svc.calculateOpenAIRecordUsageCost(context.Background(), result, nil, []string{model}, 3, 5, 7, 1, UsageTokens{OutputTokens: 1_000_000}, "", nil, false, time.Now())
 			require.NoError(t, err)
 			require.InDelta(t, tc.cny/6.7351, cost.OutputCost, 1e-12)
 			require.InDelta(t, tc.cny/6.7351, cost.ActualCost, 1e-12)

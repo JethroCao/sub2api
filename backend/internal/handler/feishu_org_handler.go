@@ -198,7 +198,7 @@ func (h *FeishuOrgHandler) ListManagerUsage(c *gin.Context) {
 	}
 	out := make([]dto.UsageLog, 0, len(records))
 	for i := range records {
-		out = append(out, *dto.UsageLogFromService(&records[i]))
+		out = append(out, *dto.UsageLogFromService(&records[i]).Localized(c.GetHeader("Accept-Language")))
 	}
 	response.Paginated(c, out, result.Total, result.Page, result.PageSize)
 }
