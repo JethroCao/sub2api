@@ -63,6 +63,39 @@ func newTempUnschedScopeAccount(scope string, extra map[string]any) *Account {
 
 var tempUnschedScopeBody = []byte(`{"error":{"message":"upstream unavailable"}}`)
 
+func TestOpenAIHTTP413DoesNotApplyAccountErrorPolicies(t *testing.T) {
+	newFixture := func() (*OpenAIGatewayService, *Account, *tempUnschedScopeRepoStub) {
+		repo := &tempUnschedScopeRepoStub{}
+		cfg := &config.Config{}
+		svc := &OpenAIGatewayService{cfg: cfg, rateLimitService: &RateLimitService{accountRepo: repo, cfg: cfg}}
+		account := newTempUnschedScopeAccount(TempUnschedScopeAccount, map[string]any{
+			"error_code": float64(http.StatusRequestEntityTooLarge),
+			"keywords":   []any{"large"},
+		})
+		account.Type = AccountTypeOAuth
+		return svc, account, repo
+	}
+	body := []byte(`{"error":{"message":"payload too large"}}`)
+	t.Run("account health", func(t *testing.T) {
+		svc, account, repo := newFixture()
+		require.False(t, svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusRequestEntityTooLarge, nil, body, "gpt-5.2"))
+		require.Zero(t, repo.tempCalls)
+		require.Zero(t, repo.errorCalls)
+		require.Empty(t, repo.modelRateLimitCalls)
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+	t.Run("compat failover policy", func(t *testing.T) {
+		svc, account, repo := newFixture()
+		c, _ := newOpenAIUpstreamErrorTestContext(t)
+		resp := newOpenAIUpstreamErrorResponse(http.StatusRequestEntityTooLarge, string(body))
+		defer resp.Body.Close()
+		require.Nil(t, svc.failoverOpenAIUpstreamHTTPError(context.Background(), c, account, resp, body, "payload too large", "gpt-5.2"))
+		require.Zero(t, repo.tempCalls)
+		require.Zero(t, repo.errorCalls)
+		require.Empty(t, repo.modelRateLimitCalls)
+	})
+}
+
 var (
 	tempUnschedScope401Body         = []byte(`{"error":{"message":"unauthorized"}}`)
 	tempUnschedScopeRevoked401Body  = []byte(`{"error":{"code":"token_revoked","message":"unauthorized"}}`)

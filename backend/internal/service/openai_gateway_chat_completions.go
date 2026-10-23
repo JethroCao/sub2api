@@ -1349,6 +1349,12 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 // writeChatCompletionsError writes an error response in OpenAI Chat Completions format.
 func writeChatCompletionsError(c *gin.Context, statusCode int, errType, message string) {
 	MarkResponseCommitted(c)
+	if statusCode == http.StatusRequestEntityTooLarge && c.Writer.Written() && strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream") {
+		MarkOpsStreamError(c, errType, message, statusCode)
+		_, _ = c.Writer.Write([]byte(buildChatStreamErrorSSE("invalid_request", message)))
+		c.Writer.Flush()
+		return
+	}
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{
 			"type":    errType,

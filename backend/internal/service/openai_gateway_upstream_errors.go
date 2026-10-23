@@ -251,6 +251,11 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 }
 
 func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(account *Account, statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	// Replaying an oversized payload cannot recover this request. This must
+	// precede message-based recovery and account-specific retry policies.
+	if statusCode == http.StatusRequestEntityTooLarge {
+		return false
+	}
 	// cyber_policy is request-scoped even when an intermediary wraps the
 	// provider response in a retryable 5xx status. Never punish or rotate the
 	// selected credential for it.
@@ -261,9 +266,6 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(account *Acc
 		return false
 	}
 	if isOpenAIHTTPUpstreamAccessStateError(statusCode, upstreamMsg, upstreamBody) {
-		return true
-	}
-	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, upstreamBody) {
 		return true
 	}
 	// A missing model is account/provider availability, not a malformed client
@@ -311,8 +313,8 @@ func IsOpenAICompatibleModelNotFound400(respBody []byte) bool {
 	return isOpenAICompatibleModelNotFound400(respBody)
 }
 
-// OpenAIRequestBodyTooLargeClientMessage is the fixed downstream message used
-// after all account-specific request body limit failovers are exhausted.
+// OpenAIRequestBodyTooLargeClientMessage is the fixed downstream message for
+// terminal request-body-limit failures.
 const OpenAIRequestBodyTooLargeClientMessage = "Request payload is too large"
 
 const openAIRequestBodyTooLargeReason = GatewayFailureReason("openai_request_body_too_large")
@@ -538,6 +540,11 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			UpstreamStatus: resp.StatusCode,
 		})
 		setOpsUpstreamError(c, resp.StatusCode, cyberMsg, truncateString(string(body), 2048))
+		if resp.StatusCode == http.StatusRequestEntityTooLarge {
+			MarkResponseCommitted(c)
+			writeOpenAIRequestBodyTooLargeError(c, OpenAIRequestBodyTooLargeClientMessage)
+			return nil, fmt.Errorf("%w: %s", errOpenAIRequestBodyTooLarge, OpenAIRequestBodyTooLargeClientMessage)
+		}
 		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 		contentType := resp.Header.Get("Content-Type")
 		if contentType == "" {
@@ -587,7 +594,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		)
 	}
 
-	if isOpenAIRequestBodyTooLargeError(resp.StatusCode, upstreamMsg, body) {
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			ProxyID:            opsUpstreamProxyID(account),
 			ProxyName:          opsUpstreamProxyName(account),
@@ -596,18 +603,14 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			AccountName:        account.Name,
 			UpstreamStatusCode: resp.StatusCode,
 			UpstreamRequestID:  resp.Header.Get("x-request-id"),
-			Kind:               "failover",
+			Kind:               "http_error",
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
 		})
-		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel...)
-		return nil, newOpenAIUpstreamFailoverError(
-			resp.StatusCode,
-			resp.Header,
-			body,
-			upstreamMsg,
-			false,
-		)
+		clientMessage := openAIRequestBodyTooLargeMessage(upstreamMsg, body)
+		MarkResponseCommitted(c)
+		writeOpenAIRequestBodyTooLargeError(c, clientMessage)
+		return nil, fmt.Errorf("%w: %s", errOpenAIRequestBodyTooLarge, clientMessage)
 	}
 
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(
@@ -791,6 +794,11 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			UpstreamStatus: resp.StatusCode,
 		})
 		setOpsUpstreamError(c, resp.StatusCode, cyberMsg, truncateString(string(body), 2048))
+		if resp.StatusCode == http.StatusRequestEntityTooLarge {
+			MarkResponseCommitted(c)
+			writeError(c, resp.StatusCode, "invalid_request_error", OpenAIRequestBodyTooLargeClientMessage)
+			return nil, fmt.Errorf("%w: %s", errOpenAIRequestBodyTooLarge, OpenAIRequestBodyTooLargeClientMessage)
+		}
 		clientMsg := cyberMsg
 		if clientMsg == "" {
 			clientMsg = "Request blocked by upstream cyber-security policy"
@@ -824,6 +832,25 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               "http_error",
+			Message:            upstreamMsg,
+			Detail:             upstreamDetail,
+		})
+		clientMessage := openAIRequestBodyTooLargeMessage(upstreamMsg, body)
+		MarkResponseCommitted(c)
+		writeError(c, resp.StatusCode, "invalid_request_error", clientMessage)
+		return nil, fmt.Errorf("%w: %s", errOpenAIRequestBodyTooLarge, clientMessage)
+	}
 
 	// Apply error passthrough rules
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(

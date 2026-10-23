@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -16,15 +17,36 @@ const openAIUpstreamClientErrorFallbackType = "invalid_request_error"
 // 仍然比 "Upstream request failed" 明确：它说明拒绝来自请求本身，而不是链路故障。
 const openAIUpstreamClientErrorFallbackMessage = "Upstream rejected the request"
 
+// A 413 is a terminal request rejection, not an account-health failure.
+var errOpenAIRequestBodyTooLarge = errors.New("upstream request rejected: 413")
+
 // isOpenAIDeterministicClientError 判断上游状态码是否表示「请求本身非法」。
 //
 // 只认 400：同一份请求体换任何账号、重试多少次都会得到同样的结果。
 //   - 401/402/403 是网关运营方的凭据/账单问题，继续包成 502，不向客户端暴露上游账号状态。
 //   - 404/405 既可能是模型不存在，也可能是上游 base_url 配错，同属运营方问题，保持现状。
 //   - 429 已有独立分支映射成 429。
-//   - 413 在更上面就按 request-body-too-large 走 failover 了。
+//   - 413 在更上面直接终止请求，不进入重试或换号。
 func isOpenAIDeterministicClientError(statusCode int) bool {
 	return statusCode == http.StatusBadRequest
+}
+
+func openAIRequestBodyTooLargeMessage(upstreamMsg string, upstreamBody []byte) string {
+	if upstreamMsg != "" && isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
+		return upstreamMsg
+	}
+	return OpenAIRequestBodyTooLargeClientMessage
+}
+
+func writeOpenAIRequestBodyTooLargeError(c *gin.Context, message string) {
+	streamStarted := StopOpenAICompactSSEKeepaliveCommitted(c)
+	c.Writer.Header().Del("Retry-After")
+	if streamStarted || (c.Writer.Written() && strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream")) {
+		writeOpenAICompactSSEFailureMessage(c, http.StatusRequestEntityTooLarge, "invalid_request", message)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	writeOpenAIUpstreamClientError(c, http.StatusRequestEntityTooLarge, nil, message)
 }
 
 // writeOpenAIUpstreamClientError 以 OpenAI 错误体形状回写确定性客户端错误。

@@ -1388,6 +1388,12 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 // writeAnthropicError writes an error response in Anthropic Messages API format.
 func writeAnthropicError(c *gin.Context, statusCode int, errType, message string) {
+	if statusCode == http.StatusRequestEntityTooLarge && c.Writer.Written() && strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream") {
+		MarkOpsStreamError(c, errType, message, statusCode)
+		_, _ = c.Writer.Write([]byte(buildAnthropicStreamErrorSSE(errType, message)))
+		c.Writer.Flush()
+		return
+	}
 	c.JSON(statusCode, gin.H{
 		"type": "error",
 		"error": gin.H{
