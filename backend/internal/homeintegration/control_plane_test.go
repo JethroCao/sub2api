@@ -274,4 +274,45 @@ func TestHomeControlPlaneInteroperability(t *testing.T) {
 	next.Finish(homeclient.Result{StatusCode: 200})
 	count(0) // A new membership must restart its cumulative release ledger at one.
 	t.Log("Close cancellation/drain and fresh-membership release ledger verified")
+
+	// Keep cooldown last: the fixture never clears Home's scheduler state or
+	// waits for a real provider reset. Client A must observe client B's result.
+	limited := acquire(fresh)
+	failureID := "home-interop-limited-" + fmt.Sprint(time.Now().UnixNano())
+	resetAt := time.Now().Add(time.Minute)
+	limited.Finish(homeclient.Result{
+		RequestID: failureID, StatusCode: http.StatusTooManyRequests, Failed: true,
+		ErrorCode: "usage_limit_reached", ResetAt: resetAt,
+	})
+	count(0)
+	eventually(t, "persisted single 429 usage report", 10*time.Second, func() bool {
+		var response struct {
+			Items []struct {
+				RequestID  string `json:"request_id"`
+				Failed     bool   `json:"failed"`
+				StatusCode int    `json:"status_code"`
+				Credential struct {
+					ID string `json:"credential_id"`
+				} `json:"credential"`
+			} `json:"items"`
+		}
+		if admin.get(ctx, "/usage/records?request_id="+url.QueryEscape(failureID), &response) != nil || len(response.Items) != 1 {
+			return false
+		}
+		item := response.Items[0]
+		return item.RequestID == failureID && item.Failed && item.StatusCode == http.StatusTooManyRequests && item.Credential.ID == cfg.CredentialID
+	})
+	if !time.Now().Before(resetAt) {
+		t.Fatal("fixture cooldown expired before admission verification")
+	}
+	unexpected, err := a.Acquire(ctx, homeclient.Request{CredentialID: cfg.CredentialID, Model: cfg.Model})
+	if unexpected != nil {
+		// Clean up an unexpected admission without reporting a second failure.
+		unexpected.Finish(homeclient.Result{StatusCode: http.StatusOK})
+	}
+	if !errors.As(err, &refused) || refused.Type != "model_cooldown" || !refused.Retryable || refused.RetryAfter <= 0 {
+		t.Fatalf("reported 429 must cause typed shared model cooldown: %v", err)
+	}
+	count(0)
+	t.Log("failed 429 usage persisted, released its lease, and imposed shared model cooldown")
 }
