@@ -12,6 +12,14 @@ import (
 
 type transientCooldownAccountRepo struct {
 	AccountRepository
+	account *Account
+}
+
+func (r transientCooldownAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	if r.account == nil || r.account.ID != id {
+		return nil, ErrAccountNotFound
+	}
+	return r.account, nil
 }
 
 func (transientCooldownAccountRepo) SetOverloaded(context.Context, int64, time.Time) error {
@@ -20,12 +28,12 @@ func (transientCooldownAccountRepo) SetOverloaded(context.Context, int64, time.T
 
 func TestHandleOpenAITransientError_BlocksOnlyRequestedModel(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
 	account := &Account{
 		ID:       5105,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
 	}
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, &config.Config{}, nil, nil)
 
 	firstShouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusBadGateway, http.Header{}, []byte(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`), "gpt-5.5")
 	secondShouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusBadGateway, http.Header{}, []byte(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`), "gpt-5.5")
@@ -41,12 +49,12 @@ func TestHandleOpenAITransientError_TransientStatusesUseModelScope(t *testing.T)
 	for _, statusCode := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 520, 521, 522, 523, 524} {
 		t.Run(http.StatusText(statusCode), func(t *testing.T) {
 			svc := &OpenAIGatewayService{}
-			svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
 			account := &Account{
 				ID:       int64(5100 + statusCode),
 				Platform: PlatformOpenAI,
 				Type:     AccountTypeAPIKey,
 			}
+			svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, &config.Config{}, nil, nil)
 
 			firstShouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, statusCode, http.Header{}, []byte(`{"error":{"message":"temporary upstream failure"}}`), "gpt-5.5")
 			secondShouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, statusCode, http.Header{}, []byte(`{"error":{"message":"temporary upstream failure"}}`), "gpt-5.5")
@@ -65,7 +73,6 @@ func TestHandleOpenAITransientError_529RemainsOverloadOnly(t *testing.T) {
 
 func TestHandleOpenAITransientError_CanonicalModelIsNotMappedTwice(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
 	account := &Account{
 		ID:       5107,
 		Platform: PlatformOpenAI,
@@ -77,6 +84,7 @@ func TestHandleOpenAITransientError_CanonicalModelIsNotMappedTwice(t *testing.T)
 			},
 		},
 	}
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, &config.Config{}, nil, nil)
 	canonicalModel := account.GetMappedModel("public-alias")
 	require.Equal(t, "upstream-a", canonicalModel)
 
@@ -91,12 +99,12 @@ func TestHandleOpenAITransientError_CanonicalModelIsNotMappedTwice(t *testing.T)
 
 func TestHandleOpenAITransientError_DoesNotBlockParameter400(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
 	account := &Account{
 		ID:       5103,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
 	}
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, &config.Config{}, nil, nil)
 
 	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusBadRequest, http.Header{}, []byte(`{"error":{"message":"Invalid type for input[0].arguments"}}`), "gpt-5.5")
 

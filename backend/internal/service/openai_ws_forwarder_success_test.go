@@ -574,7 +574,6 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedIsNotSchedulingSuccess(
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
-		rateLimitService: NewRateLimitService(transientCooldownAccountRepo{}, nil, cfg, nil, nil),
 		httpUpstream:     &httpUpstreamRecorder{},
 		cache:            &stubGatewayCache{},
 		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
@@ -591,6 +590,7 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedIsNotSchedulingSuccess(
 		Credentials: map[string]any{"api_key": "sk-test"},
 		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
 	}
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, cfg, nil, nil)
 	svc.recordOpenAIAccountModelTransientFailure(account, "gpt-5.5", time.Now())
 
 	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.5","stream":false,"input":"hello"}`))

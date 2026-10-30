@@ -136,8 +136,8 @@ func TestOpenAIForwardResultSucceededForScheduling_TerminalEvents(t *testing.T) 
 
 func TestOpenAIWSTerminalEvent_ResponseFailedRecordsModelTransient(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
 	account := &Account{ID: 5201, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, &config.Config{}, nil, nil)
 	payload := []byte(`{"type":"response.failed","response":{"error":{"code":"server_error","message":"Internal error"}}}`)
 
 	for range 2 {
@@ -150,8 +150,8 @@ func TestOpenAIWSTerminalEvent_ResponseFailedRecordsModelTransient(t *testing.T)
 
 func TestOpenAIWSErrorEvent_ServerErrorRecordsModelTransient(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
 	account := &Account{ID: 5203, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, &config.Config{}, nil, nil)
 	payload := []byte(`{"type":"error","error":{"code":"server_error","type":"server_error","message":"Internal error"}}`)
 
 	for range 2 {
@@ -169,8 +169,8 @@ func TestOpenAIWSPayloadTransientStatus_Explicit529IsNotModelTransient(t *testin
 
 func TestOpenAIWSDial5xxRecordsModelTransient(t *testing.T) {
 	svc := &OpenAIGatewayService{}
-	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil)
 	account := &Account{ID: 5202, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, &config.Config{}, nil, nil)
 	dialErr := &openAIWSDialError{
 		StatusCode:      http.StatusBadGateway,
 		ResponseHeaders: http.Header{"X-Request-Id": []string{"req-ws-502"}},

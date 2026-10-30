@@ -1886,8 +1886,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailove
 
 			upstreamBody := `{"error":{"message":"upstream credential rejected"}}`
 			svc := &OpenAIGatewayService{
-				cfg:              &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-				rateLimitService: NewRateLimitService(transientCooldownAccountRepo{}, nil, &config.Config{}, nil, nil),
+				cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 				httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
 					StatusCode: tt.statusCode,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -1907,6 +1906,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailove
 				Credentials: credentials,
 				Extra:       map[string]any{"openai_passthrough": true}, Status: StatusActive, Schedulable: true,
 			}
+			svc.rateLimitService = NewRateLimitService(transientCooldownAccountRepo{account: account}, nil, &config.Config{}, nil, nil)
 
 			_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.2","input":"hello"}`))
 
