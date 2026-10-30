@@ -6,6 +6,23 @@
 #
 # Documentation / 文档: https://github.com/Wei-Shaw/sub2api
 
+# Optional CLIProxyAPIHome control plane for explicitly bound OpenAI OAuth accounts.
+# Model traffic still goes directly from sub2api to its existing upstream.
+# See docs/home-control-plane.md before enabling or converting existing accounts.
+home:
+  enabled: false
+  # Home RESP endpoint (host:port), not the management.html URL or an HTTP base URL.
+  address: ""
+  # DNS name or IP present in the Home server certificate.
+  server_name: ""
+  ca_file: ""
+  # Unique Home-issued client certificate and private key for this sub2 process.
+  cert_file: ""
+  key_file: ""
+  # Home service API key scoped to the intended credentials; not a management key.
+  # Prefer HOME_API_KEY in the deployment environment for the actual secret.
+  api_key: ""
+
 # =============================================================================
 # Server Configuration
 # 服务器配置
