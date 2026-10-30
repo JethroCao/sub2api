@@ -744,13 +744,29 @@ func (s *FeishuOrgPermissionService) disableLocalUsers(ctx context.Context, user
 	if len(userIDs) == 0 {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `
+	return s.withTransaction(ctx, func(txService *FeishuOrgPermissionService) error {
+		_, err := txService.db.ExecContext(ctx, `
 UPDATE users
 SET status = $1,
     updated_at = NOW()
 WHERE id = ANY($2)
   AND role <> $3`, StatusDisabled, pq.Array(userIDs), RoleAdmin)
-	return err
+		if err != nil {
+			return err
+		}
+		// Use a separate statement after acquiring the owner locks so grants
+		// committed while disable waited are visible. The transaction makes
+		// disable and persistent revocation succeed or roll back together.
+		_, err = txService.db.ExecContext(ctx, `
+UPDATE mcp_oauth_grants
+SET revoked_at = NOW()
+WHERE user_id IN (
+    SELECT id FROM users
+    WHERE id = ANY($1) AND role <> $2 AND status = $3
+)
+  AND revoked_at IS NULL`, pq.Array(userIDs), RoleAdmin, StatusDisabled)
+		return err
+	})
 }
 
 func (s *FeishuOrgPermissionService) insertSyncRun(ctx context.Context, status string, usersToDisable int, reviewRequired bool, errorMessage string, actorUserID int64) (*FeishuOrgSyncRunView, error) {

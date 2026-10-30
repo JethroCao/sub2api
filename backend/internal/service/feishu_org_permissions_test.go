@@ -745,9 +745,14 @@ func TestFeishuOrgPermissionServiceRunManualReconcileAutoDisablesDepartedUsers(t
 	mock.ExpectQuery("SELECT DISTINCT org_user.user_id").
 		WithArgs(StatusActive, RoleAdmin).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(int64(42)).AddRow(int64(43)))
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE users").
 		WithArgs(StatusDisabled, sqlmock.AnyArg(), RoleAdmin).
 		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec("UPDATE mcp_oauth_grants").
+		WithArgs(sqlmock.AnyArg(), RoleAdmin, StatusDisabled).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectCommit()
 	mock.ExpectExec("INSERT INTO feishu_org_permission_audit_logs").
 		WithArgs(int64(7), int64(42), "", "", "auto_disable_user", "feishu_departure_auto_disable").
 		WillReturnResult(sqlmock.NewResult(0, 1))

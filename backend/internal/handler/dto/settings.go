@@ -437,6 +437,7 @@ type PublicSettings struct {
 	GoogleOAuthEnabled                  bool                     `json:"google_oauth_enabled"`
 	SoraClientEnabled                   bool                     `json:"sora_client_enabled"`
 	BackendModeEnabled                  bool                     `json:"backend_mode_enabled"`
+	MCPEnabled                          bool                     `json:"mcp_enabled"`
 	PaymentEnabled                      bool                     `json:"payment_enabled"`
 	// PaymentBalanceDisabled mirrors the payment-config BALANCE_PAYMENT_DISABLED switch so the
 	// user shell can derive the site billing mode (recharge & subscription / recharge only /
