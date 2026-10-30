@@ -20,6 +20,7 @@ var (
 	ErrLiveCallNotFound      = errors.New("live call not found")
 	ErrLiveIdentityMismatch  = errors.New("live call identity mismatch")
 	ErrLiveControllerChanged = errors.New("live controller changed")
+	ErrHomeLiveUnsupported   = errors.New("Home-managed accounts do not support Live sessions")
 )
 
 type LiveAttestationUnavailableError struct {

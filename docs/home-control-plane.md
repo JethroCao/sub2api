@@ -137,6 +137,15 @@ is not a model request. A lease is released once, independently of usage reports
 Home receives sanitized execution results so its cooldown state reflects sub2
 traffic as well as CPA traffic.
 
+Home-managed accounts do not support Live sessions. They are excluded from Live
+eligibility, and creation or sideband access rejects Home-backed owners,
+including shadow accounts and stale selections, with an explicit unsupported
+capability error. Use an eligible native account for Live. After the SDP
+exchange, Live media flows directly between the client and upstream; finishing
+the SDP HTTP response does not end the session. Home support requires separate
+session-lifetime admission and release integration and is not provided by the
+current HTTP/WebSocket model-attempt wrappers.
+
 If a dispatch reply is lost, the client cannot know whether Home admitted it. It
 fences that membership, cancels local work and reconnects only after Home permits
 a fresh membership. This conservative recovery can briefly make managed accounts

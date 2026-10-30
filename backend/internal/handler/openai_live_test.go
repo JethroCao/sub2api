@@ -105,6 +105,16 @@ func TestLiveAttestationErrorIsExplicit(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "Sub2API runs on macOS")
 }
 
+func TestHomeLiveUnsupportedErrorIsExplicit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	(&OpenAIGatewayHandler{}).writeLiveCreateError(ctx, service.ErrHomeLiveUnsupported)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "Home-managed accounts do not support Live sessions")
+	require.Contains(t, recorder.Body.String(), "unsupported_capability")
+}
+
 func jsonPathString(t *testing.T, raw json.RawMessage, keys ...string) string {
 	t.Helper()
 	var value any

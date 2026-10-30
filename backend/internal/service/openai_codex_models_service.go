@@ -1499,6 +1499,9 @@ type codexModelsManifestUpstreamError struct {
 	statusCode int
 	headers    http.Header
 	body       []byte
+	// Retain the actual prepared owner; its 401 recovery is handled at the
+	// request boundary, before any outer callback can consult a rebound row.
+	homeCredentialAccount *Account
 }
 
 func (e *codexModelsManifestUpstreamError) Error() string { return e.err.Error() }
@@ -1863,6 +1866,11 @@ func (s *OpenAIGatewayService) handleCodexModelsManifestAccountAuthError(ctx con
 	if !errors.As(err, &upstreamErr) || upstreamErr.statusCode != http.StatusUnauthorized {
 		return
 	}
+	if upstreamErr.homeCredentialAccount != nil || credAccount.HasHomeBinding() {
+		// Home errors must never enter native permanent-disable handling. Only
+		// the HTTP boundary has the exact credential snapshot that was sent.
+		return
+	}
 	headers := upstreamErr.headers
 	if headers == nil {
 		headers = http.Header{}
@@ -1991,6 +1999,13 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 		return &OpenAIModelsResponse{ETag: resp.Header.Get("ETag"), NotModified: true}, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var homeSnapshot *Account
+		if request.credentialAccount != nil && request.credentialAccount.HasHomeBinding() {
+			homeSnapshot = request.credentialAccount
+			if resp.StatusCode == http.StatusUnauthorized {
+				_ = s.homeCredentials.Recover(reqCtx, homeSnapshot, homeSnapshot.GetOpenAIAccessToken())
+			}
+		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		body = s.redactAgentIdentitySensitiveBody(reqCtx, request.credentialAccount, body)
 		message := strings.TrimSpace(string(body))
@@ -1998,11 +2013,12 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 			message = resp.Status
 		}
 		return nil, &codexModelsManifestUpstreamError{
-			err:        infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "codex models manifest upstream error %d: %s", resp.StatusCode, message),
-			statusCode: resp.StatusCode,
-			headers:    resp.Header.Clone(),
-			body:       body,
-			retryable:  isRetryableCodexModelsManifestStatus(resp.StatusCode, request.useAPIKeyUpstream),
+			err:                   infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "codex models manifest upstream error %d: %s", resp.StatusCode, message),
+			statusCode:            resp.StatusCode,
+			headers:               resp.Header.Clone(),
+			body:                  body,
+			retryable:             isRetryableCodexModelsManifestStatus(resp.StatusCode, request.useAPIKeyUpstream),
+			homeCredentialAccount: homeSnapshot,
 		}
 	}
 

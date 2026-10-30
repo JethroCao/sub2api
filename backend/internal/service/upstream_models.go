@@ -866,6 +866,8 @@ func (s *AccountTestService) keepGrokCatalogFailure(ctx context.Context, account
 	}
 }
 
+type upstreamModelsHomeSnapshotKey struct{}
+
 // readUpstreamModelsResponse 发送模型列表请求并读取受限大小的响应体；非 2xx 返回带状态码的同步错误。
 func (s *AccountTestService) readUpstreamModelsResponse(req *http.Request, account *Account) ([]byte, error) {
 	resp, err := s.doUpstreamModelsRequest(req, upstreamModelsProxyURL(account), account)
@@ -873,6 +875,13 @@ func (s *AccountTestService) readUpstreamModelsResponse(req *http.Request, accou
 		return nil, newUpstreamModelSyncUpstreamError("Failed to request upstream model list", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized {
+		if snapshot, ok := req.Context().Value(upstreamModelsHomeSnapshotKey{}).(*Account); ok {
+			// The row may have rebound while HTTP was in flight. Recover checks
+			// this exact UUID and AT; never substitute the persisted account.
+			_ = s.homeCredentials.Recover(req.Context(), snapshot, snapshot.GetOpenAIAccessToken())
+		}
+	}
 
 	bodyLimit := resolveModelsListReadLimit(s.cfg)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
@@ -1306,6 +1315,9 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
 	credentialAccount.ApplyHeaderOverrides(req.Header)
 	enforceCodexIdentityHeadersWithUA(req.Header, credentialAccount.GetOpenAIUserAgent())
+	if credentialAccount.HasHomeBinding() {
+		req = req.WithContext(context.WithValue(req.Context(), upstreamModelsHomeSnapshotKey{}, credentialAccount))
+	}
 	return req, nil
 }
 

@@ -176,6 +176,12 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		}
 
 		account := selection.Account
+		if capabilityErr := s.checkLiveAccountSupported(ctx, account); capabilityErr != nil {
+			selection.ReleaseFunc()
+			excluded[account.ID] = struct{}{}
+			lastErr = capabilityErr
+			continue
+		}
 		leaseID := generateRequestID()
 		acquired, acquireErr := liveCache.AcquireLiveLease(
 			ctx,
@@ -258,16 +264,51 @@ func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(account *Account, e
 	)
 }
 
+// Live media continues directly between client and provider after SDP. A model
+// lease ending at HTTP EOF cannot account for that session's lifetime.
+func (s *OpenAIGatewayService) checkLiveAccountSupported(ctx context.Context, account *Account) error {
+	if account == nil {
+		return ErrLiveUnavailable
+	}
+	if account.HasHomeBinding() {
+		return ErrHomeLiveUnsupported
+	}
+	owner, err := currentHomeCredentialOwner(ctx, s.accountRepo, account)
+	if err != nil {
+		return liveCredentialError(err)
+	}
+	if owner.HasHomeBinding() {
+		return ErrHomeLiveUnsupported
+	}
+	if !owner.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityLive) {
+		return ErrLiveUnavailable
+	}
+	return nil
+}
+
+func liveCredentialError(err error) error {
+	if errors.Is(err, ErrHomeOwnershipChanged) || errors.Is(err, ErrHomeBinding) || isHomeRequestFailure(err) {
+		return ErrHomeLiveUnsupported
+	}
+	return err
+}
+
 func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	ctx context.Context,
 	account *Account,
 	request *LiveCallRequest,
 	attestation string,
 ) (*LiveCallCreated, error) {
+	if err := s.checkLiveAccountSupported(ctx, account); err != nil {
+		return nil, err
+	}
+	// Retain the native-only constraint through token-provider and final
+	// transport ownership reads if conversion races this selection.
+	ctx = WithNativeCredentialMutation(ctx)
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "access_token", err)
-		return nil, err
+		return nil, liveCredentialError(err)
 	}
 	body, err := json.Marshal(struct {
 		SDP     string          `json:"sdp"`
@@ -307,7 +348,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	resp, err := s.doOpenAIUpstream(upstreamReq, resolveAccountProxyURL(account), account)
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "upstream_transport", err)
-		return nil, err
+		return nil, liveCredentialError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, liveUpstreamBodyLimit+1))
@@ -418,9 +459,13 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 	account *Account,
 	record *LiveCallRecord,
 ) (http.Header, error) {
+	if err := s.checkLiveAccountSupported(ctx, account); err != nil {
+		return nil, err
+	}
+	ctx = WithNativeCredentialMutation(ctx)
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
-		return nil, err
+		return nil, liveCredentialError(err)
 	}
 	headers, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
 	if err != nil {
@@ -443,11 +488,14 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if err != nil {
 		return nil, err
 	}
-	if account == nil || !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityLive) {
-		return nil, ErrLiveUnavailable
+	if err := s.checkLiveAccountSupported(ctx, account); err != nil {
+		return nil, err
 	}
 	headers, err := s.liveSidebandHeaders(ctx, account, record)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.checkLiveAccountSupported(ctx, account); err != nil {
 		return nil, err
 	}
 	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(record.CallID)

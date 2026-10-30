@@ -2111,6 +2111,7 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	case OpenAIEndpointCapabilityLive:
 		return a.Platform == PlatformOpenAI &&
 			a.Type == AccountTypeOAuth &&
+			!a.HasHomeBinding() &&
 			!a.IsOpenAIPersonalAccessToken() &&
 			!a.IsOpenAIAgentIdentity()
 	case OpenAIEndpointCapabilityResponses:

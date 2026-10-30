@@ -179,6 +179,8 @@ func liveCallIdentity(
 
 func (h *OpenAIGatewayHandler) writeLiveCreateError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, service.ErrHomeLiveUnsupported):
+		h.errorResponse(c, http.StatusBadRequest, "unsupported_capability", service.ErrHomeLiveUnsupported.Error())
 	case errors.Is(err, service.ErrLiveConcurrencyFull):
 		h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Live concurrency limit reached")
 	case errors.Is(err, service.ErrLiveUnavailable):
