@@ -95,6 +95,7 @@ func doHomeHTTP(request *http.Request, account *Account, home *HomeCredentialsSe
 	if err != nil {
 		return nil, err
 	}
+	recoveryAccount := homeAttemptRecoveryAccount(account, lease.Credential)
 	clone = clone.WithContext(lease.Context())
 	applyHomeHeaders(clone.Header, lease.Credential)
 	response, err := send(clone)
@@ -111,7 +112,7 @@ func doHomeHTTP(request *http.Request, account *Account, home *HomeCredentialsSe
 	}
 	observer := newHomeResponseObserver(response.StatusCode, response.Header)
 	response.Body = newHomeHTTPBody(response.Body, lease, observer, func(result homeclient.Result) {
-		recoverHomeAttempt(home, account, lease.Credential.AccessToken, result)
+		recoverHomeAttempt(home, recoveryAccount, lease.Credential.AccessToken, result)
 	})
 	return response, nil
 }
@@ -340,6 +341,18 @@ func (b *homeHTTPBody) finish(eof bool) {
 			b.afterFinish(result)
 		}
 	})
+}
+
+// Admission may resolve a newer binding than the selected account snapshot.
+// Pin recovery to that admitted UUID and retain the selected local ID. Recover
+// rereads that ID and resolves any persisted shadow parent before checking the
+// UUID. The expected binding itself must be an ordinary owner shape: shadow
+// rows cannot carry Home binding metadata.
+func homeAttemptRecoveryAccount(account *Account, credential homeclient.Credential) *Account {
+	return &Account{
+		ID: account.ID, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Extra: map[string]any{OpenAICredentialSourceKey: "home", HomeCredentialIDKey: credential.ID},
+	}
 }
 
 // Credential recovery is metadata work owned by Home. It starts after release

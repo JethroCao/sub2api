@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,53 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+// The observer must preserve every supported classifier input even when the
+// useful fields follow an output string larger than its observation budget.
+func TestHomeProjectionPreservesSemanticErrorShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+		status       int
+	}{
+		{"root_auth_message", `"message":"authentication_error"`, 401},
+		{"root_rate_message", `"message":"rate_limit_exceeded"`, 429},
+		{"root_permission_message", `"message":"permission denied"`, 403},
+		{"root_context_code", `"code":"context_length_exceeded"`, 400},
+		{"root_access_code", `"code":"account_deactivated"`, 403},
+		{"detail_auth_string", `"detail":"unauthorized"`, 401},
+		{"detail_rate_string", `"detail":"rate_limit_exceeded"`, 429},
+		{"detail_access_code", `"detail":{"code":"workspace_disabled"}`, 403},
+	} {
+		for _, large := range []bool{false, true} {
+			for _, sse := range []bool{false, true} {
+				for _, chunk := range []int{1, 7, 8192} {
+					t.Run(fmt.Sprintf("%s/large=%t/sse=%t/chunk=%d", tc.name, large, sse, chunk), func(t *testing.T) {
+						output := ""
+						if large {
+							output = strings.Repeat("x", homeObserveLimit+100)
+						}
+						payload := `{"type":"error","output":"` + output + `",` + tc.fields + `}`
+						direct := newHomeResponseObserver(200, http.Header{})
+						direct.event([]byte(payload))
+						require.Equal(t, tc.status, direct.end(true).StatusCode)
+						header := http.Header{}
+						if sse {
+							header.Set("Content-Type", "text/event-stream")
+							payload = "data: " + payload + "\n\ndata: [DONE]\n\n"
+						}
+						observer := newHomeResponseObserver(200, header)
+						for start := 0; start < len(payload); start += chunk {
+							observer.observe([]byte(payload[start:min(start+chunk, len(payload))]))
+						}
+						result := observer.end(true)
+						require.True(t, result.Failed)
+						require.Equal(t, tc.status, result.StatusCode)
+					})
+				}
+			}
+		}
+	}
+}
 
 func TestHomeLargeTerminalResponsesPreserveOutcomeAndUsage(t *testing.T) {
 	largeOutput := strings.Repeat("escaped\\\"image-base64-", 40000)

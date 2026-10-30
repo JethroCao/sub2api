@@ -40,7 +40,7 @@ func (s *OpenAIGatewayService) beginHomeWSTurn(ctx context.Context, a *Account, 
 		return nil, err
 	}
 	o := newHomeResponseObserver(200, http.Header{"Content-Type": []string{"text/event-stream"}})
-	return &homeWSTurn{lease: lease, home: s.homeCredentials, account: a, owner: owner, observer: o, done: make(chan struct{})}, nil
+	return &homeWSTurn{lease: lease, home: s.homeCredentials, account: homeAttemptRecoveryAccount(a, lease.Credential), owner: owner, observer: o, done: make(chan struct{})}, nil
 }
 func (t *homeWSTurn) bind(stop func()) {
 	if t == nil {
@@ -137,6 +137,7 @@ type homeWSFrameConn struct {
 	mu         sync.Mutex
 	active     *homeWSTurn
 	first      *homeWSTurn
+	failure    error // causal control failure, recorded before abort wakes the reader
 }
 
 func (c *homeWSFrameConn) WriteFrame(ctx context.Context, kind coderws.MessageType, raw []byte) error {
@@ -145,6 +146,9 @@ func (c *homeWSFrameConn) WriteFrame(ctx context.Context, kind coderws.MessageTy
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.failure != nil {
+		return c.failure
+	}
 	if c.active != nil {
 		return errors.New("overlapping Home websocket turn")
 	}
@@ -154,15 +158,17 @@ func (c *homeWSFrameConn) WriteFrame(ctx context.Context, kind coderws.MessageTy
 	if turn == nil {
 		turn, err = c.svc.beginHomeWSTurn(c.controlCtx, c.account, gjson.GetBytes(raw, "model").String())
 		if err != nil {
+			c.failure = NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "shared upstream capacity unavailable; reconnect later", err)
 			c.stop()
-			return NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "shared upstream capacity unavailable; reconnect later", err)
+			return c.failure
 		}
 	}
 	if turn != nil {
 		if homeCredentialIdentity(turn.lease.Credential) != c.identity {
+			c.failure = NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "upstream credentials changed; reconnect conversation", errHomeWSIdentityChanged)
 			c.stop()
 			turn.finish()
-			return NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "upstream credentials changed; reconnect conversation", errHomeWSIdentityChanged)
+			return c.failure
 		}
 		c.active = turn
 		turn.bind(c.stop)
@@ -189,6 +195,12 @@ func (c *homeWSFrameConn) WriteFrame(ctx context.Context, kind coderws.MessageTy
 func (c *homeWSFrameConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
 	kind, raw, err := c.inner.ReadFrame(ctx)
 	c.mu.Lock()
+	// Aborting for admission/identity failure can make the read-side relay exit
+	// win the race against WriteFrame. Both directions must retain that cause.
+	if c.failure != nil {
+		err = c.failure
+		raw = nil
+	}
 	turn := c.active
 	if turn != nil && (err != nil || turn.observe(raw)) {
 		turn.finish()

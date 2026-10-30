@@ -22,7 +22,9 @@ type homeJSONSchema struct {
 
 var homeJSONObservationSchema = func() *homeJSONSchema {
 	root := &homeJSONSchema{scalarLimit: 64}
-	paths := []string{"type", "status", "status_code"}
+	// Keep all inputs used by extractUpstreamErrorMessage and the stream error
+	// classifier, including ChatGPT's scalar detail and structured detail.code.
+	paths := []string{"type", "status", "status_code", "message", "code", "detail", "detail.code"}
 	for _, prefix := range []string{"", "response."} {
 		paths = append(paths, prefix+"status")
 		for _, field := range []string{"type", "code", "message", "status", "status_code", "resets_at", "resets_in_seconds"} {
@@ -45,7 +47,7 @@ var homeJSONObservationSchema = func() *homeJSONSchema {
 			}
 			node = next
 		}
-		if strings.HasSuffix(path, "message") {
+		if strings.HasSuffix(path, "message") || path == "detail" {
 			node.scalarLimit = homeJSONScalarLimit
 		} else if strings.HasSuffix(path, "type") || strings.HasSuffix(path, "code") {
 			node.scalarLimit = 128
