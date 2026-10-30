@@ -25,12 +25,16 @@ type homeCachedCredential struct {
 	credential homeclient.Credential
 	until      time.Time
 }
+type homeRecoveryAttempt struct {
+	until   time.Time
+	pending bool
+}
 
 // HomeCredentialsService owns only transient ATs. It never stores or receives RTs.
 // Auxiliary Resolve uses Home Refresh because Home exposes no read-only credential API.
 // Actual model sends must independently Acquire even when Resolve has a warm cache.
 type HomeCredentialsService struct {
-	recoveries map[string]time.Time
+	recoveries map[string]homeRecoveryAttempt
 	failures   map[string]homeCachedFailure
 	close      func() error
 	accounts   AccountRepository
@@ -41,7 +45,7 @@ type HomeCredentialsService struct {
 }
 
 func NewHomeCredentialsService(accounts AccountRepository, client homeCredentialClient) *HomeCredentialsService {
-	return &HomeCredentialsService{accounts: accounts, client: client, cache: make(map[string]homeCachedCredential), failures: make(map[string]homeCachedFailure), recoveries: make(map[string]time.Time)}
+	return &HomeCredentialsService{accounts: accounts, client: client, cache: make(map[string]homeCachedCredential), failures: make(map[string]homeCachedFailure), recoveries: make(map[string]homeRecoveryAttempt)}
 }
 func currentHomeCredentialOwner(ctx context.Context, repo AccountRepository, a *Account) (*Account, error) {
 	if a == nil {
@@ -68,6 +72,11 @@ func currentHomeCredentialOwner(ctx context.Context, repo AccountRepository, a *
 		}
 	}
 	if _, err := a.HomeCredentialID(); err != nil {
+		return nil, err
+	}
+	// Native-only callers include independent plugins. Every ownership reread
+	// must retain that constraint, including reads made inside Home resolution.
+	if err := requireNativeCredentialMutation(ctx, a); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -104,6 +113,15 @@ func (s *HomeCredentialsService) resolve(ctx context.Context, a *Account, observ
 	if id == "" {
 		return zero, ErrHomeBinding
 	}
+	if force && a.HasHomeBinding() {
+		expectedID, bindingErr := a.HomeCredentialID()
+		if bindingErr != nil {
+			return zero, bindingErr
+		}
+		if expectedID != id {
+			return zero, ErrHomeOwnershipChanged
+		}
+	}
 	if s.client == nil || !s.client.Ready() {
 		return zero, ErrHomeUnavailable
 	}
@@ -137,13 +155,7 @@ func (s *HomeCredentialsService) resolve(ctx context.Context, a *Account, observ
 		if err != nil {
 			s.mu.Lock()
 			delete(s.cache, id)
-			if len(s.failures) >= 1024 {
-				for key := range s.failures {
-					delete(s.failures, key)
-					break
-				}
-			}
-			s.failures[id] = homeCachedFailure{err, time.Now().Add(5 * time.Second)}
+			s.cacheFailureLocked(id, err, time.Now().Add(5*time.Second))
 			s.mu.Unlock()
 			return zero, err
 		}
@@ -173,7 +185,11 @@ func (s *HomeCredentialsService) Prepare(ctx context.Context, a *Account) (*Acco
 	if err != nil {
 		return nil, err
 	}
-	return ApplyHomeCredential(a, owner, c), nil
+	snapshot := ApplyHomeCredential(a, owner, c)
+	// Resolve rereads ownership. Keep recovery bound to the credential actually
+	// returned if an administrator rebound the row between these two reads.
+	snapshot.Extra[HomeCredentialIDKey] = c.ID
+	return snapshot, nil
 }
 func ApplyHomeCredential(a, owner *Account, c homeclient.Credential) *Account {
 	copy := *a
@@ -276,6 +292,18 @@ func (s *HomeCredentialsService) cacheCredential(id string, c homeclient.Credent
 	return nil
 }
 
+// Caller holds mu. A failed/rejected credential must not immediately turn into
+// an unbounded cache-miss refresh loop.
+func (s *HomeCredentialsService) cacheFailureLocked(id string, err error, until time.Time) {
+	if len(s.failures) >= 1024 {
+		for key := range s.failures {
+			delete(s.failures, key)
+			break
+		}
+	}
+	s.failures[id] = homeCachedFailure{err, until}
+}
+
 // Recover reports an actual upstream 401 to Home's refresh path. Some legacy
 // callers only retain the persisted account (no AT); the empty observed value
 // remains honest and recovery is bounded even when refresh succeeds repeatedly.
@@ -294,15 +322,32 @@ func (s *HomeCredentialsService) Recover(ctx context.Context, a *Account, observ
 	if id == "" {
 		return ErrHomeBinding
 	}
+	if a.HasHomeBinding() {
+		expectedID, bindingErr := a.HomeCredentialID()
+		if bindingErr != nil {
+			return bindingErr
+		}
+		if expectedID != id {
+			return ErrHomeOwnershipChanged
+		}
+	}
 	now := time.Now()
 	s.mu.Lock()
-	if now.Before(s.recoveries[id]) {
+	previous := s.recoveries[id]
+	if previous.pending || now.Before(previous.until) {
+		// A newly refreshed token may itself receive 401 during the cooldown.
+		// Stop serving that token without starting another rotation. An ongoing
+		// recovery owns its cache update and must not be blocked by this failure.
+		if cached, ok := s.cache[id]; !previous.pending && ok && observedAT != "" && cached.credential.AccessToken == observedAT {
+			delete(s.cache, id)
+			s.cacheFailureLocked(id, ErrHomeUnavailable, previous.until)
+		}
 		s.mu.Unlock()
 		return nil
 	}
 	if len(s.recoveries) >= 1024 {
-		for key, until := range s.recoveries {
-			if !now.Before(until) {
+		for key, attempt := range s.recoveries {
+			if !attempt.pending && !now.Before(attempt.until) {
 				delete(s.recoveries, key)
 			}
 		}
@@ -313,8 +358,19 @@ func (s *HomeCredentialsService) Recover(ctx context.Context, a *Account, observ
 			}
 		}
 	}
-	s.recoveries[id] = now.Add(5 * time.Second)
+	// The actual upstream rejection invalidates this AT even if Home is offline
+	// or the caller is canceled before the bounded refresh can complete.
+	if cached, ok := s.cache[id]; ok && observedAT != "" && cached.credential.AccessToken == observedAT {
+		delete(s.cache, id)
+	}
+	s.recoveries[id] = homeRecoveryAttempt{until: now.Add(5 * time.Second), pending: true}
 	s.mu.Unlock()
 	_, err = s.resolve(ctx, owner, observedAT, true)
+	s.mu.Lock()
+	if attempt, ok := s.recoveries[id]; ok {
+		attempt.pending = false
+		s.recoveries[id] = attempt
+	}
+	s.mu.Unlock()
 	return err
 }

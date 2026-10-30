@@ -253,6 +253,13 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	// 3) Populate cache with TTL.
 	if p.tokenCache != nil {
 		latestAccount, isStale := CheckTokenVersion(ctx, account, p.accountRepo)
+		if latestAccount != nil && latestAccount.HasHomeBinding() {
+			if err := requireNativeCredentialMutation(ctx, latestAccount); err != nil {
+				return "", err
+			}
+			c, err := p.homeCredentials.Resolve(ctx, latestAccount)
+			return c.AccessToken, err
+		}
 		if isStale && latestAccount != nil {
 			slog.Debug("openai_token_version_stale_use_latest", "account_id", account.ID)
 			accessToken = latestAccount.GetOpenAIAccessToken()
