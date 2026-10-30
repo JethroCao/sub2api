@@ -68,6 +68,9 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
+		if isHomeRequestFailure(err) {
+			return err
+		}
 		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")
 		return fmt.Errorf("responses input_tokens: get access token: %w", err)
 	}
@@ -85,6 +88,9 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
+		if converted := homeRequestFailure(ctx, err); isHomeRequestFailure(converted) {
+			return converted
+		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
 		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
@@ -309,6 +315,9 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
+		if isHomeRequestFailure(err) {
+			return err
+		}
 		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")
 		return fmt.Errorf("get access token: %w", err)
 	}
@@ -325,6 +334,9 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
+		if converted := homeRequestFailure(ctx, err); isHomeRequestFailure(converted) {
+			return converted
+		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
 		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")

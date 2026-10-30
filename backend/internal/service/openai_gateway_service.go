@@ -1223,6 +1223,9 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 	if account != nil && (account.Platform == PlatformOpenAI || account.HasHomeBinding()) {
 		current, err := currentHomeCredentialOwner(ctx, s.accountRepo, account)
 		if err != nil {
+			if errors.Is(err, ErrHomeBinding) {
+				return "", "", homeRequestFailure(ctx, homeControlError(err))
+			}
 			return "", "", err
 		}
 		if err := requireNativeCredentialMutation(ctx, current); err != nil {
@@ -1230,7 +1233,7 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 		}
 		if current.HasHomeBinding() {
 			c, err := s.homeCredentials.Resolve(ctx, current)
-			return c.AccessToken, "oauth", err
+			return c.AccessToken, "oauth", homeRequestFailure(ctx, homeControlError(err))
 		}
 	}
 

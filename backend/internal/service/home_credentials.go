@@ -87,7 +87,8 @@ func (s *HomeCredentialsService) Resolve(ctx context.Context, a *Account) (homec
 func (s *HomeCredentialsService) Refresh(ctx context.Context, a *Account, observedAT string) (homeclient.Credential, error) {
 	return s.resolve(ctx, a, observedAT, observedAT != "")
 }
-func (s *HomeCredentialsService) resolve(ctx context.Context, a *Account, observed string, force bool) (homeclient.Credential, error) {
+func (s *HomeCredentialsService) resolve(ctx context.Context, a *Account, observed string, force bool) (credential homeclient.Credential, err error) {
+	defer func() { err = homeControlError(err) }()
 	var zero homeclient.Credential
 	if s == nil {
 		return zero, ErrHomeUnavailable

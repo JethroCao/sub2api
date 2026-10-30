@@ -151,6 +151,16 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	storeDisabledConnMode := s.openAIWSStoreDisabledConnMode()
 	forceNewConnByPolicy := shouldForceNewConnOnStoreDisabled(storeDisabledConnMode, lastFailureReason)
 	forceNewConn := forceNewConnByPolicy && storeDisabled && previousResponseID == "" && sessionHash != "" && preferredConnID == ""
+	homeTurn, homeErr := s.beginHomeWSTurn(ctx, account, openAIWSPayloadString(payload, "model"))
+	if homeErr != nil {
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, homeErr, false)
+	}
+	defer homeTurn.finish()
+	if homeTurn != nil {
+		ctx = homeTurn.lease.Context()
+		token = homeTurn.lease.Credential.AccessToken
+		account = ApplyHomeCredential(account, homeTurn.owner, homeTurn.lease.Credential)
+	}
 	wsHeaders, sessionResolution, buildHdrErr := s.buildOpenAIWSHeaders(
 		ctx,
 		c,
@@ -207,7 +217,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		WSURL:   wsURL,
 		Headers: wsHeaders,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
-			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
+			if homeTurn != nil && homeTurn.lease.Context().Err() == nil {
+				headers = cloneHeader(headers)
+				applyHomeHeaders(headers, homeTurn.lease.Credential)
+				return headers, nil
+			}
+			return s.homeWSHeaders(factoryCtx, account, headers)
 		},
 		PreferredConnID: preferredConnID,
 		ForceNewConn:    forceNewConn,
@@ -255,6 +270,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), mappedModel)
 		}
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
+	}
+	if homeTurn != nil {
+		homeTurn.bind(homeStopWSLease(lease))
+		if lease.conn.homeIdentity != homeCredentialIdentity(homeTurn.lease.Credential) {
+			lease.conn.abort()
+			lease.Release()
+			return nil, wrapOpenAIWSFallback("write_request", errHomeWSIdentityChanged)
+		}
 	}
 	// cleanExit 标记正常终端事件退出，此时上游不会再发送帧，连接可安全归还复用。
 	// 所有异常路径（读写错误、error 事件等）已在各自分支中提前调用 MarkBroken，
@@ -328,20 +351,21 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 
-	if err := s.performOpenAIWSGeneratePrewarm(
-		ctx,
-		lease,
-		decision,
-		payload,
-		previousResponseID,
-		reqBody,
-		account,
-		stateStore,
-		groupID,
-	); err != nil {
-		return nil, err
+	if homeTurn == nil {
+		if err := s.performOpenAIWSGeneratePrewarm(
+			ctx,
+			lease,
+			decision,
+			payload,
+			previousResponseID,
+			reqBody,
+			account,
+			stateStore,
+			groupID,
+		); err != nil {
+			return nil, err
+		}
 	}
-
 	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
 		lease.MarkBroken()
 		safeErr := redactOpenAIAccountInstructionsFromUpstreamError(account, err)
@@ -636,6 +660,7 @@ readLoop:
 		if isTokenEvent {
 			tokenEventCount++
 		}
+		homeTurn.observe(message)
 		isTerminalEvent := isOpenAIWSTerminalEvent(eventType)
 		if isTerminalEvent {
 			terminalEventCount++

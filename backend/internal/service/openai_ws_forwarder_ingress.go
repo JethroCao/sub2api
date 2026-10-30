@@ -821,7 +821,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		WSURL:   wsURL,
 		Headers: wsHeaders,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
-			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
+			return s.homeWSHeaders(factoryCtx, account, headers)
 		},
 		ProxyURL: func() string {
 			if account.ProxyID != nil && account.Proxy != nil {
@@ -890,6 +890,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	var acquireTurnLease func(int, string, bool, bool) (*openAIWSConnLease, error)
 	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool, forceNewConn bool) (*openAIWSConnLease, error) {
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
+		var homeHeaderErr error
+		req.Headers, homeHeaderErr = s.homeWSHeaders(ctx, account, req.Headers)
+		if homeHeaderErr != nil {
+			if turn == 1 {
+				return nil, homeRequestFailure(ctx, homeHeaderErr)
+			}
+			return nil, NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "Home credentials unavailable; reconnect later", homeHeaderErr)
+		}
 		req.PreferredConnID = strings.TrimSpace(preferred)
 		req.ForcePreferredConn = forcePreferredConn
 		// dedicated 模式下每次获取均新建连接，避免跨会话复用残留上下文；
@@ -989,9 +997,25 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
+		homeTurn, homeErr := s.beginHomeWSTurn(ctx, account, gjson.GetBytes(payload, "model").String())
+		if homeErr != nil {
+			if turn == 1 {
+				return nil, homeRequestFailure(ctx, homeErr)
+			}
+			return nil, wrapOpenAIWSIngressTurnError("home_admission", NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "shared upstream capacity unavailable; retry later", homeErr), false)
+		}
+		defer homeTurn.finish()
+		turnCtx := ctx
+		if homeTurn != nil {
+			homeTurn.bind(homeStopWSLease(lease))
+			turnCtx = homeTurn.lease.Context()
+			if lease.conn.homeIdentity != homeCredentialIdentity(homeTurn.lease.Credential) {
+				return nil, wrapOpenAIWSIngressTurnError("write_upstream", errHomeWSIdentityChanged, false)
+			}
+		}
 		turnStart := time.Now()
 		wroteDownstream := false
-		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
+		if err := lease.WriteJSONWithContextTimeout(turnCtx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
 				fmt.Errorf("write upstream websocket request: %w", err),
@@ -1039,7 +1063,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		for {
-			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
+			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(turnCtx, s.openAIWSReadTimeout())
 			if readErr != nil {
 				lease.MarkBroken()
 				return nil, wrapOpenAIWSIngressTurnError(
@@ -1048,6 +1072,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					wroteDownstream,
 				)
 			}
+			homeTurn.observe(upstreamMessage)
 			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
 				upstreamMessage = normalized
 			}

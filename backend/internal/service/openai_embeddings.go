@@ -94,6 +94,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
+		if isHomeRequestFailure(err) {
+			return nil, err
+		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

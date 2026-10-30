@@ -9,6 +9,16 @@ func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
 // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
 func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	owner, ownerErr := homeAttemptOwner(request.Context(), s.accountRepo, s.homeCredentials, account)
+	if ownerErr != nil {
+		return nil, homeRequestFailure(request.Context(), homeControlError(ownerErr))
+	}
+	if owner.HasHomeBinding() {
+		response, err := doHomeHTTP(request, account, s.homeCredentials, func(r *http.Request) (*http.Response, error) {
+			return s.httpUpstream.Do(r, proxyURL, account.ID, account.Concurrency)
+		})
+		return response, homeRequestFailure(request.Context(), err)
+	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {
@@ -26,6 +36,18 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	account *Account,
 	useTLSFallback bool,
 ) (*http.Response, error) {
+	owner, ownerErr := homeAttemptOwner(request.Context(), s.accountRepo, s.homeCredentials, account)
+	if ownerErr != nil {
+		return nil, homeControlError(ownerErr)
+	}
+	if owner.HasHomeBinding() {
+		return doHomeHTTP(request, account, s.homeCredentials, func(r *http.Request) (*http.Response, error) {
+			if useTLSFallback {
+				return s.httpUpstream.DoWithTLS(r, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+			}
+			return s.httpUpstream.Do(r, proxyURL, account.ID, account.Concurrency)
+		})
+	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {

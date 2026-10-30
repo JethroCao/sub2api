@@ -84,6 +84,7 @@ type openAIWSAcquireRequest struct {
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
+	homeIdentity        [32]byte
 	betaFeatures        string
 	codexInstallationID string
 	sessionIDHyphen     string
@@ -282,6 +283,7 @@ type openAIWSConn struct {
 	id string
 	ws openAIWSClientConn
 
+	homeIdentity           [32]byte
 	handshakeHeaders       http.Header
 	handshakeCompatibility openAIWSHandshakeCompatibilityKey
 	routingAffinity        string
@@ -2152,6 +2154,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	accountID := req.Account.ID
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)
+	pooledConn.homeIdentity = homeHeaderIdentity(headers)
 	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
 	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
 	return pooledConn, nil
@@ -2364,6 +2367,9 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
 		betaFeatures: normalizeOpenAIWSBetaFeatures(headers),
+	}
+	if account.HasHomeBinding() {
+		key.homeIdentity = homeHeaderIdentity(headers)
 	}
 	mode := activeCodexFingerprintMode(account)
 	if mode == codexFingerprintOff {

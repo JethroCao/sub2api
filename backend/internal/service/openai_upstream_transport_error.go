@@ -66,6 +66,10 @@ var persistentUpstreamTransportErrorMarkers = []string{
 //     "network is unreachable", "no such host") are kept as a cross-platform safety
 //     net even though the typed checks should cover them on modern Go+Linux.
 func classifyUpstreamTransportError(err error) upstreamTransportErrorClass {
+	var homeErr *HomeControlError
+	if errors.As(err, &homeErr) {
+		return upstreamTransportErrorClass{}
+	}
 	if err == nil {
 		return upstreamTransportErrorClass{}
 	}
@@ -117,6 +121,13 @@ func isClientCanceledTransportError(ctx context.Context, err error) bool {
 func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool) error {
 	if isClientCanceledTransportError(ctx, err) {
 		return err
+	}
+	if isHomeRequestFailure(err) {
+		return err
+	}
+	var homeErr *HomeControlError
+	if errors.As(err, &homeErr) {
+		return homeRequestFailure(ctx, err)
 	}
 	// Keep the original typed error for cancellation and persistence
 	// classification, but never expose its account-private instruction echo to

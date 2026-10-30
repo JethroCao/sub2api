@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -575,6 +576,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if err != nil {
 			if turn == 1 {
 				return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
+			}
+			if isHomeRequestFailure(err) {
+				return nil, NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "shared upstream capacity unavailable; reconnect later", err)
 			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			clientError := buildOpenAIWSHTTPBridgeErrorEvent(http.StatusBadGateway, "Upstream request failed")

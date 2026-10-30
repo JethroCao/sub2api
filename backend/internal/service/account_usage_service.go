@@ -900,7 +900,16 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	if err != nil {
 		return nil, fmt.Errorf("build openai probe client: %w", err)
 	}
-	resp, err := client.Do(req)
+	owner, ownerErr := homeAttemptOwner(req.Context(), s.accountRepo, s.homeCredentials, account)
+	if ownerErr != nil {
+		return nil, homeControlError(ownerErr)
+	}
+	var resp *http.Response
+	if owner.HasHomeBinding() {
+		resp, err = doHomeHTTP(req, account, s.homeCredentials, client.Do)
+	} else {
+		resp, err = client.Do(req)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("openai codex probe request failed: %w", err)
 	}

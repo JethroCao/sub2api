@@ -900,6 +900,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
+	firstHomeTurn, homeErr := s.beginHomeWSTurn(ctx, account, gjson.GetBytes(firstClientMessage, "model").String())
+	if homeErr != nil {
+		return s.handleOpenAIUpstreamTransportError(ctx, c, account, homeErr, true)
+	}
+	defer firstHomeTurn.finish()
+	if firstHomeTurn != nil {
+		token = firstHomeTurn.lease.Credential.AccessToken
+		account = ApplyHomeCredential(account, firstHomeTurn.owner, firstHomeTurn.lease.Credential)
+	}
 	headers, _, buildHdrErr := s.buildOpenAIWSHeaders(
 		ctx,
 		c,
@@ -931,7 +940,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	statusCode := 0
 	var handshakeHeaders http.Header
 	for {
-		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
+		if firstHomeTurn != nil {
+			applyHomeHeaders(headers, firstHomeTurn.lease.Credential)
+		} else {
+			headers, err = s.homeWSHeaders(ctx, account, headers)
+		}
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
@@ -981,8 +994,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
 	}
+	homeFrames := &homeWSFrameConn{inner: upstreamFrameConn, svc: s, account: account, controlCtx: ctx, identity: homeHeaderIdentity(headers), stop: homeStopWSConn(upstreamConn), first: firstHomeTurn}
+	defer homeFrames.Close()
 	privacySafeUpstreamFrameConn := &openAIWSAccountInstructionsRedactingFrameConn{
-		inner:   upstreamFrameConn,
+		inner:   homeFrames,
 		account: account,
 	}
 	relayUpstreamFrameConn := &openAIWSPassthroughFirstOutputFrameConn{
