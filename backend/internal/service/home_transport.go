@@ -116,16 +116,19 @@ func doHomeHTTP(request *http.Request, account *Account, home *HomeCredentialsSe
 	return response, nil
 }
 
-// Observation retains at most one bounded SSE line or JSON response prefix.
-// It never delays or rewrites bytes delivered to existing protocol parsers.
+// Observation projects the small control/usage schema while streaming past
+// arbitrarily large output strings. No whole body or SSE line is retained.
 const homeObserveLimit = 256 << 10
 
 type homeResponseObserver struct {
-	result   homeclient.Result
-	terminal bool
-	sse      bool
-	pending  []byte
-	dropped  bool
+	result                homeclient.Result
+	terminal              bool
+	sse                   bool
+	pending               []byte // at most the five-byte SSE data: prefix
+	parser                *homeJSONProjector
+	lineData, lineIgnored bool
+	doneMarkerPos         int
+	doneMarkerInvalid     bool
 }
 
 func newHomeResponseObserver(status int, headers http.Header) *homeResponseObserver {
@@ -139,41 +142,76 @@ func newHomeResponseObserver(status int, headers http.Header) *homeResponseObser
 }
 func (o *homeResponseObserver) observe(data []byte) {
 	if !o.sse {
-		if len(o.pending)+len(data) <= homeObserveLimit && !o.dropped {
-			o.pending = append(o.pending, data...)
-		} else {
-			o.dropped = true
-			o.pending = nil
+		if o.parser == nil {
+			o.parser = &homeJSONProjector{}
 		}
+		o.parser.feed(data)
 		return
 	}
 	for len(data) > 0 {
 		i := bytes.IndexByte(data, '\n')
-		n := len(data)
-		if i >= 0 {
-			n = i
-		}
-		if !o.dropped {
-			if len(o.pending)+n <= homeObserveLimit {
-				o.pending = append(o.pending, data[:n]...)
-			} else {
-				o.pending = nil
-				o.dropped = true
-			}
-		}
 		if i < 0 {
+			o.observeLine(data)
 			return
 		}
-		if !o.dropped {
-			line := bytes.TrimSpace(o.pending)
-			if bytes.HasPrefix(line, []byte("data:")) {
-				o.event(bytes.TrimSpace(line[5:]))
-			}
-		}
-		o.pending = o.pending[:0]
-		o.dropped = false
-		data = data[n+1:]
+		o.observeLine(data[:i])
+		o.finishLine()
+		data = data[i+1:]
 	}
+}
+func (o *homeResponseObserver) observeLine(data []byte) {
+	if o.lineIgnored {
+		return
+	}
+	for !o.lineData && len(data) > 0 {
+		ch := data[0]
+		data = data[1:]
+		if len(o.pending) == 0 && (ch == ' ' || ch == '\t' || ch == '\r') {
+			continue
+		}
+		if ch != "data:"[len(o.pending)] {
+			o.lineIgnored = true
+			return
+		}
+		o.pending = append(o.pending, ch)
+		if len(o.pending) == 5 {
+			o.lineData = true
+			o.parser = &homeJSONProjector{}
+		}
+	}
+	if !o.lineData {
+		return
+	}
+	if !o.doneMarkerInvalid {
+		for _, ch := range data {
+			if ch == ' ' || ch == '\t' || ch == '\r' {
+				if o.doneMarkerPos == 0 || o.doneMarkerPos == 6 {
+					continue
+				}
+			}
+			if o.doneMarkerPos >= 6 || ch != "[DONE]"[o.doneMarkerPos] {
+				o.doneMarkerInvalid = true
+				break
+			}
+			o.doneMarkerPos++
+		}
+	}
+	o.parser.feed(data)
+}
+func (o *homeResponseObserver) finishLine() {
+	if o.lineData {
+		if !o.doneMarkerInvalid && o.doneMarkerPos == 6 {
+			o.terminal = true
+		} else if raw := o.parser.finish(); len(raw) > 0 {
+			o.event(raw)
+		}
+	}
+	o.parser = nil
+	o.pending = o.pending[:0]
+	o.lineData = false
+	o.lineIgnored = false
+	o.doneMarkerPos = 0
+	o.doneMarkerInvalid = false
 }
 func (o *homeResponseObserver) event(raw []byte) {
 	if bytes.Equal(raw, []byte("[DONE]")) {
@@ -233,14 +271,12 @@ func (o *homeResponseObserver) event(raw []byte) {
 	}
 }
 func (o *homeResponseObserver) end(eof bool) homeclient.Result {
-	if o.sse && !o.dropped {
-		line := bytes.TrimSpace(o.pending)
-		if bytes.HasPrefix(line, []byte("data:")) {
-			o.event(bytes.TrimSpace(line[5:]))
+	if o.sse {
+		o.finishLine()
+	} else if o.parser != nil {
+		if raw := o.parser.finish(); len(raw) > 0 {
+			o.event(raw)
 		}
-	}
-	if !o.sse && !o.dropped {
-		o.event(o.pending)
 	}
 	if o.sse && !o.terminal {
 		o.result.Failed = true
