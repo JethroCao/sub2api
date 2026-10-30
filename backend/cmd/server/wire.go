@@ -82,6 +82,7 @@ func providePluginHostInfo(buildInfo handler.BuildInfo) service.PluginHostInfo {
 }
 
 func provideCleanup(
+	home *service.HomeCredentialsService,
 	entClient *ent.Client,
 	rdb *redis.Client,
 	opsMetricsCollector *service.OpsMetricsCollector,
@@ -321,6 +322,7 @@ func provideCleanup(
 				oauth.Stop()
 				return nil
 			}},
+			{"HomeCredentialsService", func() error { return home.Close() }},
 			{"OpenAIOAuthService", func() error {
 				openaiOAuth.Stop()
 				return nil

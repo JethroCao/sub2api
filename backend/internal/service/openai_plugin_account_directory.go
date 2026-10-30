@@ -143,7 +143,10 @@ func (s *OpenAIGatewayService) ResolvePluginOutboundIdentity(ctx context.Context
 	if account.Type != AccountTypeOAuth || !account.IsOpenAIOAuthLike() {
 		return nil, nil
 	}
-	token, _, err := s.GetAccessToken(ctx, account)
+	if account.HasHomeBinding() {
+		return nil, ErrHomeBinding
+	}
+	token, _, err := s.GetAccessToken(WithNativeCredentialMutation(ctx), account)
 	if err != nil {
 		return nil, err
 	}

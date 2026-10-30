@@ -40,8 +40,11 @@ func (r *upstreamModelMetadataRepoStub) UpdateExtra(_ context.Context, id int64,
 }
 
 func (r *upstreamModelMetadataRepoStub) GetByID(_ context.Context, id int64) (*Account, error) {
-	if r == nil || r.account == nil || r.account.ID != id {
+	if r == nil || (r.account != nil && r.account.ID != id) {
 		return nil, ErrAccountNotFound
+	}
+	if r.account == nil {
+		return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, nil
 	}
 	return r.account, nil
 }

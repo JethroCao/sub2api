@@ -31,7 +31,7 @@ func TestGetAccessToken_SparkShadowResolvesToParent(t *testing.T) {
 		// 影子账号不持凭据，与生产语义一致
 	}
 
-	repo := &stubOpenAIAccountRepo{accounts: []Account{parent}}
+	repo := &stubOpenAIAccountRepo{accounts: []Account{parent, shadow}}
 
 	svc := &OpenAIGatewayService{
 		accountRepo: repo,

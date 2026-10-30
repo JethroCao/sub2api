@@ -138,6 +138,7 @@ func normalizeGrokAccountTestMode(mode string) string {
 
 // AccountTestService handles account testing operations
 type AccountTestService struct {
+	homeCredentials           *HomeCredentialsService
 	accountRepo               AccountRepository
 	geminiTokenProvider       *GeminiTokenProvider
 	claudeTokenProvider       *ClaudeTokenProvider
@@ -837,6 +838,11 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		credentialAccount = resolved
 	}
 
+	prepared, homeErr := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, credentialAccount)
+	if homeErr != nil {
+		return s.sendErrorAndEnd(c, homeErr.Error())
+	}
+	credentialAccount = prepared
 	// Determine authentication method and API URL
 	var authToken string
 	var apiURL string
@@ -2195,6 +2201,11 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		credentialAccount = resolved
 	}
 
+	prepared, homeErr := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, credentialAccount)
+	if homeErr != nil {
+		return s.sendErrorAndEnd(c, homeErr.Error())
+	}
+	credentialAccount = prepared
 	authToken := ""
 	apiURL := ""
 	isOAuth := false
@@ -3135,6 +3146,11 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		}
 		credentialAccount = resolved
 	}
+	prepared, homeErr := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, credentialAccount)
+	if homeErr != nil {
+		return s.sendErrorAndEnd(c, homeErr.Error())
+	}
+	credentialAccount = prepared
 	authToken := ""
 	if !credentialAccount.IsOpenAIAgentIdentity() {
 		authToken = credentialAccount.GetOpenAIAccessToken()

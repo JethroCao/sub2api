@@ -482,3 +482,11 @@ func TestOpenAIStreamOAuthLike429GetsDeadlineWithoutImmediateRuntimeBlock(t *tes
 		})
 	}
 }
+
+func (r *openAIAuthPolicyAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, nil
+}
+
+func (r *openAIStream403AccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, nil
+}

@@ -448,6 +448,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	homeCredentials       *HomeCredentialsService
 	accountRepo           AccountRepository
 	usageLogRepo          UsageLogRepository
 	usageBillingRepo      UsageBillingRepository
@@ -593,6 +594,7 @@ func NewOpenAIGatewayService(
 	}
 	if openAITokenProvider != nil {
 		openAITokenProvider.SetAccountRuntimeBlocker(svc)
+		svc.homeCredentials = openAITokenProvider.homeCredentials
 	}
 	svc.logOpenAIWSModeBootstrap()
 	return svc
@@ -1218,6 +1220,20 @@ func hashSensitiveValueForLog(raw string) string {
 
 // GetAccessToken gets the access token for an OpenAI account
 func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
+	if account != nil && (account.Platform == PlatformOpenAI || account.HasHomeBinding()) {
+		current, err := currentHomeCredentialOwner(ctx, s.accountRepo, account)
+		if err != nil {
+			return "", "", err
+		}
+		if err := requireNativeCredentialMutation(ctx, current); err != nil {
+			return "", "", err
+		}
+		if current.HasHomeBinding() {
+			c, err := s.homeCredentials.Resolve(ctx, current)
+			return c.AccessToken, "oauth", err
+		}
+	}
+
 	if account.IsShadow() {
 		credAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
 		if err != nil {

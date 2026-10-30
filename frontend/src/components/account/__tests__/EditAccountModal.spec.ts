@@ -336,6 +336,23 @@ describe('EditAccountModal', () => {
     showErrorMock.mockReset()
   })
 
+  it('binds the existing OAuth account to a Home UUID and rejects invalid UUIDs', async () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-home-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="edit-home-id"]').setValue('not-a-uuid')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="edit-home-id"]').setValue('eb1b3cb1-3de2-47a4-b833-2b8e6644ad6e')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[0]).toBe(account.id)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
+      openai_credential_source: 'home', home_credential_id: 'eb1b3cb1-3de2-47a4-b833-2b8e6644ad6e'
+    })
+    wrapper.unmount()
+  })
+
   it('loads, updates, and clears OpenAI custom instructions without dropping other credentials', async () => {
     const account = buildAccount()
     account.credentials.openai_custom_instructions = 'Existing instructions'

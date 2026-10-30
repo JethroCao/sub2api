@@ -5,7 +5,8 @@
     width="normal"
     @close="handleClose"
   >
-    <div v-if="account" class="space-y-4">
+    <p v-if="isHomeManaged" class="input-hint">{{ t('admin.accounts.openai.homeReauth') }}</p>
+    <div v-if="account && !isHomeManaged" class="space-y-4">
       <!-- Account Info -->
       <div
         class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-600 dark:bg-dark-700"
@@ -142,7 +143,7 @@
           {{ t('common.cancel') }}
         </button>
         <button
-          v-if="isManualInputMethod"
+          v-if="isManualInputMethod && !isHomeManaged"
           type="button"
           :disabled="!canExchangeCode"
           class="btn btn-primary"
@@ -236,6 +237,7 @@ const addMethod = ref<AddMethod>('oauth')
 const geminiOAuthType = ref<'code_assist' | 'google_one' | 'ai_studio'>('code_assist')
 
 // Computed - check platform
+const isHomeManaged = computed(() => props.account?.extra?.openai_credential_source === 'home')
 const isOpenAI = computed(() => props.account?.platform === 'openai')
 const isOpenAILike = computed(() => isOpenAI.value)
 const isGemini = computed(() => props.account?.platform === 'gemini')
@@ -324,7 +326,7 @@ const handleClose = () => {
 }
 
 const handleGenerateUrl = async () => {
-  if (!props.account) return
+  if (!props.account || isHomeManaged.value) return
 
   if (isOpenAILike.value) {
     await openaiOAuth.generateAuthUrl(props.account.proxy_id)
@@ -341,7 +343,7 @@ const handleGenerateUrl = async () => {
 }
 
 const handleExchangeCode = async () => {
-  if (!props.account) return
+  if (!props.account || isHomeManaged.value) return
 
   const authCode = oauthFlowRef.value?.authCode || ''
   if (!authCode.trim()) return

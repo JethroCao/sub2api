@@ -177,6 +177,17 @@ func (a *Account) ApplyHeaderOverrides(h http.Header) {
 	if h == nil {
 		return
 	}
+	if a.HasHomeBinding() {
+		defer func() {
+			for key := range h {
+				if strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "ChatGPT-Account-ID") {
+					delete(h, key)
+				}
+			}
+			h.Set("Authorization", "Bearer "+a.GetOpenAIAccessToken())
+			h.Set("ChatGPT-Account-ID", a.GetCredential("chatgpt_account_id"))
+		}()
+	}
 	overrides := a.GetHeaderOverrides()
 	if len(overrides) == 0 {
 		return

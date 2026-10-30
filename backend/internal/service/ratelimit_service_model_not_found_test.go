@@ -74,6 +74,7 @@ func TestRateLimitService_HandleUpstreamError_APIKeyModel401UsesModelRateLimit(t
 	svc := &RateLimitService{accountRepo: repo}
 	account := openAIModelNotFoundTempAccount()
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
 	handled := svc.HandleUpstreamError(
 		context.Background(),
 		account,

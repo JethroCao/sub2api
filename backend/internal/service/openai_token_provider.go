@@ -77,6 +77,7 @@ type OpenAITokenCache = GeminiTokenCache
 
 // OpenAITokenProvider manages access_token for OpenAI OAuth accounts.
 type OpenAITokenProvider struct {
+	homeCredentials    *HomeCredentialsService
 	accountRepo        AccountRepository
 	tokenCache         OpenAITokenCache
 	openAIOAuthService *OpenAIOAuthService
@@ -140,6 +141,15 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		return "", errors.New("not an openai oauth account")
 	}
 
+	current, err := currentHomeCredentialOwner(ctx, p.accountRepo, account)
+	if err != nil {
+		return "", err
+	}
+	if current.HasHomeBinding() {
+		c, err := p.homeCredentials.Resolve(ctx, current)
+		return c.AccessToken, err
+	}
+	account = current
 	cacheKey := OpenAITokenCacheKey(account)
 
 	// 1) Try cache first.
@@ -227,6 +237,14 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		}
 	}
 
+	current, err = currentHomeCredentialOwner(ctx, p.accountRepo, account)
+	if err != nil {
+		return "", err
+	}
+	if current.HasHomeBinding() {
+		c, err := p.homeCredentials.Resolve(ctx, current)
+		return c.AccessToken, err
+	}
 	accessToken := account.GetCredential("access_token")
 	if strings.TrimSpace(accessToken) == "" {
 		return "", errors.New("access_token not found in credentials")

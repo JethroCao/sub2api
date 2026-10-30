@@ -3881,3 +3881,24 @@ func TestGPT61SolAPIKeyCatalogContextWindow(t *testing.T) {
 		})
 	}
 }
+
+func (r codexModelsVisibilityAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	for _, accounts := range r.byGroup {
+		for _, a := range accounts {
+			if a.ID == id {
+				return &a, nil
+			}
+		}
+	}
+	// Most catalog tests exercise a supplied immutable request snapshot; only the
+	// current credential-source lookup needs a durable native ownership record.
+	return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, nil
+}
+
+func (r *codexModelsAccountStateRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, nil
+}
+
+func (r splitCodexModelsAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, nil
+}

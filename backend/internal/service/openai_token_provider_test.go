@@ -951,6 +951,7 @@ func TestOpenAITokenProvider_NoRefreshTokenExpired_DisablesAccount(t *testing.T)
 	// Force the provider past the cache hit branch.
 	cache.getErr = errors.New("simulated cache miss")
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
 	provider := NewOpenAITokenProvider(repo, cache, nil)
 	blocker := &runtimeBlockRecorder{}
 	provider.SetAccountRuntimeBlocker(blocker)

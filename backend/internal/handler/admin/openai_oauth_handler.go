@@ -274,6 +274,10 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		return
 	}
 
+	if account.HasHomeBinding() {
+		response.Success(c, dto.AccountFromService(account))
+		return
+	}
 	// Build new credentials from token info
 	newCredentials := h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
 

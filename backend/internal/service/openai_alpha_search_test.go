@@ -656,3 +656,7 @@ func TestIsOpenAIAlphaSearchEndpointUnsupported(t *testing.T) {
 	require.False(t, isOpenAIAlphaSearchEndpointUnsupported(oauth, http.StatusNotFound))
 	require.False(t, isOpenAIAlphaSearchEndpointUnsupported(nil, http.StatusNotFound))
 }
+
+func (r *alphaSearchAccountStateRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	return &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, nil
+}

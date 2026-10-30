@@ -236,6 +236,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			return nil, withGrokCredentialFailureSnapshot(eligibilityErr, freshAccount)
 		}
 	}
+	if freshAccount.HasHomeBinding() {
+		return nil, ErrHomeOwnershipChanged
+	}
 	if !executor.CanRefresh(freshAccount) {
 		if requestPath && freshAccount.IsGrokOAuth() && strings.TrimSpace(freshAccount.GetGrokRefreshToken()) == "" {
 			return nil, withGrokCredentialFailureSnapshot(errGrokOAuthRefreshTokenMissing, freshAccount)
@@ -355,7 +358,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 				"account_id", freshAccount.ID,
 				"error", updateErr,
 			)
-			return nil, fmt.Errorf("%w: %v", errOAuthRefreshCredentialPersist, updateErr)
+			return nil, fmt.Errorf("%w: %w", errOAuthRefreshCredentialPersist, updateErr)
 		}
 	}
 

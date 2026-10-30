@@ -126,6 +126,9 @@ func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedul
 }
 
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
+	if err := service.ValidateAndSanitizeHomeAccount(account); err != nil {
+		return err
+	}
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.Create(ctx, account)
 	}
@@ -682,7 +685,8 @@ func lockAndMergeAccountProbeExtra(
 			extra -> 'opencode_go_usage_auto_refresh',
 			extra -> 'opencode_go_usage_snapshot',
 			extra -> 'grok_observed_models',
-			extra -> 'upstream_model_metadata'
+			extra -> 'upstream_model_metadata',
+            extra
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -713,6 +717,7 @@ func lockAndMergeAccountProbeExtra(
 		currentOpenCodeSnapshot        []byte
 		currentGrokObservedModels      []byte
 		currentUpstreamModelMetadata   []byte
+		currentHomeExtra               []byte
 	)
 	if err := rows.Scan(
 		&identityUnchanged,
@@ -729,6 +734,7 @@ func lockAndMergeAccountProbeExtra(
 		&currentOpenCodeSnapshot,
 		&currentGrokObservedModels,
 		&currentUpstreamModelMetadata,
+		&currentHomeExtra,
 	); err != nil {
 		return nil, err
 	}
@@ -736,6 +742,15 @@ func lockAndMergeAccountProbeExtra(
 		return nil, err
 	}
 
+	var currentExtra map[string]any
+	if len(currentHomeExtra) > 0 {
+		if err := json.Unmarshal(currentHomeExtra, &currentExtra); err != nil {
+			return nil, err
+		}
+	}
+	if err := service.ProtectHomeAccountWrite(ctx, currentExtra, account); err != nil {
+		return nil, err
+	}
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
@@ -963,6 +978,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 			END,
 			updated_at = NOW()
 		WHERE id = $2 AND deleted_at IS NULL
+ AND NOT (COALESCE(extra,'{}'::jsonb) ?| ARRAY['openai_credential_source','home_credential_id'])
 	`, string(payload), id)
 	if err != nil {
 		return err
@@ -972,7 +988,25 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 		return err
 	}
 	if affected == 0 {
-		return service.ErrAccountNotFound
+		rows, queryErr := client.QueryContext(ctx, "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND deleted_at IS NULL)", id)
+		if queryErr != nil {
+			return queryErr
+		}
+		defer rows.Close()
+		var exists bool
+		if !rows.Next() {
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			return service.ErrAccountNotFound
+		}
+		if err := rows.Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return service.ErrAccountNotFound
+		}
+		return service.ErrHomeOwnershipChanged
 	}
 	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		return err
@@ -2789,6 +2823,9 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 }
 
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if err := service.RejectHomeBindingMutation(updates); err != nil {
+		return err
+	}
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.UpdateExtra(ctx, id, updates)
 	}
@@ -3066,6 +3103,9 @@ func ollamaCloudUsageSnapshotClearRequested(extra map[string]any) bool {
 }
 
 func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates service.AccountBulkUpdate) (int64, error) {
+	if err := service.RejectHomeBindingMutation(updates.Extra); err != nil {
+		return 0, err
+	}
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -3142,7 +3182,13 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			return 0, err
 		}
 		credentialPlaceholder = "$" + itoa(idx)
-		setClauses = append(setClauses, "credentials = COALESCE(credentials, '{}'::jsonb) || "+credentialPlaceholder+"::jsonb")
+		merged := "(COALESCE(credentials, '{}'::jsonb) || " + credentialPlaceholder + "::jsonb)"
+		cleaned := merged
+		for _, key := range service.HomeAuthCredentialKeys {
+			cleaned += " - '" + key + "'"
+		}
+		cleaned = "(SELECT COALESCE(jsonb_object_agg(key,value),'{}'::jsonb) FROM jsonb_each(" + cleaned + ") WHERE key NOT LIKE 'agent_%')"
+		setClauses = append(setClauses, "credentials = CASE WHEN COALESCE(extra,'{}'::jsonb) ?| ARRAY['openai_credential_source','home_credential_id'] THEN "+cleaned+" ELSE "+merged+" END")
 		args = append(args, payload)
 		idx++
 	}

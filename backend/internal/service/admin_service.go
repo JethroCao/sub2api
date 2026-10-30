@@ -689,6 +689,7 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
+	homeCredentials      *HomeCredentialsService
 	cfg                  *config.Config
 	userRepo             UserRepository
 	groupRepo            GroupRepository

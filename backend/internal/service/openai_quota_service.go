@@ -471,6 +471,14 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 		account = resolved
 	}
 
+	if s.tokenProvider != nil {
+		account, err = prepareHomeAccount(ctx, s.accountRepo, s.tokenProvider.homeCredentials, account)
+		if err != nil {
+			return "", "", "", false, err
+		}
+	} else if account.HasHomeBinding() {
+		return "", "", "", false, ErrHomeUnavailable
+	}
 	chatGPTAccountID = strings.TrimSpace(account.GetCredential("chatgpt_account_id"))
 	if chatGPTAccountID == "" {
 		// Fall back to organization_id — some legacy accounts only persisted poid.

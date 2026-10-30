@@ -1417,6 +1417,12 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 			"cannot refresh spark shadow account; its credentials are managed by the parent account")
 	}
 
+	if account.HasHomeBinding() {
+		if _, err := h.openaiOAuthService.RefreshAccountToken(ctx, account); err != nil {
+			return nil, "", err
+		}
+		return account, "", nil
+	}
 	var newCredentials map[string]any
 
 	if account.IsOpenAI() {
@@ -1620,12 +1626,16 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
+	ctx := service.WithNativeCredentialMutation(c.Request.Context())
 
 	// 预检查账号存在 + OAuth 类型（与 Refresh handler 语义一致，提供更友好的错误信息）。
 	existing, err := h.adminService.GetAccount(ctx, accountID)
 	if err != nil {
 		response.NotFound(c, "Account not found")
+		return
+	}
+	if existing.HasHomeBinding() || service.HasHomeBindingKeys(req.Extra) {
+		response.ErrorFrom(c, service.ErrHomeBinding)
 		return
 	}
 	if !existing.IsOAuth() {

@@ -1705,6 +1705,13 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_CREDENTIALS_FAILED", "resolve credential account: %v", err)
 	}
 
+	currentOwner, err := currentHomeCredentialOwner(ctx, s.accountRepo, credAccount)
+	if err != nil {
+		return nil, err
+	}
+	if currentOwner.HasHomeBinding() {
+		credAccount = currentOwner
+	}
 	clientVersion = strings.TrimSpace(clientVersion)
 	if clientVersion == "" {
 		clientVersion = CodexCanonicalClientVersion()
@@ -1717,7 +1724,7 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	switch {
 	case credAccount.IsOpenAIOAuth():
 		authToken = strings.TrimSpace(credAccount.GetOpenAIAccessToken())
-		if authToken == "" && !credAccount.IsOpenAIAgentIdentity() {
+		if authToken == "" && !credAccount.IsOpenAIAgentIdentity() && !credAccount.HasHomeBinding() {
 			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_TOKEN_MISSING", "account has no Codex backend access token")
 		}
 	case credAccount.IsOpenAIApiKey():
@@ -1937,6 +1944,17 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
 
+	if !request.useAPIKeyUpstream {
+		prepared, homeErr := prepareHomeAccount(reqCtx, s.accountRepo, s.homeCredentials, request.credentialAccount)
+		if homeErr != nil {
+			return nil, homeErr
+		}
+		request.credentialAccount = prepared
+		if prepared.HasHomeBinding() {
+			req.Header.Set("Authorization", "Bearer "+prepared.GetOpenAIAccessToken())
+			req.Header.Set("ChatGPT-Account-ID", prepared.GetCredential("chatgpt_account_id"))
+		}
+	}
 	var resp *http.Response
 	if request.useAPIKeyUpstream {
 		if s.httpUpstream == nil {
@@ -1946,7 +1964,7 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 		resp, err = s.httpUpstream.Do(req, request.proxyURL, request.accountID, request.accountConcurrency)
 	} else {
 		handled := false
-		if s.pluginManager != nil {
+		if s.pluginManager != nil && !request.credentialAccount.HasHomeBinding() {
 			resp, handled, err = s.pluginManager.RoundTripOpenAIOAuth(reqCtx, req, request.proxyURL, request.credentialAccount)
 		}
 		if !handled {

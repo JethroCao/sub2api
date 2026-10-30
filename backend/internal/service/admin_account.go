@@ -537,6 +537,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := ValidateOpenAICustomInstructionsCredentials(account.Platform, account.Type, account.Credentials); err != nil {
 		return nil, err
 	}
+	if err := ValidateAndSanitizeHomeAccount(account); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
@@ -583,6 +586,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	if err := requireNativeCredentialMutation(ctx, account); err != nil {
+		return nil, err
+	}
 	if account.Platform == PlatformTypeSafe && input.Type != "" && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
@@ -606,6 +612,18 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		if err := ValidateUpstreamRequestIDHeaderExtra(normalizedExtra); err != nil {
 			return nil, err
+		}
+	}
+	if input.Extra != nil {
+		hasIntent := HasHomeBindingKeys(input.Extra)
+		ctx, err = prepareHomeBindingUpdate(ctx, account, normalizedExtra)
+		if err != nil {
+			return nil, err
+		}
+		if !hasIntent {
+			for k, v := range homeBindingValues(account.Extra) {
+				normalizedExtra[k] = v
+			}
 		}
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
@@ -747,6 +765,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if input.Extra == nil {
 		account.Extra = prepareCodexFingerprintExtraForUpdate(account, account.Extra)
+	}
+	if err := ValidateAndSanitizeHomeAccount(account); err != nil {
+		return nil, err
 	}
 	if requestedRateSyncEnabledUpdate != nil && *requestedRateSyncEnabledUpdate {
 		if requestedProbeEnabledUpdate != nil && !*requestedProbeEnabledUpdate {
@@ -944,6 +965,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if err := RejectHomeBindingMutation(updates); err != nil {
+		return err
+	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
@@ -972,6 +996,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if err := RejectHomeBindingMutation(input.Extra); err != nil {
+		return nil, err
+	}
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
@@ -1053,6 +1080,13 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// UpdateAccount 守卫对齐)。覆盖显式 IDs 与 filter 解析出的 IDs(此处 AccountIDs 已解析完成)。
 	if len(input.Credentials) > 0 {
 		for _, acc := range cachedTargets {
+			if acc != nil && acc.HasHomeBinding() {
+				for k := range input.Credentials {
+					if _, allowed := SanitizeHomeCredentials(map[string]any{k: input.Credentials[k]})[k]; !allowed {
+						return nil, ErrHomeBinding
+					}
+				}
+			}
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_NO_CREDENTIALS",
 					"spark shadow account %d cannot hold credentials; manage credentials on the parent account", acc.ID)
@@ -1699,6 +1733,11 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 		return ""
 	}
 
+	prepared, err := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, account)
+	if err != nil {
+		return ""
+	}
+	account = prepared
 	token, _ := account.Credentials["access_token"].(string)
 	if token == "" {
 		return ""
@@ -1733,6 +1772,11 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 		return ""
 	}
 
+	prepared, err := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, account)
+	if err != nil {
+		return ""
+	}
+	account = prepared
 	token, _ := account.Credentials["access_token"].(string)
 	if token == "" {
 		return ""

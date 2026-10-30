@@ -20,6 +20,7 @@ import (
 
 // RateLimitService 处理限流和过载状态管理
 type RateLimitService struct {
+	homeCredentials       *HomeCredentialsService
 	accountRepo           AccountRepository
 	usageRepo             UsageLogRepository
 	cfg                   *config.Config
@@ -300,6 +301,9 @@ const (
 // CheckErrorPolicy 检查自定义错误码和临时不可调度规则。
 // 自定义错误码开启时覆盖后续所有逻辑（包括临时不可调度）。
 func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Account, statusCode int, responseBody []byte, requestedModel ...string) ErrorPolicyResult {
+	if s.handleHome401(ctx, account, statusCode) {
+		return ErrorPolicySkipped
+	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
 	if account.IsCustomErrorCodesEnabled() {
 		if account.ShouldHandleErrorCode(statusCode) {
@@ -331,6 +335,9 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	if s.handleHome401(ctx, account, statusCode) {
+		return false
+	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
 	// Team 联动熔断必须先于池模式/自定义错误码/临时不可调度的各类早退；
 	// 同请求内与 fastpath 调用点的重复触发由方法内去重吸收。
@@ -3020,5 +3027,20 @@ func (s *RateLimitService) triggerStreamTimeoutError(ctx context.Context, accoun
 	}
 
 	slog.Warn("stream_timeout_account_error", "account_id", account.ID, "model", model)
+	return true
+}
+
+func (s *RateLimitService) handleHome401(ctx context.Context, account *Account, status int) bool {
+	if status != http.StatusUnauthorized || account == nil || (account.Platform != PlatformOpenAI && !account.HasHomeBinding()) {
+		return false
+	}
+	owner, err := currentHomeCredentialOwner(ctx, s.accountRepo, account)
+	if err != nil {
+		return true
+	}
+	if !owner.HasHomeBinding() {
+		return false
+	}
+	_ = s.homeCredentials.Recover(ctx, owner, account.GetOpenAIAccessToken())
 	return true
 }

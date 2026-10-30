@@ -8,6 +8,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/homeclient"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -111,13 +112,33 @@ func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo Acco
 	return svc
 }
 
-// ProvideOpenAIOAuthService creates OpenAIOAuthService with privacy/account enrichment support.
+// ProvideHomeCredentialsService keeps ownership checks active even when Home is disabled.
+func ProvideHomeCredentialsService(accounts AccountRepository, cfg *config.Config) (*HomeCredentialsService, error) {
+	if cfg == nil || !cfg.Home.Enabled {
+		return NewHomeCredentialsService(accounts, nil), nil
+	}
+	h := cfg.Home
+	client, err := homeclient.New(homeclient.Config{Address: h.Address, ServerName: h.ServerName, CAFile: h.CAFile, CertFile: h.CertFile, KeyFile: h.KeyFile, APIKey: h.APIKey})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = client.Run(ctx) }()
+	svc := NewHomeCredentialsService(accounts, client)
+	svc.close = func() error { cancel(); return client.Close() }
+	return svc, nil
+}
+
 func ProvideOpenAIOAuthService(
+	home *HomeCredentialsService,
+	accounts AccountRepository,
 	proxyRepo ProxyRepository,
 	oauthClient OpenAIOAuthClient,
 	privacyClientFactory PrivacyClientFactory,
 ) *OpenAIOAuthService {
 	svc := NewOpenAIOAuthService(proxyRepo, oauthClient)
+	svc.homeCredentials = home
+	svc.accountRepo = accounts
 	svc.SetPrivacyClientFactory(privacyClientFactory)
 	return svc
 }
@@ -167,12 +188,14 @@ func ProvideClaudeTokenProvider(
 
 // ProvideOpenAITokenProvider creates OpenAITokenProvider with OAuthRefreshAPI injection
 func ProvideOpenAITokenProvider(
+	home *HomeCredentialsService,
 	accountRepo AccountRepository,
 	tokenCache GeminiTokenCache,
 	openaiOAuthService *OpenAIOAuthService,
 	refreshAPI *OAuthRefreshAPI,
 ) *OpenAITokenProvider {
 	p := NewOpenAITokenProvider(accountRepo, tokenCache, openaiOAuthService)
+	p.homeCredentials = home
 	executor := NewOpenAITokenRefresher(openaiOAuthService, accountRepo)
 	p.SetRefreshAPI(refreshAPI, executor)
 	p.SetRefreshPolicy(OpenAIProviderRefreshPolicy())
@@ -226,6 +249,7 @@ func ProvideOpenAIQuotaAutoResetService(
 }
 
 func ProvideAccountUsageService(
+	home *HomeCredentialsService,
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
 	usageFetcher ClaudeUsageFetcher,
@@ -252,11 +276,13 @@ func ProvideAccountUsageService(
 		identityCache,
 		tlsFPProfileService,
 	)
+	service.homeCredentials = home
 	service.agentIdentityWS = openAIGatewayService
 	return service
 }
 
 func ProvideAccountTestService(
+	home *HomeCredentialsService,
 	accountRepo AccountRepository,
 	geminiTokenProvider *GeminiTokenProvider,
 	claudeTokenProvider *ClaudeTokenProvider,
@@ -280,6 +306,7 @@ func ProvideAccountTestService(
 		tlsFPProfileService,
 	)
 	service.agentIdentityWS = openAIGatewayService
+	service.homeCredentials = home
 	service.SetOpenAIGatewayService(openAIGatewayService)
 	service.SetSettingService(settingService)
 	service.SetPluginManager(pluginManager)
@@ -503,6 +530,7 @@ func ProvideSchedulerSnapshotService(
 
 // ProvideRateLimitService creates RateLimitService with optional dependencies.
 func ProvideRateLimitService(
+	home *HomeCredentialsService,
 	accountRepo AccountRepository,
 	usageRepo UsageLogRepository,
 	cfg *config.Config,
@@ -515,6 +543,7 @@ func ProvideRateLimitService(
 	ollamaCloudUsage *OllamaCloudUsageService,
 ) *RateLimitService {
 	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
+	svc.homeCredentials = home
 	if healthCache, ok := tempUnschedCache.(OpenAIAPIKeyHealthCache); ok {
 		svc.SetOpenAIAPIKeyHealthCache(healthCache)
 	}
@@ -870,6 +899,7 @@ func ProvideAPIKeyService(
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
+	ProvideHomeCredentialsService,
 	// Core services
 	ProvideAuthService,
 	NewPasskeyService,
@@ -890,7 +920,7 @@ var ProviderSet = wire.NewSet(
 	NewBillingService,
 	ProvideBillingCacheService,
 	NewAnnouncementService,
-	NewAdminService,
+	ProvideAdminService,
 	ProvideFeishuOrgPermissionService,
 	NewGatewayService,
 	NewOpenAIGatewayService,
@@ -1104,5 +1134,35 @@ func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.
 func ProvideClaudeResetCreditService(accounts AccountRepository, tokens *ClaudeTokenProvider, proxies ProxyRepository, settings *SettingService, idem *IdempotencyCoordinator, locks LeaderLockCache) *ClaudeResetCreditService {
 	s := NewClaudeResetCreditService(accounts, tokens, proxies, settings)
 	s.ConfigureRedemption(idem, locks)
+	return s
+}
+
+func ProvideAdminService(home *HomeCredentialsService,
+	cfg *config.Config,
+	userRepo UserRepository,
+	groupRepo AdminGroupRepository,
+	accountRepo AdminAccountRepository,
+	proxyRepo ProxyRepository,
+	apiKeyRepo APIKeyRepository,
+	redeemCodeRepo RedeemCodeRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	userRPMCache UserRPMCache,
+	billingCacheService *BillingCacheService,
+	proxyProber ProxyExitInfoProber,
+	proxyLatencyCache ProxyLatencyCache,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	entClient *dbent.Client,
+	settingService *SettingService,
+	defaultSubAssigner DefaultSubscriptionAssigner,
+	userSubRepo UserSubscriptionRepository,
+	privacyClientFactory PrivacyClientFactory,
+	runtimeBlocker AccountRuntimeBlocker,
+	affiliateService *AffiliateService,
+	compositeRouteRepo CompositeModelRouteRepository,
+	compositeResolver *CompositeRouteResolver,
+	channelCacheInvalidator ChannelCacheInvalidator,
+) AdminService {
+	s := NewAdminService(cfg, userRepo, groupRepo, accountRepo, proxyRepo, apiKeyRepo, redeemCodeRepo, userGroupRateRepo, userRPMCache, billingCacheService, proxyProber, proxyLatencyCache, authCacheInvalidator, entClient, settingService, defaultSubAssigner, userSubRepo, privacyClientFactory, runtimeBlocker, affiliateService, compositeRouteRepo, compositeResolver, channelCacheInvalidator).(*adminServiceImpl)
+	s.homeCredentials = home
 	return s
 }

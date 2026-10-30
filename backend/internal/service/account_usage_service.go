@@ -290,6 +290,7 @@ type ClaudeUsageFetcher interface {
 
 // AccountUsageService 账号使用量查询服务
 type AccountUsageService struct {
+	homeCredentials         *HomeCredentialsService
 	accountRepo             AccountRepository
 	usageLogRepo            UsageLogRepository
 	usageFetcher            ClaudeUsageFetcher
@@ -830,6 +831,11 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	if account == nil || !account.IsOAuth() {
 		return nil, nil
 	}
+	prepared, homeErr := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, account)
+	if homeErr != nil {
+		return nil, homeErr
+	}
+	account = prepared
 	accessToken := ""
 	if !account.IsOpenAIAgentIdentity() {
 		accessToken = account.GetOpenAIAccessToken()

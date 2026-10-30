@@ -419,6 +419,13 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 
 		// Update existing
+		if existing.HasHomeBinding() {
+			item.Action = "failed"
+			item.Error = "Home manages this account; CRS cannot replace its credentials"
+			result.Failed++
+			result.Items = append(result.Items, item)
+			continue
+		}
 		existing.Extra = extra
 		existing.Name = defaultName(src.Name, src.ID)
 		existing.Platform = PlatformAnthropic

@@ -648,6 +648,11 @@ export default {
           'Do not enter passwords, tokens, or other secrets. This text is sent to the upstream model and may appear in Responses data returned by the upstream.',
         customInstructionsMaxBytes:
           'Account instructions must not exceed 16 KiB when encoded as UTF-8.',
+        homeManaged: 'Credentials managed by Home',
+        homeManagedDesc: 'Bind this local account to a Home credential UUID. Home owns token refresh. Deactivate and drain local requests before changing ownership.',
+        homeCredentialId: 'Home credential UUID',
+        homeInvalidId: 'Enter a valid Home credential UUID.',
+        homeReauth: 'This account is managed by Home. Use Refresh to sync credentials; re-authorize in Home.',
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',

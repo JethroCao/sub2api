@@ -765,6 +765,11 @@ export default {
         customInstructionsNonSecretWarning:
           '请勿填写密码、令牌或其他敏感信息。此内容会随请求发送给上游模型，并可能出现在上游返回的 Responses 数据中。',
         customInstructionsMaxBytes: '账号附加指令不能超过 16 KiB（按 UTF-8 字节计算）。',
+        homeManaged: '由 Home 管理凭据',
+        homeManagedDesc: '将本地账户绑定到 Home 凭据 UUID，由 Home 负责令牌刷新。变更归属前请停用账户并等待请求结束。',
+        homeCredentialId: 'Home 凭据 UUID',
+        homeInvalidId: '请输入有效的 Home 凭据 UUID。',
+        homeReauth: '此账户由 Home 管理。请使用刷新同步凭据，重新授权请在 Home 中完成。',
         oauthPassthrough: '自动透传（仅替换认证）',
         oauthPassthroughDesc:
           '开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。',

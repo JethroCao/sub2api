@@ -121,6 +121,10 @@ func TestRateLimitService_HandleUpstreamError_OAuth401SetsTempUnschedulable(t *t
 			},
 		}
 
+		if repo.accountsByID == nil {
+			repo.accountsByID = map[int64]*Account{}
+		}
+		repo.accountsByID[account.ID] = account
 		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 		require.True(t, shouldDisable)
@@ -145,6 +149,10 @@ func TestRateLimitService_HandleUpstreamError_OAuth401SetsTempUnschedulable(t *t
 			},
 		}
 
+		if repo.accountsByID == nil {
+			repo.accountsByID = map[int64]*Account{}
+		}
+		repo.accountsByID[account.ID] = account
 		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 		require.True(t, shouldDisable)
@@ -190,6 +198,10 @@ func TestRateLimitService_HandleUpstreamError_SparkShadow401RedirectsToParent(t 
 		// 影子不持凭据:GetCredential("refresh_token") == ""
 	}
 
+	if repo.accountsByID == nil {
+		repo.accountsByID = map[int64]*Account{}
+	}
+	repo.accountsByID[shadow.ID] = shadow
 	shouldDisable := service.HandleUpstreamError(context.Background(), shadow, 401, http.Header{}, []byte("unauthorized"))
 
 	require.True(t, shouldDisable)
@@ -219,6 +231,10 @@ func TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError(t *testin
 		},
 	}
 
+	if repo.accountsByID == nil {
+		repo.accountsByID = map[int64]*Account{}
+	}
+	repo.accountsByID[account.ID] = account
 	shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 	require.True(t, shouldDisable)
@@ -239,6 +255,10 @@ func TestRateLimitService_HandleUpstreamError_NonOAuth401(t *testing.T) {
 		Type:     AccountTypeAPIKey,
 	}
 
+	if repo.accountsByID == nil {
+		repo.accountsByID = map[int64]*Account{}
+	}
+	repo.accountsByID[account.ID] = account
 	shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 	require.True(t, shouldDisable)
@@ -255,6 +275,10 @@ func TestRateLimitService_HandleUpstreamError_NonOAuthModel401StillDisablesCrede
 		Type:     AccountTypeAPIKey,
 	}
 
+	if repo.accountsByID == nil {
+		repo.accountsByID = map[int64]*Account{}
+	}
+	repo.accountsByID[account.ID] = account
 	shouldDisable := service.HandleUpstreamError(
 		context.Background(),
 		account,
@@ -287,6 +311,10 @@ func TestRateLimitService_HandleUpstreamError_OAuth401DoesNotOverwriteCredential
 		},
 	}
 
+	if repo.accountsByID == nil {
+		repo.accountsByID = map[int64]*Account{}
+	}
+	repo.accountsByID[account.ID] = account
 	shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 	require.True(t, shouldDisable)
@@ -314,6 +342,10 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 			},
 		}
 
+		if repo.accountsByID == nil {
+			repo.accountsByID = map[int64]*Account{}
+		}
+		repo.accountsByID[account.ID] = account
 		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 		require.True(t, shouldDisable)
@@ -337,6 +369,10 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 			},
 		}
 
+		if repo.accountsByID == nil {
+			repo.accountsByID = map[int64]*Account{}
+		}
+		repo.accountsByID[account.ID] = account
 		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 		require.True(t, shouldDisable)
@@ -358,6 +394,10 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 			},
 		}
 
+		if repo.accountsByID == nil {
+			repo.accountsByID = map[int64]*Account{}
+		}
+		repo.accountsByID[account.ID] = account
 		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
 		require.True(t, shouldDisable)

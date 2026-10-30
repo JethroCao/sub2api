@@ -156,3 +156,8 @@ func TestGatewayRoutesRetrievePinnedModel(t *testing.T) {
 	}
 	require.Zero(t, upstream.codexCalls.Load(), "retrieve never dispatches a Codex manifest")
 }
+
+func (r *pinnedModelsRoutesRepository) GetByID(_ context.Context, _ int64) (*service.Account, error) {
+	a := r.account
+	return &a, nil
+}

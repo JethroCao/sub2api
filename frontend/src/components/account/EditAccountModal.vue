@@ -2039,6 +2039,18 @@
         </p>
       </div>
 
+      <div v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow" class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="flex items-center gap-2">
+          <input v-model="homeManaged" type="checkbox" data-testid="edit-home-enabled" />
+          <span>{{ t('admin.accounts.openai.homeManaged') }}</span>
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.openai.homeManagedDesc') }}</p>
+        <label v-if="homeManaged" class="block">
+          <span class="input-label">{{ t('admin.accounts.openai.homeCredentialId') }}</span>
+          <input v-model="homeCredentialId" class="input" type="text" autocomplete="off" data-testid="edit-home-id" />
+        </label>
+      </div>
+
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -4265,6 +4277,8 @@ const customBaseUrlEnabled = ref(false)
 const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
+const homeManaged = ref(false)
+const homeCredentialId = ref('')
 const openaiPassthroughEnabled = ref(false)
 const OPENAI_CUSTOM_INSTRUCTIONS_MAX_BYTES = 16 * 1024
 const openAICustomInstructions = ref('')
@@ -4802,6 +4816,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   upstreamBillingRateSyncEnabled.value =
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
+
+  homeManaged.value = extra?.openai_credential_source === 'home'
+  homeCredentialId.value = typeof extra?.home_credential_id === 'string' ? extra.home_credential_id : ''
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
@@ -5803,6 +5820,10 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
+  if (homeManaged.value && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(homeCredentialId.value.trim()) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(homeCredentialId.value.trim()))) {
+    appStore.showError(t('admin.accounts.openai.homeInvalidId'))
+    return
+  }
 
   if (
     props.account.platform === 'openai' &&
@@ -6614,6 +6635,16 @@ const handleSubmit = async () => {
         delete newExtra.upstream_request_id_header
       }
       updatePayload.extra = newExtra
+    }
+
+    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
+      const wasManaged = props.account.extra?.openai_credential_source === 'home'
+      if (homeManaged.value || wasManaged) {
+        updatePayload.extra = { ...(updatePayload.extra || props.account.extra || {}),
+          openai_credential_source: homeManaged.value ? 'home' : null,
+          home_credential_id: homeManaged.value ? homeCredentialId.value.trim() : null
+        }
+      }
     }
 
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {

@@ -1251,6 +1251,10 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Failed to resolve OpenAI account credentials", err)
 	}
+	credentialAccount, err = prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, credentialAccount)
+	if err != nil {
+		return nil, err
+	}
 	if !credentialAccount.IsOpenAIOAuth() {
 		return nil, newUpstreamModelSyncUnsupportedError(
 			fmt.Sprintf("Unsupported OpenAI account type for upstream model sync: %s", credentialAccount.Type), nil,

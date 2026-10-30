@@ -14,6 +14,8 @@ import (
 
 // OpenAIOAuthService handles OpenAI OAuth authentication flows
 type OpenAIOAuthService struct {
+	homeCredentials      *HomeCredentialsService
+	accountRepo          AccountRepository
 	sessionStore         *openai.SessionStore
 	proxyRepo            ProxyRepository
 	oauthClient          OpenAIOAuthClient
@@ -337,6 +339,19 @@ func resolveChatGPTSubscriptionAccountID(tokenInfo *OpenAITokenInfo, orgID strin
 
 // RefreshAccountToken refreshes token for an OpenAI OAuth account
 func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*OpenAITokenInfo, error) {
+	current, err := currentHomeCredentialOwner(ctx, s.accountRepo, account)
+	if err != nil {
+		return nil, err
+	}
+	account = current
+	if account.HasHomeBinding() {
+		c, err := s.homeCredentials.Refresh(ctx, account, "")
+		if err != nil {
+			return nil, err
+		}
+		return &OpenAITokenInfo{AccessToken: c.AccessToken, ChatGPTAccountID: c.AccountID, Email: c.Email, ExpiresAt: c.ExpiresAt.Unix()}, nil
+	}
+
 	if account.Platform != PlatformOpenAI {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_INVALID_ACCOUNT", "account is not an OpenAI account")
 	}
