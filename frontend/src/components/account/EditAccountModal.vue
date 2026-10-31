@@ -2039,7 +2039,7 @@
         </p>
       </div>
 
-      <div v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow" class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="canConfigureHome" class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="flex items-center gap-2">
           <input v-model="homeManaged" type="checkbox" data-testid="edit-home-enabled" />
           <span>{{ t('admin.accounts.openai.homeManaged') }}</span>
@@ -3657,6 +3657,22 @@ const selectableGroups = computed(() => {
 // Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
 // 故隐藏代理选择器。
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+
+const canConfigureHome = computed(() => {
+  const account = props.account
+  if (account?.platform !== 'openai' || account.type !== 'oauth' || isSparkShadow.value) return false
+  // Existing bindings remain editable so legacy conflicting fields cannot trap an account.
+  if (account.extra?.openai_credential_source === 'home') return true
+  const credentials = account.credentials ?? {}
+  for (const key of ['auth_mode', 'openai_auth_mode']) {
+    const value = credentials[key]
+    const mode = typeof value === 'string' ? value.trim().toLowerCase() : ''
+    if (mode && mode !== 'oauth') return false
+  }
+  return !Object.entries(credentials).some(([key, value]) =>
+    (key.startsWith('agent_') || key === 'task_id') && value != null && value !== ''
+  )
+})
 
 const hideAccountLongContextBilling = computed(() => {
   return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)

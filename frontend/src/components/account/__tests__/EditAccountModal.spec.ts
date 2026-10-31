@@ -353,6 +353,35 @@ describe('EditAccountModal', () => {
     wrapper.unmount()
   })
 
+  it.each([
+    { auth_mode: 'pat' },
+    { openai_auth_mode: 'pat' },
+    { auth_mode: 'agent_identity' },
+    { agent_private_key: 'synthetic-key' },
+    { agent_runtime_id: 'synthetic-runtime' },
+    { task_id: 'synthetic-task' }
+  ])('does not offer unsupported Home conversion for %j', (credentials) => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    Object.assign(account.credentials, credentials)
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="edit-home-enabled"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps an existing Home binding editable even with conflicting legacy credentials', () => {
+    const account = buildAccount()
+    account.type = 'oauth'
+    account.credentials.auth_mode = 'pat'
+    account.extra = {
+      openai_credential_source: 'home',
+      home_credential_id: 'eb1b3cb1-3de2-47a4-b833-2b8e6644ad6e'
+    }
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="edit-home-enabled"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('loads, updates, and clears OpenAI custom instructions without dropping other credentials', async () => {
     const account = buildAccount()
     account.credentials.openai_custom_instructions = 'Existing instructions'
