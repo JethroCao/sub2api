@@ -832,7 +832,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageInputSize = imageCfg.InputSize
 	}
 	// Get access token
-	token, _, err := s.GetAccessToken(ctx, account)
+	ctx, token, _, err := s.getOpenAIRequestAccessToken(ctx, c, account)
 	if err != nil {
 		return nil, err
 	}

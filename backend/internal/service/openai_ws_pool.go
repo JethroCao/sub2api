@@ -74,9 +74,15 @@ type openAIWSAcquireRequest struct {
 	// HeadersFactory is evaluated inside dialConn. It exists so credentials
 	// whose authorization is per-dial (Agent Identity) are never cached in
 	// lastAcquire or delayed prewarm state.
-	HeadersFactory  func(context.Context, http.Header) (http.Header, error)
-	ProxyURL        string
-	PreferredConnID string
+	HeadersFactory func(context.Context, http.Header) (http.Header, error)
+	// HomeHeadersFactory also returns the exact credential used by this dial.
+	// It is evaluated independently for foreground and delayed idle prewarm.
+	HomeHeadersFactory func(context.Context, http.Header) (http.Header, *homeWSDialCredential, error)
+	// An admitted foreground turn reports and recovers after releasing its
+	// lease. Idle prewarm clears this flag and owns its own handshake recovery.
+	homeTurnOwnsDialFailure bool
+	ProxyURL                string
+	PreferredConnID         string
 	// ForceNewConn: 强制本次获取新连接（避免复用导致连接内续链状态互相污染）。
 	ForceNewConn bool
 	// ForcePreferredConn: 强制本次只使用 PreferredConnID，禁止漂移到其它连接。
@@ -284,6 +290,7 @@ type openAIWSConn struct {
 	ws openAIWSClientConn
 
 	homeIdentity           [32]byte
+	homeManaged            bool
 	handshakeHeaders       http.Header
 	handshakeCompatibility openAIWSHandshakeCompatibilityKey
 	routingAffinity        string
@@ -1925,6 +1932,7 @@ func (p *openAIWSConnPool) targetConnCountLocked(ap *openAIWSAccountPool, maxCon
 }
 
 func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequest, total int, generations ...uint64) {
+	req.homeTurnOwnsDialFailure = false
 	generation := uint64(0)
 	if len(generations) > 0 {
 		generation = generations[0]
@@ -2122,7 +2130,13 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	headers := cloneHeader(req.Headers)
 	var err error
-	if req.HeadersFactory != nil {
+	var homeCredential *homeWSDialCredential
+	if req.HomeHeadersFactory != nil {
+		headers, homeCredential, err = req.HomeHeadersFactory(ctx, headers)
+		if err != nil {
+			return nil, err
+		}
+	} else if req.HeadersFactory != nil {
 		headers, err = req.HeadersFactory(ctx, headers)
 		if err != nil {
 			return nil, err
@@ -2130,6 +2144,9 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
 	if err != nil {
+		if !req.homeTurnOwnsDialFailure {
+			homeCredential.recover(status)
+		}
 		var handshakeErr *openAIWSHandshakeError
 		var responseBody []byte
 		if errors.As(err, &handshakeErr) && handshakeErr != nil {
@@ -2155,6 +2172,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)
 	pooledConn.homeIdentity = homeHeaderIdentity(headers)
+	pooledConn.homeManaged = homeCredential != nil
 	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
 	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
 	return pooledConn, nil

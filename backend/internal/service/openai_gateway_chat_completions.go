@@ -344,7 +344,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	responsesReq.ServiceTier = normalizedOpenAIServiceTierValue(gjson.GetBytes(responsesBody, "service_tier").String())
 
 	// 5. Get access token
-	token, _, err := s.GetAccessToken(ctx, account)
+	ctx, token, _, err := s.getOpenAIRequestAccessToken(ctx, c, account)
 	if err != nil {
 		return nil, fmt.Errorf("get access token: %w", err)
 	}

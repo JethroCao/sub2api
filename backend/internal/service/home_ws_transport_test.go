@@ -120,7 +120,7 @@ func TestHomeWSEveryTurnIsAdmitted(t *testing.T) {
 	}
 }
 
-func homeWSSession(t *testing.T, mode string, home *transportHomeFakeHome, s *OpenAIGatewayService, handler http.HandlerFunc) (*coderws.Conn, <-chan error) {
+func homeWSSession(t *testing.T, mode string, home *transportHomeFakeHome, s *OpenAIGatewayService, handler http.HandlerFunc, selected ...*Account) (*coderws.Conn, <-chan error) {
 	t.Helper()
 	cfg := passthroughLifecycleConfig()
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
@@ -128,6 +128,14 @@ func homeWSSession(t *testing.T, mode string, home *transportHomeFakeHome, s *Op
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 	cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = 10
 	a := homeTransportAccount()
+	if len(selected) > 0 {
+		copy := *selected[0]
+		copy.Extra = shallowCopyMap(copy.Extra)
+		if copy.Extra == nil {
+			copy.Extra = make(map[string]any)
+		}
+		a = &copy
+	}
 	a.Extra["openai_oauth_responses_websockets_v2_mode"] = mode
 	upstream := httptest.NewServer(handler)
 	t.Cleanup(upstream.Close)

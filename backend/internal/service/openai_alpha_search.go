@@ -49,7 +49,7 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 	body = sanitizedBody
 
-	token, _, err := s.GetAccessToken(ctx, account)
+	ctx, token, _, err := s.getOpenAIRequestAccessToken(ctx, c, account)
 	if err != nil {
 		return nil, err
 	}

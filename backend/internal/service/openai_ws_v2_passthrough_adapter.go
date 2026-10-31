@@ -939,11 +939,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
 	var handshakeHeaders http.Header
+	var homeDialCredential *homeWSDialCredential
 	for {
 		if firstHomeTurn != nil {
 			applyHomeHeaders(headers, firstHomeTurn.lease.Credential)
+			homeDialCredential = &homeWSDialCredential{home: s.homeCredentials, account: firstHomeTurn.account, credential: firstHomeTurn.lease.Credential}
 		} else {
-			headers, err = s.homeWSHeaders(ctx, account, headers)
+			headers, homeDialCredential, err = s.homeWSAuthentication(ctx, account, headers)
 		}
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
@@ -960,6 +962,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			responseBody = handshakeErr.Body
 		}
 		dialErr := &openAIWSDialError{StatusCode: statusCode, ResponseHeaders: cloneHeader(handshakeHeaders), ResponseBody: responseBody, Err: err}
+		firstHomeTurn.dialFailed(dialErr)
+		if firstHomeTurn == nil {
+			homeDialCredential.recover(statusCode)
+		}
 		if s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidWSDialError(dialErr) && !agentTaskRecoveryTried {
 			agentTaskRecoveryTried = true
 			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, account.GetCredential("task_id")); recoveryErr != nil {
@@ -994,7 +1000,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
 	}
-	homeFrames := &homeWSFrameConn{inner: upstreamFrameConn, svc: s, account: account, controlCtx: ctx, identity: homeHeaderIdentity(headers), stop: homeStopWSConn(upstreamConn), first: firstHomeTurn}
+	homeFrames := &homeWSFrameConn{inner: upstreamFrameConn, svc: s, account: account, controlCtx: ctx, identity: homeHeaderIdentity(headers), homeManaged: homeDialCredential != nil, stop: homeStopWSConn(upstreamConn), first: firstHomeTurn}
 	defer homeFrames.Close()
 	privacySafeUpstreamFrameConn := &openAIWSAccountInstructionsRedactingFrameConn{
 		inner:   homeFrames,

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/homeclient"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
@@ -39,9 +40,107 @@ func homeAttemptOwner(ctx context.Context, repo AccountRepository, home *HomeCre
 	}
 	return currentHomeCredentialOwner(ctx, repo, account)
 }
+
+type homeRequestCredentialKey struct{}
+type homeRequestCredential struct {
+	accountID  int64
+	ownerID    int64
+	credential homeclient.Credential
+}
+
+func homeRequestWasManaged(ctx context.Context, accountID int64) bool {
+	if ctx == nil {
+		return false
+	}
+	credential, ok := ctx.Value(homeRequestCredentialKey{}).(homeRequestCredential)
+	return ok && (credential.accountID == accountID || credential.ownerID == accountID)
+}
+
+func withHomeRequestCredential(ctx, source context.Context) context.Context {
+	if credential, ok := source.Value(homeRequestCredentialKey{}).(homeRequestCredential); ok {
+		return context.WithValue(ctx, homeRequestCredentialKey{}, credential)
+	}
+	return ctx
+}
+
+// Carry the source of a request's token through construction, retries and
+// response handling. A shadow has no Home metadata of its own, so the token
+// string alone cannot identify its owner after a concurrent unbind.
+func (s *OpenAIGatewayService) getOpenAIRequestAccessToken(ctx context.Context, c *gin.Context, account *Account) (context.Context, string, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if account == nil {
+		return ctx, "", "", errors.New("account is nil")
+	}
+	if account.Platform != PlatformOpenAI && !account.HasHomeBinding() {
+		token, kind, err := s.GetAccessToken(ctx, account)
+		return ctx, token, kind, err
+	}
+	owner, err := homeAttemptOwner(ctx, s.accountRepo, s.homeCredentials, account)
+	if err != nil {
+		return ctx, "", "", homeRequestFailure(ctx, homeControlError(err))
+	}
+	if owner.HasHomeBinding() {
+		credential, err := s.homeCredentials.Resolve(ctx, owner)
+		if err != nil {
+			return ctx, "", "", homeRequestFailure(ctx, err)
+		}
+		ctx = context.WithValue(ctx, homeRequestCredentialKey{}, homeRequestCredential{accountID: account.ID, ownerID: owner.ID, credential: credential})
+		if c != nil && c.Request != nil {
+			c.Request = c.Request.WithContext(withHomeRequestCredential(c.Request.Context(), ctx))
+		}
+		return ctx, credential.AccessToken, "oauth", nil
+	}
+	// If native ownership changes during token resolution, reject instead of
+	// returning a Home AT whose provenance the caller would not know.
+	token, kind, err := s.GetAccessToken(WithNativeCredentialMutation(ctx), account)
+	return ctx, token, kind, err
+}
+
+// GetRequestCredentialContext preserves request credential ownership while
+// retaining Grok's existing acquisition/failover policy.
+func (s *OpenAIGatewayService) GetRequestCredentialContext(ctx context.Context, c *gin.Context, account *Account) (context.Context, string, string, error) {
+	if account != nil && account.IsGrokOAuth() {
+		token, kind, err := s.getRequestCredential(ctx, c, account)
+		return ctx, token, kind, err
+	}
+	return s.getOpenAIRequestAccessToken(ctx, c, account)
+}
+
+func checkHomeRequestBinding(ctx context.Context, accountID int64, credentialID string) error {
+	if observed, ok := ctx.Value(homeRequestCredentialKey{}).(homeRequestCredential); ok &&
+		(observed.accountID == accountID || observed.ownerID == accountID) && observed.credential.ID != credentialID {
+		return homeControlError(ErrHomeOwnershipChanged)
+	}
+	return nil
+}
+
 func beginHomeAttempt(ctx context.Context, home *HomeCredentialsService, account *Account, model string) (*homeclient.Lease, error) {
+	if homeRequestWasManaged(ctx, account.ID) {
+		owner, err := home.CurrentOwner(ctx, account)
+		if err != nil {
+			return nil, homeControlError(err)
+		}
+		id, err := owner.HomeCredentialID()
+		if err != nil {
+			return nil, homeControlError(err)
+		}
+		if err := checkHomeRequestBinding(ctx, account.ID, id); err != nil {
+			return nil, err
+		}
+	}
 	lease, err := home.Acquire(ctx, account, homeclient.Request{Model: model})
-	return lease, homeControlError(err)
+	if err != nil {
+		return nil, homeControlError(err)
+	}
+	if err := checkHomeRequestBinding(ctx, account.ID, lease.Credential.ID); err != nil {
+		// Nothing reached the model. Home v1.1.7 records 499 as cancellation
+		// history without imposing a retry deadline or credential cooldown.
+		lease.Finish(homeclient.Result{Failed: true, StatusCode: 499, ErrorCode: "request_cancelled"})
+		return nil, err
+	}
+	return lease, nil
 }
 func applyHomeHeaders(headers http.Header, c homeclient.Credential) {
 	// Header overrides and stale request snapshots may never override Home identity.

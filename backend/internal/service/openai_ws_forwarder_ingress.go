@@ -820,8 +820,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
-		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
-			return s.homeWSHeaders(factoryCtx, account, headers)
+		HomeHeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, *homeWSDialCredential, error) {
+			return s.homeWSAuthentication(factoryCtx, account, headers)
 		},
 		ProxyURL: func() string {
 			if account.ProxyID != nil && account.Proxy != nil {
@@ -891,12 +891,22 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool, forceNewConn bool) (*openAIWSConnLease, error) {
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
 		var homeHeaderErr error
-		req.Headers, homeHeaderErr = s.homeWSHeaders(ctx, account, req.Headers)
+		var homeDialCredential *homeWSDialCredential
+		req.Headers, homeDialCredential, homeHeaderErr = s.homeWSAuthentication(ctx, account, req.Headers)
 		if homeHeaderErr != nil {
 			if turn == 1 {
 				return nil, homeRequestFailure(ctx, homeHeaderErr)
 			}
 			return nil, NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "Home credentials unavailable; reconnect later", homeHeaderErr)
+		}
+		if homeDialCredential != nil {
+			// lastAcquire can be used later with a background prewarm context.
+			// Retain the immutable source of these headers even for a shadow
+			// whose own row carries no Home binding metadata.
+			observed := homeRequestCredential{accountID: account.ID, ownerID: homeDialCredential.ownerID, credential: homeDialCredential.credential}
+			req.HomeHeadersFactory = func(factoryCtx context.Context, headers http.Header) (http.Header, *homeWSDialCredential, error) {
+				return s.homeWSAuthentication(context.WithValue(factoryCtx, homeRequestCredentialKey{}, observed), account, headers)
+			}
 		}
 		req.PreferredConnID = strings.TrimSpace(preferred)
 		req.ForcePreferredConn = forcePreferredConn
@@ -1005,6 +1015,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return nil, wrapOpenAIWSIngressTurnError("home_admission", NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "shared upstream capacity unavailable; retry later", homeErr), false)
 		}
 		defer homeTurn.finish()
+		if homeTurn == nil && lease.conn.homeManaged {
+			lease.conn.abort()
+			lease.MarkBroken()
+			return nil, wrapOpenAIWSIngressTurnError("home_ownership", NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "upstream credentials changed; reconnect conversation", ErrHomeOwnershipChanged), false)
+		}
 		turnCtx := ctx
 		if homeTurn != nil {
 			homeTurn.bind(homeStopWSLease(lease))

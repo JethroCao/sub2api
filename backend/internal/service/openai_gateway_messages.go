@@ -348,7 +348,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	// 5. Get access token
-	token, _, err := s.getRequestCredential(ctx, c, account)
+	ctx, token, _, err := s.GetRequestCredentialContext(ctx, c, account)
 	if err != nil {
 		return nil, fmt.Errorf("get access token: %w", err)
 	}

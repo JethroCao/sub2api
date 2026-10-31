@@ -1822,7 +1822,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
 
-	token, _, err := s.GetAccessToken(upstreamCtx, account)
+	upstreamCtx, token, _, err := s.getOpenAIRequestAccessToken(upstreamCtx, c, account)
+	ctx = withHomeRequestCredential(ctx, upstreamCtx)
 	if err != nil {
 		return nil, err
 	}

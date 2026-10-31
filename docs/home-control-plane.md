@@ -94,6 +94,12 @@ sub2 cannot silently substitute another Home credential behind the same local
 account. Its existing scheduler may select another account permitted by the
 original local group and request that account's own pin.
 
+A prepared request retains its Home credential UUID through final admission.
+If that binding changes before dispatch, the request fails with a retryable
+control-plane error before sending model bytes; any unused admission is released.
+Existing WebSocket conversations must reconnect after an ownership change.
+Credential recovery does not automatically replay the rejected model attempt.
+
 ## Controlled cutover
 
 1. Provision the separate sub2 certificate and scoped Home service key. Configure

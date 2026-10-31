@@ -66,7 +66,7 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 		return nil
 	}
 
-	token, _, err := s.GetAccessToken(ctx, account)
+	ctx, token, _, err := s.getOpenAIRequestAccessToken(ctx, c, account)
 	if err != nil {
 		if isHomeRequestFailure(err) {
 			return err
@@ -313,7 +313,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		zap.String("upstream_model", prepared.UpstreamModel),
 	)
 
-	token, _, err := s.GetAccessToken(ctx, account)
+	ctx, token, _, err := s.getOpenAIRequestAccessToken(ctx, c, account)
 	if err != nil {
 		if isHomeRequestFailure(err) {
 			return err

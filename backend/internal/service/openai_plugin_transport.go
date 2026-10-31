@@ -19,6 +19,9 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		})
 		return response, homeRequestFailure(request.Context(), err)
 	}
+	if account.HasHomeBinding() || homeRequestWasManaged(request.Context(), account.ID) {
+		return nil, homeRequestFailure(request.Context(), homeControlError(ErrHomeOwnershipChanged))
+	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {
@@ -47,6 +50,9 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 			}
 			return s.httpUpstream.Do(r, proxyURL, account.ID, account.Concurrency)
 		})
+	}
+	if account.HasHomeBinding() || homeRequestWasManaged(request.Context(), account.ID) {
+		return nil, homeControlError(ErrHomeOwnershipChanged)
 	}
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)

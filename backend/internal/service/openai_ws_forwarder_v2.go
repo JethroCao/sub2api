@@ -216,16 +216,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
-		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
+		HomeHeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, *homeWSDialCredential, error) {
 			if homeTurn != nil && homeTurn.lease.Context().Err() == nil {
 				headers = cloneHeader(headers)
 				applyHomeHeaders(headers, homeTurn.lease.Credential)
-				return headers, nil
+				return headers, &homeWSDialCredential{home: s.homeCredentials, account: homeTurn.account, credential: homeTurn.lease.Credential}, nil
 			}
-			return s.homeWSHeaders(factoryCtx, account, headers)
+			return s.homeWSAuthentication(factoryCtx, account, headers)
 		},
-		PreferredConnID: preferredConnID,
-		ForceNewConn:    forceNewConn,
+		homeTurnOwnsDialFailure: homeTurn != nil,
+		PreferredConnID:         preferredConnID,
+		ForceNewConn:            forceNewConn,
 		ProxyURL: func() string {
 			if account.ProxyID != nil && account.Proxy != nil {
 				return account.Proxy.URL()
@@ -234,6 +235,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}(),
 	})
 	if err != nil {
+		homeTurn.dialFailed(err)
 		var agentDialErr *openAIWSDialError
 		if s.isAgentIdentityAccount(ctx, account) && errors.As(err, &agentDialErr) && isAgentIdentityTaskInvalidWSDialError(agentDialErr) && agentTaskRecoveryTried != nil && !*agentTaskRecoveryTried {
 			*agentTaskRecoveryTried = true
@@ -271,6 +273,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
+	if homeTurn == nil && lease.conn.homeManaged {
+		lease.conn.abort()
+		lease.MarkBroken()
+		lease.Release()
+		return nil, homeRequestFailure(ctx, homeControlError(ErrHomeOwnershipChanged))
+	}
 	if homeTurn != nil {
 		homeTurn.bind(homeStopWSLease(lease))
 		if lease.conn.homeIdentity != homeCredentialIdentity(homeTurn.lease.Credential) {
@@ -284,6 +292,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// 因此 defer 中只需处理正常退出时不 MarkBroken 即可。
 	cleanExit := false
 	defer func() {
+		// Home may abort a failed terminal turn. Finish while this pool lease
+		// still excludes successors from the physical socket.
+		homeTurn.finish()
 		if !cleanExit {
 			lease.MarkBroken()
 		}

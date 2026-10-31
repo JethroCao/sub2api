@@ -33,6 +33,9 @@ func (s *OpenAIGatewayService) beginHomeWSTurn(ctx context.Context, a *Account, 
 		return nil, homeControlError(err)
 	}
 	if !owner.HasHomeBinding() {
+		if a.HasHomeBinding() || homeRequestWasManaged(ctx, a.ID) {
+			return nil, homeControlError(ErrHomeOwnershipChanged)
+		}
 		return nil, nil
 	}
 	lease, err := beginHomeAttempt(ctx, s.homeCredentials, a, model)
@@ -65,6 +68,30 @@ func (t *homeWSTurn) observe(raw []byte) bool {
 	defer t.mu.Unlock()
 	t.observer.event(raw)
 	return t.observer.terminal
+}
+
+// A rejected handshake is already terminal and has an HTTP outcome even though
+// no model frame was received. Preserve it instead of inventing an interrupted
+// HTTP-200 stream, so Home can apply auth/rate-limit recovery correctly.
+func (t *homeWSTurn) dialFailed(err error) {
+	if t == nil || err == nil {
+		return
+	}
+	var dialErr *openAIWSDialError
+	o := newHomeResponseObserver(0, nil)
+	o.result.Failed = true
+	o.result.ErrorCode = "transport_error"
+	if errors.As(err, &dialErr) {
+		o = newHomeResponseObserver(dialErr.StatusCode, dialErr.ResponseHeaders)
+		o.sse = false
+		o.result.Failed = true
+		o.observe(dialErr.ResponseBody)
+	}
+	o.result.Stream = true
+	o.terminal = true
+	t.mu.Lock()
+	t.observer = o
+	t.mu.Unlock()
 }
 func (t *homeWSTurn) finish() {
 	if t == nil {
@@ -102,42 +129,71 @@ func homeStopWSConn(conn openAIWSClientConn) func() {
 	}
 }
 
-// Idle dials are credential-only; every subsequent model frame is separately
-// admitted and compared with the identity that really authenticated this socket.
-func (s *OpenAIGatewayService) homeWSHeaders(ctx context.Context, a *Account, headers http.Header) (http.Header, error) {
+// Keep provenance local to the actual dial. In particular, shadows and delayed
+// pool prewarm must not reconstruct an old token's UUID from a later owner read.
+type homeWSDialCredential struct {
+	home       *HomeCredentialsService
+	account    *Account
+	ownerID    int64
+	credential homeclient.Credential
+}
+
+func (d *homeWSDialCredential) recover(status int) {
+	if d != nil {
+		recoverHomeAttempt(d.home, d.account, d.credential.AccessToken, homeclient.Result{StatusCode: status, Failed: true})
+	}
+}
+
+// Idle dials are credential-only; every later model frame is separately admitted.
+func (s *OpenAIGatewayService) homeWSAuthentication(ctx context.Context, a *Account, headers http.Header) (http.Header, *homeWSDialCredential, error) {
 	owner, err := homeAttemptOwner(ctx, s.accountRepo, s.homeCredentials, a)
 	if err != nil {
-		return nil, homeControlError(err)
+		return nil, nil, homeControlError(err)
+	}
+	id, err := owner.HomeCredentialID()
+	if err != nil {
+		return nil, nil, homeControlError(err)
+	}
+	if err := checkHomeRequestBinding(ctx, a.ID, id); err != nil {
+		return nil, nil, err
 	}
 	if !owner.HasHomeBinding() {
-		return s.refreshOpenAIAgentIdentityHeaders(ctx, a, headers)
+		if a.HasHomeBinding() || homeRequestWasManaged(ctx, a.ID) {
+			return nil, nil, homeControlError(ErrHomeOwnershipChanged)
+		}
+		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, a, headers)
+		return headers, nil, err
 	}
 	c, err := s.homeCredentials.Resolve(ctx, a)
 	if err != nil {
-		return nil, homeControlError(err)
+		return nil, nil, homeControlError(err)
+	}
+	if err := checkHomeRequestBinding(ctx, a.ID, c.ID); err != nil {
+		return nil, nil, err
 	}
 	headers = cloneHeader(headers)
 	if headers == nil {
 		headers = make(http.Header)
 	}
 	applyHomeHeaders(headers, c)
-	return headers, nil
+	return headers, &homeWSDialCredential{home: s.homeCredentials, account: homeAttemptRecoveryAccount(a, c), ownerID: owner.ID, credential: c}, nil
 }
 
 // The wrapper sees first and follow-up response.create frames alike. Observation
 // is performed in the upstream read loop before another turn can be accepted;
 // no delayed downstream callback can finish a later admission.
 type homeWSFrameConn struct {
-	inner      openaiwsv2.FrameConn
-	svc        *OpenAIGatewayService
-	account    *Account
-	controlCtx context.Context
-	identity   [32]byte
-	stop       func()
-	mu         sync.Mutex
-	active     *homeWSTurn
-	first      *homeWSTurn
-	failure    error // causal control failure, recorded before abort wakes the reader
+	inner       openaiwsv2.FrameConn
+	svc         *OpenAIGatewayService
+	account     *Account
+	controlCtx  context.Context
+	identity    [32]byte
+	homeManaged bool
+	stop        func()
+	mu          sync.Mutex
+	active      *homeWSTurn
+	first       *homeWSTurn
+	failure     error // causal control failure, recorded before abort wakes the reader
 }
 
 func (c *homeWSFrameConn) WriteFrame(ctx context.Context, kind coderws.MessageType, raw []byte) error {
@@ -162,6 +218,11 @@ func (c *homeWSFrameConn) WriteFrame(ctx context.Context, kind coderws.MessageTy
 			c.stop()
 			return c.failure
 		}
+	}
+	if turn == nil && c.homeManaged {
+		c.failure = NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "upstream credentials changed; reconnect conversation", ErrHomeOwnershipChanged)
+		c.stop()
+		return c.failure
 	}
 	if turn != nil {
 		if homeCredentialIdentity(turn.lease.Credential) != c.identity {
