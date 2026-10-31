@@ -97,6 +97,7 @@ original local group and request that account's own pin.
 A prepared request retains its Home credential UUID through final admission.
 If that binding changes before dispatch, the request fails with a retryable
 control-plane error before sending model bytes; any unused admission is released.
+Requests prepared with native credentials likewise reject a Home cutover before sending.
 Existing WebSocket conversations must reconnect after an ownership change.
 Credential recovery does not automatically replay the rejected model attempt.
 

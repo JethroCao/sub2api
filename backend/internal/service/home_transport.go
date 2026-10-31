@@ -63,6 +63,31 @@ func withHomeRequestCredential(ctx, source context.Context) context.Context {
 	return ctx
 }
 
+// Probes keep their selected account for routing and their prepared account for
+// headers. Prepare both the headers' credential and its provenance together so
+// a later owner lookup cannot relabel an old token with a replacement UUID.
+func prepareHomeRequestAccount(ctx context.Context, repo AccountRepository, home *HomeCredentialsService, selected, account *Account) (context.Context, *Account, error) {
+	owner, err := homeAttemptOwner(ctx, repo, home, account)
+	if err != nil {
+		return ctx, nil, homeControlError(err)
+	}
+	if !owner.HasHomeBinding() {
+		if account.HasHomeBinding() || homeRequestWasManaged(ctx, selected.ID) {
+			return ctx, nil, homeControlError(ErrHomeOwnershipChanged)
+		}
+		return WithNativeCredentialMutation(ctx), account, nil
+	}
+	credential, err := home.Resolve(ctx, owner)
+	if err != nil {
+		return ctx, nil, err
+	}
+	prepared := ApplyHomeCredential(account, owner, credential)
+	prepared.Extra[HomeCredentialIDKey] = credential.ID
+	ctx = context.WithValue(ctx, homeRequestCredentialKey{}, homeRequestCredential{accountID: selected.ID, ownerID: owner.ID, credential: credential})
+	ctx = WithHomeResultBinding(ctx, credential.ID, selected.ID, owner.ID)
+	return ctx, prepared, nil
+}
+
 // Carry the source of a request's token through construction, retries and
 // response handling. A shadow has no Home metadata of its own, so the token
 // string alone cannot identify its owner after a concurrent unbind.
@@ -92,9 +117,10 @@ func (s *OpenAIGatewayService) getOpenAIRequestAccessToken(ctx context.Context, 
 		}
 		return ctx, credential.AccessToken, "oauth", nil
 	}
-	// If native ownership changes during token resolution, reject instead of
-	// returning a Home AT whose provenance the caller would not know.
-	token, kind, err := s.GetAccessToken(WithNativeCredentialMutation(ctx), account)
+	// Keep native ownership through dispatch as well as token resolution. A
+	// concurrent Home cutover requires a fresh preparation with exact provenance.
+	ctx = WithNativeCredentialMutation(ctx)
+	token, kind, err := s.GetAccessToken(ctx, account)
 	return ctx, token, kind, err
 }
 

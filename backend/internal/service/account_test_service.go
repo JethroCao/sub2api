@@ -838,11 +838,12 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		credentialAccount = resolved
 	}
 
-	prepared, homeErr := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, credentialAccount)
+	ctx, prepared, homeErr := prepareHomeRequestAccount(ctx, s.accountRepo, s.homeCredentials, account, credentialAccount)
 	if homeErr != nil {
 		return s.sendErrorAndEnd(c, homeErr.Error())
 	}
 	credentialAccount = prepared
+	c.Request = c.Request.WithContext(ctx)
 	// Determine authentication method and API URL
 	var authToken string
 	var apiURL string
@@ -984,8 +985,8 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if resp.StatusCode == http.StatusTooManyRequests {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
-		// 401 Unauthorized: 标记账号为永久错误
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		// Home's transport owns exact-token recovery; only native 401s disable.
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !homeRequestWasManaged(ctx, account.ID) {
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -2201,11 +2202,12 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		credentialAccount = resolved
 	}
 
-	prepared, homeErr := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, credentialAccount)
+	ctx, prepared, homeErr := prepareHomeRequestAccount(ctx, s.accountRepo, s.homeCredentials, account, credentialAccount)
 	if homeErr != nil {
 		return s.sendErrorAndEnd(c, homeErr.Error())
 	}
 	credentialAccount = prepared
+	c.Request = c.Request.WithContext(ctx)
 	authToken := ""
 	apiURL := ""
 	isOAuth := false
@@ -2342,7 +2344,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !homeRequestWasManaged(ctx, account.ID) {
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -3146,11 +3148,12 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		}
 		credentialAccount = resolved
 	}
-	prepared, homeErr := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, credentialAccount)
+	ctx, prepared, homeErr := prepareHomeRequestAccount(ctx, s.accountRepo, s.homeCredentials, account, credentialAccount)
 	if homeErr != nil {
 		return s.sendErrorAndEnd(c, homeErr.Error())
 	}
 	credentialAccount = prepared
+	c.Request = c.Request.WithContext(ctx)
 	authToken := ""
 	if !credentialAccount.IsOpenAIAgentIdentity() {
 		authToken = credentialAccount.GetOpenAIAccessToken()

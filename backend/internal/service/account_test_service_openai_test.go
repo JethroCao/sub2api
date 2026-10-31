@@ -127,6 +127,8 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 		Credentials: map[string]any{"access_token": "test-token"},
 	}
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
@@ -379,8 +381,11 @@ func TestAccountTestService_OpenAI429PersistsSnapshotAndRateLimitState(t *testin
 		Credentials: map[string]any{"access_token": "test-token"},
 	}
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
+	require.Len(t, upstream.requests, 1)
 	require.NotEmpty(t, repo.updatedExtra)
 	require.Equal(t, 100.0, repo.updatedExtra["codex_5h_used_percent"])
 	require.Equal(t, account.ID, repo.rateLimitedID)
@@ -410,8 +415,11 @@ func TestAccountTestService_OpenAI429BodyOnlyPersistsRateLimitAndClearsStaleErro
 		Credentials:  map[string]any{"access_token": "test-token"},
 	}
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
+	require.Len(t, upstream.requests, 1)
 	require.Equal(t, account.ID, repo.rateLimitedID)
 	require.NotNil(t, repo.rateLimitedAt)
 	require.Equal(t, account.ID, repo.clearedErrorID)
@@ -439,8 +447,11 @@ func TestAccountTestService_OpenAI429SyncsObservedPlanType(t *testing.T) {
 		Credentials: map[string]any{"access_token": "test-token", "plan_type": "plus"},
 	}
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
+	require.Len(t, upstream.requests, 1)
 	require.Equal(t, []int64{account.ID}, repo.bulkUpdatedIDs)
 	require.Equal(t, "free", repo.bulkUpdatedPayload.Credentials["plan_type"])
 	require.Equal(t, "free", account.Credentials["plan_type"])
@@ -466,8 +477,11 @@ func TestAccountTestService_OpenAI429ActiveAccountDoesNotClearError(t *testing.T
 		Credentials: map[string]any{"access_token": "test-token"},
 	}
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
+	require.Len(t, upstream.requests, 1)
 	require.Equal(t, account.ID, repo.rateLimitedID)
 	require.NotNil(t, repo.rateLimitedAt)
 	require.Zero(t, repo.clearedErrorID)
@@ -494,8 +508,11 @@ func TestAccountTestService_OpenAI429WithoutResetSignalDoesNotMutateRuntimeState
 		Credentials:  map[string]any{"access_token": "test-token"},
 	}
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
+	require.Len(t, upstream.requests, 1)
 	require.Zero(t, repo.rateLimitedID)
 	require.Nil(t, repo.rateLimitedAt)
 	require.Zero(t, repo.clearedErrorID)
@@ -522,8 +539,11 @@ func TestAccountTestService_OpenAI401SetsPermanentErrorOnly(t *testing.T) {
 		Credentials: map[string]any{"access_token": "test-token"},
 	}
 
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
+	require.Len(t, upstream.requests, 1)
 	require.Equal(t, account.ID, repo.setErrorID)
 	require.Contains(t, repo.setErrorMsg, "Authentication failed (401)")
 	require.Zero(t, repo.rateLimitedID)

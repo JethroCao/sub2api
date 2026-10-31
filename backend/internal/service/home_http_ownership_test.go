@@ -52,6 +52,36 @@ func TestHomeHTTPUnbindCannotDispatchPreparedHomeIdentity(t *testing.T) {
 	}
 }
 
+func TestHomeHTTPNativePreparedRequestCannotAdoptHomeIdentity(t *testing.T) {
+	for _, shadow := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "shadow"}[shadow], func(t *testing.T) {
+			h, s := homeTransportSetup(t)
+			_, selected, repo, change := homeProbeAccounts(shadow, "native_to_home")
+			s.accountRepo = repo
+			s.homeCredentials.accounts = repo
+			ctx, token, _, err := s.getOpenAIRequestAccessToken(t.Context(), nil, selected)
+			require.NoError(t, err)
+			require.Equal(t, "native-token", token)
+			var sends atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sends.Add(1)
+				_, _ = io.WriteString(w, `{"status":"completed"}`)
+			}))
+			defer upstream.Close()
+			request := homeTransportRequest(t, upstream.URL).WithContext(ctx)
+			request.Header.Set("Authorization", "Bearer "+token)
+			change()
+			response, err := s.doOpenAIUpstream(request, "", selected)
+			if response != nil {
+				_ = response.Body.Close()
+			}
+			require.Error(t, err, "a native-prepared request must not adopt an unlabelled Home identity during dispatch")
+			require.Zero(t, sends.Load())
+			require.Zero(t, h.count("RPOP", ""))
+		})
+	}
+}
+
 func TestHomeWSFailureKeepsShadowAttemptContext(t *testing.T) {
 	_, s := homeTransportSetup(t)
 	owner := homeTransportAccount()

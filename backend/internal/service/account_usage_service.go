@@ -727,10 +727,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 				if quotaUsage, err := s.openAIQuotaService.QueryUsage(ctx, account.ID); err == nil {
 					if updates := buildCodexSparkWindowExtraUpdates(quotaUsage, now); len(updates) > 0 {
 						mergeAccountExtra(account, updates)
-						s.persistOpenAICodexProbeSnapshot(account.ID, updates)
-						if account.ParentAccountID != nil {
-							notifyOpenAIAutoReset(*account.ParentAccountID)
-						}
+						s.persistOpenAICodexProbeSnapshotForOwner(quotaUsage.resultContext(ctx), account.ID, quotaUsage.sourceOwnerID, updates)
 						if usage.UpdatedAt == nil {
 							usage.UpdatedAt = &now
 						}
@@ -831,7 +828,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	if account == nil || !account.IsOAuth() {
 		return nil, nil
 	}
-	prepared, homeErr := prepareHomeAccount(ctx, s.accountRepo, s.homeCredentials, account)
+	ctx, prepared, homeErr := prepareHomeRequestAccount(ctx, s.accountRepo, s.homeCredentials, account, account)
 	if homeErr != nil {
 		return nil, homeErr
 	}
@@ -907,6 +904,8 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	var resp *http.Response
 	if owner.HasHomeBinding() {
 		resp, err = doHomeHTTP(req, account, s.homeCredentials, client.Do)
+	} else if account.HasHomeBinding() || homeRequestWasManaged(req.Context(), account.ID) {
+		return nil, homeControlError(ErrHomeOwnershipChanged)
 	} else {
 		resp, err = client.Do(req)
 	}
@@ -920,13 +919,17 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 		return nil, err
 	}
 	if len(updates) > 0 {
-		s.persistOpenAICodexProbeSnapshot(account.ID, updates)
+		s.persistOpenAICodexProbeSnapshot(ctx, account.ID, updates)
 		return updates, nil
 	}
 	return nil, nil
 }
 
-func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, updates map[string]any) {
+func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(ctx context.Context, accountID int64, updates map[string]any) {
+	s.persistOpenAICodexProbeSnapshotForOwner(ctx, accountID, accountID, updates)
+}
+
+func (s *AccountUsageService) persistOpenAICodexProbeSnapshotForOwner(ctx context.Context, accountID, ownerID int64, updates map[string]any) {
 	if s == nil || s.accountRepo == nil || accountID <= 0 {
 		return
 	}
@@ -935,10 +938,10 @@ func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, u
 	}
 
 	go func() {
-		updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		updateCtx, updateCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer updateCancel()
 		if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err == nil {
-			notifyOpenAIAutoReset(accountID)
+			notifyOpenAIAutoReset(ownerID)
 		}
 	}()
 }

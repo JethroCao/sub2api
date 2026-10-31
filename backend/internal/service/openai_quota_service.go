@@ -105,6 +105,16 @@ type OpenAIQuotaUsage struct {
 	Credits               *OpenAICredits               `json:"credits,omitempty"`
 	FetchedAt             int64                        `json:"fetched_at"`
 	autoResetCandidates   []openAIAutoResetCreditCandidate
+	sourceOwnerID         int64
+	homeResultBinding     *homeResultBinding
+}
+
+func (u *OpenAIQuotaUsage) resultContext(ctx context.Context) context.Context {
+	if u != nil && u.homeResultBinding != nil {
+		binding := u.homeResultBinding
+		return WithHomeResultBinding(ctx, binding.credentialID, binding.selectedID, binding.ownerID)
+	}
+	return ctx
 }
 
 // OpenAIQuotaResetCredit captures the redeemed credit metadata returned by the
@@ -214,6 +224,10 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 	}
 
 	payload.FetchedAt = time.Now().Unix()
+	// Keep the source of the actual response, including shadow ownership, for
+	// later durable writes. Never reconstruct it from a newer account row.
+	payload.sourceOwnerID = upstream.ownerID
+	payload.homeResultBinding = upstream.homeResultBinding
 	details := s.queryResetCreditDetails(callCtx, client, upstream, accountID)
 	if details != nil {
 		payload.autoResetCandidates = details.AutoResetCandidates
@@ -456,6 +470,8 @@ type openAIQuotaUpstreamSnapshot struct {
 	accessToken, chatGPTAccountID, proxyURL string
 	fedRAMP                                 bool
 	homeAccount                             *Account
+	ownerID                                 int64
+	homeResultBinding                       *homeResultBinding
 }
 
 func (s *OpenAIQuotaService) buildQuotaSnapshotHeaders(ctx context.Context, accountID int64, upstream *openAIQuotaUpstreamSnapshot) (map[string]string, string, error) {
@@ -555,9 +571,14 @@ func (s *OpenAIQuotaService) prepareUpstreamSnapshot(ctx context.Context, accoun
 		}
 	}
 
-	snapshot := &openAIQuotaUpstreamSnapshot{accessToken: accessToken, chatGPTAccountID: chatGPTAccountID, proxyURL: proxyURL, fedRAMP: account.IsChatGPTAccountFedRAMP()}
+	snapshot := &openAIQuotaUpstreamSnapshot{accessToken: accessToken, chatGPTAccountID: chatGPTAccountID, proxyURL: proxyURL, fedRAMP: account.IsChatGPTAccountFedRAMP(), ownerID: account.ID}
 	if account.HasHomeBinding() {
 		snapshot.homeAccount = account
+		id, err := account.HomeCredentialID()
+		if err != nil {
+			return nil, err
+		}
+		snapshot.homeResultBinding = &homeResultBinding{credentialID: id, selectedID: accountID, ownerID: account.ID}
 	}
 	return snapshot, nil
 }
