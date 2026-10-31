@@ -339,9 +339,22 @@ func resolveChatGPTSubscriptionAccountID(tokenInfo *OpenAITokenInfo, orgID strin
 
 // RefreshAccountToken refreshes token for an OpenAI OAuth account
 func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*OpenAITokenInfo, error) {
+	expectedHomeID, err := account.HomeCredentialID()
+	if err != nil {
+		return nil, err
+	}
 	current, err := currentHomeCredentialOwner(ctx, s.accountRepo, account)
 	if err != nil {
 		return nil, err
+	}
+	if expectedHomeID != "" {
+		currentHomeID, err := current.HomeCredentialID()
+		if err != nil {
+			return nil, err
+		}
+		if currentHomeID != expectedHomeID {
+			return nil, ErrHomeOwnershipChanged
+		}
 	}
 	account = current
 	if account.HasHomeBinding() {

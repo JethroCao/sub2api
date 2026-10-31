@@ -22,6 +22,11 @@ const (
 // 的其余 active 账户一并置为 error 并立即熔断。触发账户自身不在 fan-out 范围内，
 // 仍由常规 402 处理标记。
 func (s *RateLimitService) maybeHandleOpenAITeamLinkedError(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if _, managed := HomeResultCredentialID(ctx); managed {
+		// Home owns credential cooldown. This local fanout has no binding-scoped
+		// dedup/cache keys and could otherwise disable unrelated replacement rows.
+		return
+	}
 	if s == nil || s.accountRepo == nil || statusCode != http.StatusPaymentRequired || !isOpenAIOAuthAccount(account) {
 		return
 	}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,23 +30,30 @@ type homeRecoveryAttempt struct {
 	until   time.Time
 	pending bool
 }
+type homeCredentialGeneration struct {
+	sequence uint64
+	observed string // active recovery comparison; cleared when a valid token publishes
+	rejected string // latest known rejection; retained to fence delayed admission
+}
 
 // HomeCredentialsService owns only transient ATs. It never stores or receives RTs.
 // Auxiliary Resolve uses Home Refresh because Home exposes no read-only credential API.
 // Actual model sends must independently Acquire even when Resolve has a warm cache.
 type HomeCredentialsService struct {
-	recoveries map[string]homeRecoveryAttempt
-	failures   map[string]homeCachedFailure
-	close      func() error
-	accounts   AccountRepository
-	client     homeCredentialClient
-	mu         sync.Mutex
-	cache      map[string]homeCachedCredential
-	flight     singleflight.Group
+	recoveries  map[string]homeRecoveryAttempt
+	failures    map[string]homeCachedFailure
+	close       func() error
+	accounts    AccountRepository
+	client      homeCredentialClient
+	mu          sync.Mutex
+	cache       map[string]homeCachedCredential
+	generations map[string]homeCredentialGeneration
+	sequence    uint64
+	flight      singleflight.Group
 }
 
 func NewHomeCredentialsService(accounts AccountRepository, client homeCredentialClient) *HomeCredentialsService {
-	return &HomeCredentialsService{accounts: accounts, client: client, cache: make(map[string]homeCachedCredential), failures: make(map[string]homeCachedFailure), recoveries: make(map[string]homeRecoveryAttempt)}
+	return &HomeCredentialsService{accounts: accounts, client: client, cache: make(map[string]homeCachedCredential), failures: make(map[string]homeCachedFailure), recoveries: make(map[string]homeRecoveryAttempt), generations: make(map[string]homeCredentialGeneration)}
 }
 func currentHomeCredentialOwner(ctx context.Context, repo AccountRepository, a *Account) (*Account, error) {
 	if a == nil {
@@ -91,12 +99,12 @@ func (s *HomeCredentialsService) CurrentOwner(ctx context.Context, a *Account) (
 	return currentHomeCredentialOwner(ctx, s.accounts, a)
 }
 func (s *HomeCredentialsService) Resolve(ctx context.Context, a *Account) (homeclient.Credential, error) {
-	return s.resolve(ctx, a, "", false)
+	return s.resolve(ctx, a, "", false, false)
 }
 func (s *HomeCredentialsService) Refresh(ctx context.Context, a *Account, observedAT string) (homeclient.Credential, error) {
-	return s.resolve(ctx, a, observedAT, observedAT != "")
+	return s.resolve(ctx, a, observedAT, observedAT != "", false)
 }
-func (s *HomeCredentialsService) resolve(ctx context.Context, a *Account, observed string, force bool) (credential homeclient.Credential, err error) {
+func (s *HomeCredentialsService) resolve(ctx context.Context, a *Account, observed string, force, awaitRefresh bool) (credential homeclient.Credential, err error) {
 	defer func() { err = homeControlError(err) }()
 	var zero homeclient.Credential
 	if s == nil {
@@ -127,12 +135,30 @@ func (s *HomeCredentialsService) resolve(ctx context.Context, a *Account, observ
 	}
 	s.mu.Lock()
 	cached, ok := s.cache[id]
-	s.mu.Unlock()
 	if ok && time.Now().Before(cached.until) && (!force || (observed != "" && cached.credential.AccessToken != observed)) {
+		s.mu.Unlock()
 		return cached.credential, nil
 	}
-	ch := s.flight.DoChan(id, func() (any, error) {
+	generation := s.generations[id]
+	if generation.sequence == 0 || (force && observed != "" && generation.observed != observed) {
+		generation = s.advanceGenerationLocked(id, observed)
+	}
+	// A cache miss racing a recovery must carry the same observed rejection.
+	if generation.observed != "" {
+		observed = generation.observed
+		force = true
+	}
+	s.mu.Unlock()
+	ch := s.flight.DoChan(id+":"+strconv.FormatUint(generation.sequence, 10), func() (any, error) {
 		s.mu.Lock()
+		if s.generations[id].sequence != generation.sequence {
+			latest, valid := s.cache[id]
+			s.mu.Unlock()
+			if valid && time.Now().Before(latest.until) {
+				return latest.credential, nil
+			}
+			return zero, ErrHomeUnavailable
+		}
 		failure, failed := s.failures[id]
 		s.mu.Unlock()
 		if failed && time.Now().Before(failure.until) {
@@ -149,18 +175,17 @@ func (s *HomeCredentialsService) resolve(ctx context.Context, a *Account, observ
 		defer cancel()
 		// An empty observed token is an honest cache miss, never a made-up hash.
 		c, err := s.client.Refresh(callCtx, id, observed)
-		if err == nil {
-			err = s.cacheCredential(id, c)
-		}
-		if err != nil {
-			s.mu.Lock()
-			delete(s.cache, id)
-			s.cacheFailureLocked(id, err, time.Now().Add(5*time.Second))
-			s.mu.Unlock()
-			return zero, err
-		}
-		return c, nil
+		return s.publishResolvedCredential(id, generation, c, err)
 	})
+	if awaitRefresh {
+		// Recovery ownership lasts until the actual shared worker has finished,
+		// including its conditional cache publication after cancellation.
+		result := <-ch
+		if result.Err != nil {
+			return zero, result.Err
+		}
+		return result.Val.(homeclient.Credential), nil
+	}
 	select {
 	case <-ctx.Done():
 		return zero, ctx.Err()
@@ -223,13 +248,25 @@ func (s *HomeCredentialsService) Acquire(ctx context.Context, a *Account, reques
 	if id == "" {
 		return nil, ErrHomeBinding
 	}
+	s.mu.Lock()
+	generation := s.generations[id]
+	if generation.sequence == 0 {
+		generation = s.advanceGenerationLocked(id, "")
+	}
+	s.mu.Unlock()
 	request.CredentialID = id
 	lease, err := s.client.Acquire(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	if err = s.cacheCredential(id, lease.Credential); err != nil {
-		lease.Finish(homeclient.Result{Failed: true, ErrorCode: "home_invalid_credential"})
+	if err = s.cacheAcquiredCredential(id, generation, lease.Credential); err != nil {
+		result := homeclient.Result{Failed: true, ErrorCode: "home_invalid_credential"}
+		if errors.Is(err, ErrHomeUnavailable) {
+			// No model bytes were sent. Release superseded valid admission as a
+			// local cancellation, never as a provider authentication failure.
+			result.StatusCode, result.ErrorCode = 499, "home_credential_superseded"
+		}
+		lease.Finish(result)
 		return nil, err
 	}
 	return lease, nil
@@ -254,10 +291,94 @@ func (s *HomeCredentialsService) Close() error {
 }
 
 func (s *HomeCredentialsService) cacheCredential(id string, c homeclient.Credential) error {
+	return s.cacheAcquiredCredential(id, homeCredentialGeneration{}, c)
+}
+
+func (s *HomeCredentialsService) cacheAcquiredCredential(id string, generation homeCredentialGeneration, c homeclient.Credential) error {
+	if err := validateHomeCredential(id, c); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.generations[id]
+	if current.rejected != "" && c.AccessToken == current.rejected {
+		return ErrHomeUnavailable
+	}
+	if generation.sequence != 0 && current.sequence != generation.sequence {
+		if latest, ok := s.cache[id]; ok && time.Now().Before(latest.until) && latest.credential.AccessToken == c.AccessToken {
+			return nil
+		}
+		return ErrHomeUnavailable
+	}
+	s.advanceGenerationLocked(id, "")
+	s.cacheCredentialLocked(id, c)
+	return nil
+}
+
+func validateHomeCredential(id string, c homeclient.Credential) error {
 	now := time.Now()
 	if c.ID != id || c.AccessToken == "" || c.AccountID == "" || (!c.ExpiresAt.IsZero() && !c.ExpiresAt.After(now)) {
 		return ErrHomeBinding
 	}
+	return nil
+}
+
+// A late refresh may neither replace a newer admission credential nor erase it
+// on failure. A rejection advances the same fence even when no AT was cached.
+func (s *HomeCredentialsService) publishResolvedCredential(id string, generation homeCredentialGeneration, c homeclient.Credential, err error) (homeclient.Credential, error) {
+	if err == nil {
+		err = validateHomeCredential(id, c)
+		if err == nil && generation.rejected != "" && c.AccessToken == generation.rejected {
+			err = ErrHomeUnavailable
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.generations[id].sequence != generation.sequence {
+		if latest, ok := s.cache[id]; ok && time.Now().Before(latest.until) {
+			return latest.credential, nil
+		}
+		return homeclient.Credential{}, ErrHomeUnavailable
+	}
+	// Completed comparisons must not pin a later ordinary expiry to an old
+	// observation, including a comparison that failed validation. Retain the
+	// rejected AT as a publication fence while failure backoff remains active.
+	generation.observed = ""
+	s.generations[id] = generation
+	if err != nil {
+		delete(s.cache, id)
+		s.cacheFailureLocked(id, err, time.Now().Add(5*time.Second))
+		return homeclient.Credential{}, err
+	}
+	s.cacheCredentialLocked(id, c)
+	return c, nil
+}
+
+// Caller holds mu. Global sequence numbers avoid ABA after bounded-map eviction.
+func (s *HomeCredentialsService) advanceGenerationLocked(id, observed string) homeCredentialGeneration {
+	rejected := observed
+	if rejected == "" {
+		rejected = s.generations[id].rejected
+	}
+	if len(s.generations) >= 2048 {
+		for key := range s.generations {
+			if key != id && !s.recoveries[key].pending {
+				delete(s.generations, key)
+				delete(s.cache, key)
+				delete(s.failures, key)
+				delete(s.recoveries, key)
+				break
+			}
+		}
+	}
+	s.sequence++
+	generation := homeCredentialGeneration{sequence: s.sequence, observed: observed, rejected: rejected}
+	s.generations[id] = generation
+	return generation
+}
+
+func (s *HomeCredentialsService) cacheCredentialLocked(id string, c homeclient.Credential) {
+	now := time.Now()
 	// Home ATs stay cached until their advertised expiry; only unknown expiry uses
 	// a bounded fallback. Every model attempt still independently calls Acquire.
 	until := now.Add(5 * time.Minute)
@@ -267,8 +388,6 @@ func (s *HomeCredentialsService) cacheCredential(id string, c homeclient.Credent
 			until = c.ExpiresAt
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if len(s.cache) >= 1024 {
 		for key, value := range s.cache {
 			if !now.Before(value.until) {
@@ -289,7 +408,6 @@ func (s *HomeCredentialsService) cacheCredential(id string, c homeclient.Credent
 	}
 	s.cache[id] = homeCachedCredential{c, until}
 	delete(s.failures, id)
-	return nil
 }
 
 // Caller holds mu. A failed/rejected credential must not immediately turn into
@@ -311,7 +429,12 @@ func (s *HomeCredentialsService) Recover(ctx context.Context, a *Account, observ
 	if s == nil {
 		return ErrHomeUnavailable
 	}
-	owner, err := s.CurrentOwner(ctx, a)
+	// A 401 remains an observed rejection when its request is canceled. Bound
+	// the authoritative owner read independently; never refresh an unverified
+	// binding, and keep provider recovery detached below.
+	ownerCtx, cancelOwner := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	owner, err := s.CurrentOwner(ownerCtx, a)
+	cancelOwner()
 	if err != nil {
 		return err
 	}
@@ -336,10 +459,11 @@ func (s *HomeCredentialsService) Recover(ctx context.Context, a *Account, observ
 	previous := s.recoveries[id]
 	if previous.pending || now.Before(previous.until) {
 		// A newly refreshed token may itself receive 401 during the cooldown.
-		// Stop serving that token without starting another rotation. An ongoing
-		// recovery owns its cache update and must not be blocked by this failure.
-		if cached, ok := s.cache[id]; !previous.pending && ok && observedAT != "" && cached.credential.AccessToken == observedAT {
+		// Fence that token without another rotation. Repeated rejections of the
+		// original token keep its in-progress recovery generation intact.
+		if cached, ok := s.cache[id]; observedAT != "" && (!ok || cached.credential.AccessToken == observedAT) && s.generations[id].rejected != observedAT {
 			delete(s.cache, id)
+			s.advanceGenerationLocked(id, observedAT)
 			s.cacheFailureLocked(id, ErrHomeUnavailable, previous.until)
 		}
 		s.mu.Unlock()
@@ -352,25 +476,41 @@ func (s *HomeCredentialsService) Recover(ctx context.Context, a *Account, observ
 			}
 		}
 		if len(s.recoveries) >= 1024 {
-			for key := range s.recoveries {
-				delete(s.recoveries, key)
-				break
+			for key, attempt := range s.recoveries {
+				if !attempt.pending {
+					delete(s.recoveries, key)
+					break
+				}
 			}
 		}
 	}
 	// The actual upstream rejection invalidates this AT even if Home is offline
 	// or the caller is canceled before the bounded refresh can complete.
-	if cached, ok := s.cache[id]; ok && observedAT != "" && cached.credential.AccessToken == observedAT {
+	if cached, ok := s.cache[id]; observedAT == "" || !ok || cached.credential.AccessToken == observedAT {
 		delete(s.cache, id)
+		s.advanceGenerationLocked(id, observedAT)
 	}
 	s.recoveries[id] = homeRecoveryAttempt{until: now.Add(5 * time.Second), pending: true}
 	s.mu.Unlock()
-	_, err = s.resolve(ctx, owner, observedAT, true)
-	s.mu.Lock()
-	if attempt, ok := s.recoveries[id]; ok {
-		attempt.pending = false
-		s.recoveries[id] = attempt
+	// Cancellation releases the caller, not ownership of the bounded recovery.
+	// Keep pending set until the detached worker actually terminates.
+	done := make(chan error, 1)
+	go func() {
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		_, err := s.resolve(callCtx, owner, observedAT, true, true)
+		s.mu.Lock()
+		if attempt, ok := s.recoveries[id]; ok {
+			attempt.pending = false
+			s.recoveries[id] = attempt
+		}
+		s.mu.Unlock()
+		done <- err
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		return err
 	}
-	s.mu.Unlock()
-	return err
 }

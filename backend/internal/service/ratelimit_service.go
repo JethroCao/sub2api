@@ -152,6 +152,35 @@ func (s *RateLimitService) notifyAccountSchedulingBlocked(account *Account, unti
 	s.runtimeBlocker.BlockAccountScheduling(account, until, reason)
 }
 
+func homeResultAccount(ctx context.Context, account *Account) *Account {
+	id, managed := HomeResultCredentialID(ctx)
+	if !managed || account == nil {
+		return account
+	}
+	copy := *account
+	copy.Platform, copy.Type = PlatformOpenAI, AccountTypeOAuth
+	copy.Credentials = SanitizeHomeCredentials(account.Credentials)
+	copy.Extra = shallowCopyMap(account.Extra)
+	copy.Extra[OpenAICredentialSourceKey] = "home"
+	copy.Extra[HomeCredentialIDKey] = id
+	return &copy
+}
+
+func (s *RateLimitService) notifySchedulingBeforeWrite(ctx context.Context, account *Account, until time.Time, reason string) {
+	if _, managed := HomeResultCredentialID(ctx); !managed {
+		s.notifyAccountSchedulingBlocked(account, until, reason)
+	}
+}
+
+func (s *RateLimitService) notifySchedulingAfterWrite(ctx context.Context, account *Account, until time.Time, reason string) {
+	if _, managed := HomeResultCredentialID(ctx); managed {
+		snapshot := homeResultAccount(ctx, account)
+		AfterAccountCommit(ctx, func(context.Context) {
+			s.notifyAccountSchedulingBlocked(snapshot, until, reason)
+		})
+	}
+}
+
 func (s *RateLimitService) notifyAccountSchedulingBlockCleared(accountID int64) {
 	if s == nil || s.runtimeBlocker == nil || accountID <= 0 {
 		return
@@ -301,6 +330,10 @@ const (
 // CheckErrorPolicy 检查自定义错误码和临时不可调度规则。
 // 自定义错误码开启时覆盖后续所有逻辑（包括临时不可调度）。
 func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Account, statusCode int, responseBody []byte, requestedModel ...string) ErrorPolicyResult {
+	ctx = homeUpstreamResultContext(ctx, account)
+	if staleHomeUpstreamResult(ctx, s.accountRepo, account) {
+		return ErrorPolicySkipped
+	}
 	if s.handleHome401(ctx, account, statusCode) {
 		return ErrorPolicySkipped
 	}
@@ -335,6 +368,10 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	ctx = homeUpstreamResultContext(ctx, account)
+	if staleHomeUpstreamResult(ctx, s.accountRepo, account) {
+		return false
+	}
 	if s.handleHome401(ctx, account, statusCode) {
 		return false
 	}
@@ -977,13 +1014,15 @@ func (s *RateLimitService) GeminiCooldown(ctx context.Context, account *Account)
 }
 
 // handleAuthError 处理认证类错误(401/403)，停止账号调度
-func (s *RateLimitService) handleAuthError(ctx context.Context, account *Account, errorMsg string) {
-	s.notifyAccountSchedulingBlocked(account, time.Time{}, "auth_error")
+func (s *RateLimitService) handleAuthError(ctx context.Context, account *Account, errorMsg string) bool {
+	s.notifySchedulingBeforeWrite(ctx, account, time.Time{}, "auth_error")
 	if err := s.accountRepo.SetError(ctx, account.ID, errorMsg); err != nil {
 		slog.Warn("account_set_error_failed", "account_id", account.ID, "error", err)
-		return
+		return false
 	}
+	s.notifySchedulingAfterWrite(ctx, account, time.Time{}, "auth_error")
 	slog.Warn("account_disabled_auth_error", "account_id", account.ID, "error", errorMsg)
+	return true
 }
 
 func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody []byte, fallback string) string {
@@ -1086,6 +1125,14 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		responseBody,
 		"account may be suspended or lack permissions",
 	)
+	if _, managed := HomeResultCredentialID(ctx); managed {
+		if isOpenAIHTTPUpstreamAccessStateError(http.StatusForbidden, "", responseBody) {
+			return s.handleAuthError(ctx, account, msg)
+		}
+		// Home already received this actual execution failure. Local Redis strike
+		// counters have no binding dimension and must not outlive an unbind.
+		return true
+	}
 
 	if s.openAI403CounterCache == nil {
 		s.handleAuthError(ctx, account, msg)
@@ -1234,11 +1281,12 @@ func (s *RateLimitService) handleAntigravity403(ctx context.Context, account *Ac
 // handleCustomErrorCode 处理自定义错误码，停止账号调度
 func (s *RateLimitService) handleCustomErrorCode(ctx context.Context, account *Account, statusCode int, errorMsg string) {
 	msg := "Custom error code " + strconv.Itoa(statusCode) + ": " + errorMsg
-	s.notifyAccountSchedulingBlocked(account, time.Time{}, "custom_error_code")
+	s.notifySchedulingBeforeWrite(ctx, account, time.Time{}, "custom_error_code")
 	if err := s.accountRepo.SetError(ctx, account.ID, msg); err != nil {
 		slog.Warn("account_set_error_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
 		return
 	}
+	s.notifySchedulingAfterWrite(ctx, account, time.Time{}, "custom_error_code")
 	slog.Warn("account_disabled_custom_error", "account_id", account.ID, "status_code", statusCode, "error", errorMsg)
 }
 
@@ -1287,11 +1335,12 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		s.persistOpenAICodexSnapshot(ctx, account, headers)
 		notifyOpenAIAutoReset(account.ID)
 		if resetAt := s.calculateOpenAI429ResetTime(headers); resetAt != nil {
-			s.notifyAccountSchedulingBlocked(account, *resetAt, "429")
+			s.notifySchedulingBeforeWrite(ctx, account, *resetAt, "429")
 			if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
 				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 				return
 			}
+			s.notifySchedulingAfterWrite(ctx, account, *resetAt, "429")
 			slog.Info("openai_account_rate_limited", "account_id", account.ID, "reset_at", *resetAt)
 			return
 		}
@@ -1299,11 +1348,12 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 
 	// 2. Anthropic 平台：尝试解析 per-window 头（5h / 7d），选择实际触发的窗口
 	if result := calculateAnthropic429ResetTime(headers); result != nil {
-		s.notifyAccountSchedulingBlocked(account, result.resetAt, "429")
+		s.notifySchedulingBeforeWrite(ctx, account, result.resetAt, "429")
 		if err := s.accountRepo.SetRateLimited(ctx, account.ID, result.resetAt); err != nil {
 			slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 			return
 		}
+		s.notifySchedulingAfterWrite(ctx, account, result.resetAt, "429")
 
 		// 更新 session window：优先使用 5h-reset 头精确计算，否则从 resetAt 反推
 		windowEnd := result.resetAt
@@ -1329,11 +1379,12 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			// 尝试解析 OpenAI 的 usage_limit_reached 错误
 			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
 				resetTime := time.Unix(*resetAt, 0)
-				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
+				s.notifySchedulingBeforeWrite(ctx, account, resetTime, "429")
 				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 					return
 				}
+				s.notifySchedulingAfterWrite(ctx, account, resetTime, "429")
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
@@ -1341,11 +1392,12 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			// 尝试解析 Gemini 格式（用于其他平台）
 			if resetAt := ParseGeminiRateLimitResetTime(responseBody); resetAt != nil {
 				resetTime := time.Unix(*resetAt, 0)
-				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
+				s.notifySchedulingBeforeWrite(ctx, account, resetTime, "429")
 				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 					return
 				}
+				s.notifySchedulingAfterWrite(ctx, account, resetTime, "429")
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
@@ -1380,11 +1432,12 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	resetAt := time.Unix(ts, 0)
 
 	// 标记限流状态
-	s.notifyAccountSchedulingBlocked(account, resetAt, "429")
+	s.notifySchedulingBeforeWrite(ctx, account, resetAt, "429")
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
+	s.notifySchedulingAfterWrite(ctx, account, resetAt, "429")
 
 	// 根据重置时间反推5h窗口
 	windowEnd := resetAt
@@ -1405,10 +1458,12 @@ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, accoun
 
 	resetAt := time.Now().Add(cooldown)
 	slog.Warn("rate_limit_429_fallback_used", "account_id", account.ID, "platform", account.Platform, "reason", reason, "using_default", cooldown.String())
-	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
+	s.notifySchedulingBeforeWrite(ctx, account, resetAt, "429_fallback")
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+		return
 	}
+	s.notifySchedulingAfterWrite(ctx, account, resetAt, "429_fallback")
 }
 
 func (s *RateLimitService) get429FallbackCooldown(ctx context.Context, account *Account) (time.Duration, bool) {
@@ -2054,11 +2109,12 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	}
 
 	until := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
-	s.notifyAccountSchedulingBlocked(account, until, "529")
+	s.notifySchedulingBeforeWrite(ctx, account, until, "529")
 	if err := s.accountRepo.SetOverloaded(ctx, account.ID, until); err != nil {
 		slog.Warn("overload_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
+	s.notifySchedulingAfterWrite(ctx, account, until, "529")
 
 	slog.Info("account_overloaded", "account_id", account.ID, "until", until)
 }
@@ -2881,13 +2937,15 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 		return true
 	}
 
-	s.notifyAccountSchedulingBlocked(account, until, "temp_unschedulable")
+	s.notifySchedulingBeforeWrite(ctx, account, until, "temp_unschedulable")
 	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
 		slog.Warn("temp_unsched_set_failed", "account_id", account.ID, "error", err)
 		return false
 	}
 
-	if s.tempUnschedCache != nil {
+	s.notifySchedulingAfterWrite(ctx, account, until, "temp_unschedulable")
+	_, homeResult := HomeResultCredentialID(ctx)
+	if s.tempUnschedCache != nil && !homeResult {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
 			slog.Warn("temp_unsched_cache_set_failed", "account_id", account.ID, "error", err)
 		}
@@ -2915,6 +2973,12 @@ func (s *RateLimitService) HandleStreamTimeout(ctx context.Context, account *Acc
 		return false
 	}
 
+	ctx = homeUpstreamResultContext(ctx, account)
+	if staleHomeUpstreamResult(ctx, s.accountRepo, account) {
+		return false
+	}
+	_, homeResult := HomeResultCredentialID(ctx)
+
 	// 获取系统设置
 	if s.settingService == nil {
 		slog.Warn("stream_timeout_setting_service_missing", "account_id", account.ID)
@@ -2937,7 +3001,7 @@ func (s *RateLimitService) HandleStreamTimeout(ctx context.Context, account *Acc
 
 	// 增加超时计数
 	var count int64 = 1
-	if s.timeoutCounterCache != nil {
+	if s.timeoutCounterCache != nil && !homeResult {
 		count, err = s.timeoutCounterCache.IncrementTimeoutCount(ctx, account.ID, settings.ThresholdWindowMinutes)
 		if err != nil {
 			slog.Warn("stream_timeout_increment_count_failed", "account_id", account.ID, "error", err)
@@ -2986,20 +3050,22 @@ func (s *RateLimitService) triggerStreamTimeoutTempUnsched(ctx context.Context, 
 		reason = state.ErrorMessage
 	}
 
-	s.notifyAccountSchedulingBlocked(account, until, "stream_timeout_temp_unschedulable")
+	s.notifySchedulingBeforeWrite(ctx, account, until, "stream_timeout_temp_unschedulable")
 	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
 		slog.Warn("stream_timeout_set_temp_unsched_failed", "account_id", account.ID, "error", err)
 		return false
 	}
 
-	if s.tempUnschedCache != nil {
+	s.notifySchedulingAfterWrite(ctx, account, until, "stream_timeout_temp_unschedulable")
+	_, homeResult := HomeResultCredentialID(ctx)
+	if s.tempUnschedCache != nil && !homeResult {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
 			slog.Warn("stream_timeout_set_temp_unsched_cache_failed", "account_id", account.ID, "error", err)
 		}
 	}
 
 	// 重置超时计数
-	if s.timeoutCounterCache != nil {
+	if s.timeoutCounterCache != nil && !homeResult {
 		if err := s.timeoutCounterCache.ResetTimeoutCount(ctx, account.ID); err != nil {
 			slog.Warn("stream_timeout_reset_count_failed", "account_id", account.ID, "error", err)
 		}
@@ -3013,14 +3079,16 @@ func (s *RateLimitService) triggerStreamTimeoutTempUnsched(ctx context.Context, 
 func (s *RateLimitService) triggerStreamTimeoutError(ctx context.Context, account *Account, model string) bool {
 	errorMsg := "Stream data interval timeout (repeated failures) for model: " + model
 
-	s.notifyAccountSchedulingBlocked(account, time.Time{}, "stream_timeout_error")
+	s.notifySchedulingBeforeWrite(ctx, account, time.Time{}, "stream_timeout_error")
 	if err := s.accountRepo.SetError(ctx, account.ID, errorMsg); err != nil {
 		slog.Warn("stream_timeout_set_error_failed", "account_id", account.ID, "error", err)
 		return false
 	}
 
+	s.notifySchedulingAfterWrite(ctx, account, time.Time{}, "stream_timeout_error")
+	_, homeResult := HomeResultCredentialID(ctx)
 	// 重置超时计数
-	if s.timeoutCounterCache != nil {
+	if s.timeoutCounterCache != nil && !homeResult {
 		if err := s.timeoutCounterCache.ResetTimeoutCount(ctx, account.ID); err != nil {
 			slog.Warn("stream_timeout_reset_count_failed", "account_id", account.ID, "error", err)
 		}
@@ -3030,17 +3098,77 @@ func (s *RateLimitService) triggerStreamTimeoutError(ctx context.Context, accoun
 	return true
 }
 
+// Keep a completed Home request's state changes on its original binding. The
+// request marker also recognizes the owner ID when a shadow callback has already
+// resolved its parent. Same-binding non-401 errors retain the normal policies.
+func homeUpstreamResultContext(ctx context.Context, account *Account) context.Context {
+	if account == nil {
+		return ctx
+	}
+	if _, ok := HomeResultCredentialID(ctx); ok {
+		return ctx
+	}
+	expectedID := ""
+	selectedID, ownerID := account.ID, account.ID
+	if homeRequestWasManaged(ctx, account.ID) {
+		binding := ctx.Value(homeRequestCredentialKey{}).(homeRequestCredential)
+		expectedID, selectedID, ownerID = binding.credential.ID, binding.accountID, binding.ownerID
+	} else if account.HasHomeBinding() {
+		if account.ParentAccountID != nil {
+			ownerID = *account.ParentAccountID
+		}
+		observed := *account
+		observed.ParentAccountID = nil
+		var err error
+		expectedID, err = observed.HomeCredentialID()
+		if err != nil {
+			return WithHomeResultCredentialID(ctx, "")
+		}
+	} else {
+		return ctx
+	}
+	return WithHomeResultBinding(ctx, expectedID, selectedID, ownerID)
+}
+
+func staleHomeUpstreamResult(ctx context.Context, repo AccountRepository, account *Account) bool {
+	expectedID, ok := HomeResultCredentialID(homeUpstreamResultContext(ctx, account))
+	if !ok {
+		return false
+	}
+	if expectedID == "" {
+		return true
+	}
+	owner, err := currentHomeCredentialOwner(ctx, repo, account)
+	if err != nil {
+		return true
+	}
+	currentID, err := owner.HomeCredentialID()
+	return err != nil || currentID != expectedID
+}
+
 func (s *RateLimitService) handleHome401(ctx context.Context, account *Account, status int) bool {
 	if status != http.StatusUnauthorized || account == nil || (account.Platform != PlatformOpenAI && !account.HasHomeBinding()) {
 		return false
+	}
+	if homeRequestWasManaged(ctx, account.ID) {
+		// The transport owns recovery using the actual admitted credential.
+		return true
 	}
 	owner, err := currentHomeCredentialOwner(ctx, s.accountRepo, account)
 	if err != nil {
 		return true
 	}
-	if !owner.HasHomeBinding() {
-		return false
+	if account.HasHomeBinding() {
+		// The failed request belongs to its observed binding, even if the row is
+		// now native or mapped elsewhere. Never disable the replacement owner.
+		// A prepared shadow retains routing identity; recovery needs an ordinary
+		// owner-shaped binding while retaining that local ID for the reread.
+		observed := *account
+		observed.ParentAccountID = nil
+		_ = s.homeCredentials.Recover(ctx, &observed, account.GetOpenAIAccessToken())
+		return true
 	}
-	_ = s.homeCredentials.Recover(ctx, owner, account.GetOpenAIAccessToken())
-	return true
+	// A selected native/shadow snapshot cannot identify the UUID or token used
+	// by admission. The actual HTTP/WS wrapper owns its exact-token recovery.
+	return owner.HasHomeBinding()
 }

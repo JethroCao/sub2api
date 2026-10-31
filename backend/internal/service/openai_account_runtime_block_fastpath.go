@@ -93,6 +93,10 @@ func isOpenAIAccount(account *Account) bool {
 // handleOpenAIAccountUpstreamError expects canonicalModel to be the model used
 // for scheduling after applying account mapping exactly once.
 func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, canonicalModel ...string) bool {
+	ctx = homeUpstreamResultContext(ctx, account)
+	if s != nil && staleHomeUpstreamResult(ctx, s.accountRepo, account) {
+		return false
+	}
 	if s != nil && s.rateLimitService != nil && s.rateLimitService.handleHome401(ctx, account, statusCode) {
 		return false
 	}
@@ -121,10 +125,21 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 			message = upstreamMsg
 		}
 		if s != nil && s.rateLimitService != nil {
-			s.rateLimitService.handleAuthError(stateCtx, account, message)
+			if !s.rateLimitService.handleAuthError(stateCtx, account, message) {
+				if _, managed := HomeResultCredentialID(stateCtx); managed {
+					return false
+				}
+			}
 		}
 		if s != nil {
-			s.BlockAccountScheduling(account, time.Time{}, "openai_access_state")
+			if _, managed := HomeResultCredentialID(stateCtx); managed {
+				snapshot := homeResultAccount(stateCtx, account)
+				AfterAccountCommit(stateCtx, func(context.Context) {
+					s.BlockAccountScheduling(snapshot, time.Time{}, "openai_access_state")
+				})
+			} else {
+				s.BlockAccountScheduling(account, time.Time{}, "openai_access_state")
+			}
 		}
 		return true
 	}
@@ -174,13 +189,20 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		s.rateLimitService.HandleOpenAICodexSparkRateLimit(stateCtx, account, canonicalModel[0], statusCode, headers, responseBody) {
 		return false
 	}
-	if statusCode == http.StatusTooManyRequests {
+	_, homeResult := HomeResultCredentialID(stateCtx)
+	if statusCode == http.StatusTooManyRequests && !homeResult {
 		s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
 	}
 	if s.rateLimitService == nil {
 		return false
 	}
 	shouldDisable := s.rateLimitService.HandleUpstreamError(stateCtx, account, statusCode, headers, responseBody)
+	if homeResult {
+		// Home runtime mirrors are published by the guarded write's success path.
+		// Account/model transient counters have no binding dimension; Home owns
+		// that cooldown, so do not publish unversioned mirrors for these results.
+		return shouldDisable
+	}
 	tempModel := tempUnschedulableModel(stateCtx, nil)
 	modelTempMatched := tempModel != "" && tempUnschedRulesApply(account, statusCode, responseBody, tempModel) &&
 		len(matchTempUnschedulableRules(account, statusCode, responseBody)) > 0
@@ -354,6 +376,16 @@ func (s *OpenAIGatewayService) openAIAccountRuntimeBlockLock(accountID int64) *s
 }
 
 func (s *OpenAIGatewayService) blockAccountSchedulingLocked(account *Account, until time.Time, _ string) (uint64, bool) {
+	homeID := ""
+	if account.HasHomeBinding() {
+		observed := *account
+		observed.ParentAccountID = nil
+		var err error
+		homeID, err = observed.HomeCredentialID()
+		if err != nil || !s.homeRuntimeBlockBindingMatches(account, homeID) {
+			return 0, false
+		}
+	}
 	generation := s.openaiAccountRuntimeBlockSequence.Add(1)
 	s.openaiAccountRuntimeBlockGeneration.Store(account.ID, generation)
 	now := time.Now()
@@ -361,20 +393,24 @@ func (s *OpenAIGatewayService) blockAccountSchedulingLocked(account *Account, un
 	if blockUntil.IsZero() || !blockUntil.After(now) {
 		blockUntil = now.Add(openAIStopSchedulingBridgeCooldown)
 	}
+	var entry any = blockUntil
+	if homeID != "" {
+		entry = homeRuntimeBlock{until: blockUntil, credentialID: homeID}
+	}
 
 	for {
 		current, loaded := s.openaiAccountRuntimeBlockUntil.Load(account.ID)
 		if !loaded {
-			actual, stored := s.openaiAccountRuntimeBlockUntil.LoadOrStore(account.ID, blockUntil)
+			actual, stored := s.openaiAccountRuntimeBlockUntil.LoadOrStore(account.ID, entry)
 			if !stored {
 				return generation, true
 			}
 			current = actual
 		}
 
-		currentUntil, ok := current.(time.Time)
-		if !ok || currentUntil.IsZero() {
-			if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, blockUntil) {
+		currentUntil, currentHomeID, ok := runtimeBlockValue(current)
+		if !ok || currentUntil.IsZero() || currentHomeID != homeID {
+			if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, entry) {
 				return generation, true
 			}
 			continue
@@ -382,10 +418,37 @@ func (s *OpenAIGatewayService) blockAccountSchedulingLocked(account *Account, un
 		if !blockUntil.After(currentUntil) {
 			return generation, false
 		}
-		if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, blockUntil) {
+		if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, entry) {
 			return generation, true
 		}
 	}
+}
+
+type homeRuntimeBlock struct {
+	until        time.Time
+	credentialID string
+}
+
+func runtimeBlockValue(value any) (time.Time, string, bool) {
+	switch entry := value.(type) {
+	case time.Time:
+		return entry, "", true
+	case homeRuntimeBlock:
+		return entry.until, entry.credentialID, true
+	default:
+		return time.Time{}, "", false
+	}
+}
+
+func (s *OpenAIGatewayService) homeRuntimeBlockBindingMatches(account *Account, expectedID string) bool {
+	ctx, cancel := openAIAccountStateContext(context.Background())
+	defer cancel()
+	owner, err := currentHomeCredentialOwner(ctx, s.accountRepo, account)
+	if err != nil {
+		return false
+	}
+	id, err := owner.HomeCredentialID()
+	return err == nil && id == expectedID
 }
 
 func (s *OpenAIGatewayService) ClearAccountSchedulingBlock(accountID int64) {
@@ -411,8 +474,8 @@ func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlocked(account *Account) b
 	if !ok {
 		return false
 	}
-	cooldownUntil, ok := value.(time.Time)
-	if !ok || cooldownUntil.IsZero() {
+	cooldownUntil, homeID, ok := runtimeBlockValue(value)
+	if !ok || cooldownUntil.IsZero() || (homeID != "" && !s.homeRuntimeBlockBindingMatches(account, homeID)) {
 		s.openaiAccountRuntimeBlockUntil.Delete(account.ID)
 		s.openaiAccountRuntimeBlockGeneration.Store(account.ID, s.openaiAccountRuntimeBlockSequence.Add(1))
 		return false
@@ -520,8 +583,8 @@ func (s *OpenAIGatewayService) peekOpenAIAccountRuntimeBlock(account *Account) o
 	if !ok {
 		return openAIAccountRuntimeBlockSnapshot{}
 	}
-	until, isTime := value.(time.Time)
-	if !isTime || until.IsZero() || !time.Now().Before(until) {
+	until, homeID, isTime := runtimeBlockValue(value)
+	if !isTime || until.IsZero() || !time.Now().Before(until) || (homeID != "" && !s.homeRuntimeBlockBindingMatches(account, homeID)) {
 		s.openaiAccountRuntimeBlockUntil.Delete(account.ID)
 		s.openaiOAuth429RetryStartedAt.Delete(account.ID)
 		s.openaiAccountRuntimeBlockGeneration.Store(account.ID, s.openaiAccountRuntimeBlockSequence.Add(1))
@@ -547,7 +610,7 @@ func (s *OpenAIGatewayService) clearOpenAIAccountRuntimeBlockIfUnchanged(account
 		return
 	}
 	current, ok := s.openaiAccountRuntimeBlockUntil.Load(accountID)
-	currentUntil, isTime := current.(time.Time)
+	currentUntil, _, isTime := runtimeBlockValue(current)
 	if !ok || !isTime || !currentUntil.Equal(snapshot.until) {
 		return
 	}

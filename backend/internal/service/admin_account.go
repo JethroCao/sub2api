@@ -1738,6 +1738,7 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 		return ""
 	}
 	account = prepared
+	ctx = homeUpstreamResultContext(ctx, account)
 	token, _ := account.Credentials["access_token"].(string)
 	if token == "" {
 		return ""
@@ -1750,7 +1751,10 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 		}
 	}
 
-	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)
+	mode, status := disableOpenAITrainingWithStatus(ctx, s.privacyClientFactory, token, proxyURL)
+	if status == http.StatusUnauthorized && account.HasHomeBinding() {
+		_ = s.homeCredentials.Recover(ctx, account, token)
+	}
 	if mode == "" {
 		return ""
 	}
@@ -1777,6 +1781,7 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 		return ""
 	}
 	account = prepared
+	ctx = homeUpstreamResultContext(ctx, account)
 	token, _ := account.Credentials["access_token"].(string)
 	if token == "" {
 		return ""
@@ -1789,7 +1794,10 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 		}
 	}
 
-	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)
+	mode, status := disableOpenAITrainingWithStatus(ctx, s.privacyClientFactory, token, proxyURL)
+	if status == http.StatusUnauthorized && account.HasHomeBinding() {
+		_ = s.homeCredentials.Recover(ctx, account, token)
+	}
 	if mode == "" {
 		return ""
 	}

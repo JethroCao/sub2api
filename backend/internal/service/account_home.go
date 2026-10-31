@@ -130,6 +130,47 @@ func ProtectHomeAccountWrite(ctx context.Context, current map[string]any, a *Acc
 
 type nativeCredentialMutationKey struct{}
 
+type homeResultCredentialKey struct{}
+type homeResultBinding struct {
+	credentialID string
+	selectedID   int64
+	ownerID      int64
+}
+
+// WithHomeResultCredentialID pins durable response-state mutations to the Home
+// binding that produced the response. Repositories enforce it at the write.
+func WithHomeResultCredentialID(ctx context.Context, id string) context.Context {
+	return WithHomeResultBinding(ctx, id, 0, 0)
+}
+
+func WithHomeResultBinding(ctx context.Context, id string, selectedID, ownerID int64) context.Context {
+	return context.WithValue(ctx, homeResultCredentialKey{}, homeResultBinding{id, selectedID, ownerID})
+}
+
+func HomeResultAccountID(ctx context.Context) (int64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	binding, ok := ctx.Value(homeResultCredentialKey{}).(homeResultBinding)
+	return binding.selectedID, ok && binding.selectedID > 0
+}
+
+func HomeResultOwnerID(ctx context.Context) (int64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	binding, ok := ctx.Value(homeResultCredentialKey{}).(homeResultBinding)
+	return binding.ownerID, ok && binding.ownerID > 0
+}
+
+func HomeResultCredentialID(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	binding, ok := ctx.Value(homeResultCredentialKey{}).(homeResultBinding)
+	return binding.credentialID, ok
+}
+
 // WithNativeCredentialMutation prevents re-auth from racing an ownership conversion.
 func WithNativeCredentialMutation(ctx context.Context) context.Context {
 	return context.WithValue(ctx, nativeCredentialMutationKey{}, true)

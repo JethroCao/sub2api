@@ -1527,7 +1527,140 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 	return nil
 }
 
+// homeResultMutationLock marks the account already checked under this exact
+// transaction, so the guarded method can reuse its existing mutation path.
+type homeResultMutationLock struct {
+	accountID    int64
+	selectedID   int64
+	ownerID      int64
+	credentialID string
+	tx           *dbent.Tx
+}
+
+type homeResultMutationLockKey struct{}
+
+// withHomeResultOwnership serializes response-state writes with binding edits.
+// A service-level ownership read is insufficient: rebind/unbind can commit
+// between that read and the write. Keep this row lock through both mutation and
+// outbox insertion, and never publish an uncommitted account snapshot.
+func (r *accountRepository) withHomeResultOwnership(
+	ctx context.Context,
+	id int64,
+	mutate func(context.Context, *accountRepository) error,
+) (bool, error) {
+	expected, required := service.HomeResultCredentialID(ctx)
+	if !required {
+		return false, nil
+	}
+	if expected == "" {
+		return true, service.ErrHomeOwnershipChanged
+	}
+	selectedID, hasSelected := service.HomeResultAccountID(ctx)
+	ownerID, hasOwner := service.HomeResultOwnerID(ctx)
+	if hasSelected != hasOwner {
+		return true, service.ErrHomeOwnershipChanged
+	}
+	if !hasSelected {
+		// UUID-only callers can mutate an ordinary owner, but cannot infer a
+		// shadow's original parent from the potentially changed current row.
+		selectedID, ownerID = id, id
+	}
+	if id != selectedID && id != ownerID {
+		return true, service.ErrHomeOwnershipChanged
+	}
+	tx := dbent.TxFromContext(ctx)
+	if locked, ok := ctx.Value(homeResultMutationLockKey{}).(homeResultMutationLock); ok &&
+		locked.accountID == id && locked.selectedID == selectedID && locked.ownerID == ownerID &&
+		locked.credentialID == expected && locked.tx == tx && tx != nil {
+		return false, nil
+	}
+
+	baseCtx := ctx
+	ownsTx := tx == nil
+	if ownsTx {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return true, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+	}
+	client := tx.Client()
+	// Lock the selected relationship and its original owner together, even
+	// when an auth error targets the parent rather than the selected shadow.
+	// A single ID order avoids opposite parent/child lock acquisition. A
+	// caller-owned transaction must use this same order for earlier row locks.
+	rows, err := client.QueryContext(ctx, `
+		SELECT id, parent_account_id,
+			COALESCE(extra ->> 'openai_credential_source' = 'home'
+				AND extra ->> 'home_credential_id' = $3, false)
+		FROM accounts
+		WHERE id IN ($1, $2) AND deleted_at IS NULL
+		ORDER BY id
+		FOR NO KEY UPDATE
+	`, selectedID, ownerID, expected)
+	if err != nil {
+		return true, err
+	}
+	type lockedAccount struct {
+		parent  sql.NullInt64
+		matches bool
+	}
+	locked := make(map[int64]lockedAccount, 2)
+	for rows.Next() {
+		var accountID int64
+		var account lockedAccount
+		if err := rows.Scan(&accountID, &account.parent, &account.matches); err != nil {
+			_ = rows.Close()
+			return true, err
+		}
+		locked[accountID] = account
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return true, err
+	}
+	if err := rows.Close(); err != nil {
+		return true, err
+	}
+	if _, exists := locked[id]; !exists {
+		return true, service.ErrAccountNotFound
+	}
+	selected, selectedExists := locked[selectedID]
+	owner, ownerExists := locked[ownerID]
+	if !selectedExists || !ownerExists || owner.parent.Valid || !owner.matches {
+		return true, service.ErrHomeOwnershipChanged
+	}
+	if selectedID != ownerID && (!selected.parent.Valid || selected.parent.Int64 != ownerID) {
+		return true, service.ErrHomeOwnershipChanged
+	}
+
+	ctx = context.WithValue(ctx, homeResultMutationLockKey{}, homeResultMutationLock{
+		accountID: id, selectedID: selectedID, ownerID: ownerID, credentialID: expected, tx: tx,
+	})
+	scoped := *r
+	scoped.client = client
+	scoped.sql = client
+	scoped.schedulerCache = nil
+	if err := mutate(ctx, &scoped); err != nil {
+		return true, err
+	}
+	if ownsTx {
+		if err := tx.Commit(); err != nil {
+			return true, err
+		}
+		r.syncSchedulerAccountSnapshot(baseCtx, id)
+	}
+	return true, nil
+}
+
 func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg string) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.SetError(ctx, id, errorMsg)
+	}); handled {
+		return err
+	}
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetStatus(service.StatusError).
@@ -1914,6 +2047,11 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 }
 
 func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.ClearError(ctx, id)
+	}); handled {
+		return err
+	}
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.ClearError(ctx, id)
 	}
@@ -2355,6 +2493,11 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 }
 
 func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.SetRateLimited(ctx, id, resetAt)
+	}); handled {
+		return err
+	}
 	now := time.Now()
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
@@ -2488,6 +2631,11 @@ func (r *accountRepository) SetRateLimitedIfUnchanged(
 }
 
 func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time, reason ...string) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.SetModelRateLimit(ctx, id, scope, resetAt, reason...)
+	}); handled {
+		return err
+	}
 	if scope == "" {
 		return nil
 	}
@@ -2541,6 +2689,11 @@ func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, sco
 }
 
 func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until time.Time) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.SetOverloaded(ctx, id, until)
+	}); handled {
+		return err
+	}
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetOverloadUntil(until).
@@ -2556,6 +2709,11 @@ func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until t
 }
 
 func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.SetTempUnschedulable(ctx, id, until, reason)
+	}); handled {
+		return err
+	}
 	result, err := r.sql.ExecContext(ctx, `
 		UPDATE accounts
 		SET temp_unschedulable_until = $1,
@@ -2628,6 +2786,11 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 }
 
 func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.ClearTempUnschedulable(ctx, id)
+	}); handled {
+		return err
+	}
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.ClearTempUnschedulable(ctx, id)
 	}
@@ -2650,6 +2813,11 @@ func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64
 }
 
 func (r *accountRepository) ClearRateLimit(ctx context.Context, id int64) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.ClearRateLimit(ctx, id)
+	}); handled {
+		return err
+	}
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.ClearRateLimit(ctx, id)
 	}
@@ -2697,6 +2865,11 @@ func (r *accountRepository) ClearAntigravityQuotaScopes(ctx context.Context, id 
 }
 
 func (r *accountRepository) ClearModelRateLimits(ctx context.Context, id int64) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.ClearModelRateLimits(ctx, id)
+	}); handled {
+		return err
+	}
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.ClearModelRateLimits(ctx, id)
 	}
@@ -2725,6 +2898,11 @@ func (r *accountRepository) ClearModelRateLimits(ctx context.Context, id int64) 
 }
 
 func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.UpdateSessionWindow(ctx, id, start, end, status)
+	}); handled {
+		return err
+	}
 	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetSessionWindowStatus(status)
@@ -2748,6 +2926,11 @@ func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, s
 }
 
 func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.UpdateSessionWindowEnd(ctx, id, end)
+	}); handled {
+		return err
+	}
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetSessionWindowEnd(end).
@@ -2762,6 +2945,11 @@ func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64
 }
 
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.SetSchedulable(ctx, id, schedulable)
+	}); handled {
+		return err
+	}
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.SetSchedulable(ctx, id, schedulable)
 	}
@@ -2823,6 +3011,11 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 }
 
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if handled, err := r.withHomeResultOwnership(ctx, id, func(ctx context.Context, scoped *accountRepository) error {
+		return scoped.UpdateExtra(ctx, id, updates)
+	}); handled {
+		return err
+	}
 	if err := service.RejectHomeBindingMutation(updates); err != nil {
 		return err
 	}

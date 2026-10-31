@@ -1162,18 +1162,26 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 	if s == nil || s.accountRepo == nil {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if homeRequestWasManaged(ctx, accountID) {
+		credential := ctx.Value(homeRequestCredentialKey{}).(homeRequestCredential)
+		ctx = WithHomeResultBinding(ctx, credential.credential.ID, credential.accountID, credential.ownerID)
+	}
 
 	now := time.Now()
 	updates := buildCodexUsageExtraUpdates(snapshot, now)
 	if len(updates) == 0 {
 		return
 	}
-	if !s.getCodexSnapshotThrottle().Allow(accountID, now) {
+	_, homeResult := HomeResultCredentialID(ctx)
+	if !homeResult && !s.getCodexSnapshotThrottle().Allow(accountID, now) {
 		return
 	}
 
 	go func() {
-		updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err == nil {
 			notifyOpenAIAutoReset(accountID)

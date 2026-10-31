@@ -957,7 +957,9 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			}
 			return ctxErr
 		}
-		if errors.Is(err, errRefreshSkipped) {
+		if errors.Is(err, errRefreshSkipped) || errors.Is(err, ErrHomeOwnershipChanged) {
+			// A queued native refresh may observe a completed Home cutover. It did
+			// not fail at the provider and must not retry or penalize the new owner.
 			return errRefreshSkipped
 		}
 		if isProviderScopedTerminalRefreshError(err) {

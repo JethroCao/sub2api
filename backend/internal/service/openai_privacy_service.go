@@ -38,8 +38,13 @@ func shouldSkipOpenAIPrivacyEnsure(extra map[string]any) bool {
 // disableOpenAITraining calls ChatGPT settings API to turn off "Improve the model for everyone".
 // Returns privacy_mode value: "training_off" on success, "cf_blocked" / "failed" on failure.
 func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL string) string {
+	mode, _ := disableOpenAITrainingWithStatus(ctx, clientFactory, accessToken, proxyURL)
+	return mode
+}
+
+func disableOpenAITrainingWithStatus(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL string) (string, int) {
 	if accessToken == "" || clientFactory == nil {
-		return ""
+		return "", 0
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -48,7 +53,7 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 	client, err := clientFactory(proxyURL)
 	if err != nil {
 		slog.Warn("openai_privacy_client_error", "error", err.Error())
-		return PrivacyModeFailed
+		return PrivacyModeFailed, 0
 	}
 
 	resp, err := client.R().
@@ -66,24 +71,24 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 
 	if err != nil {
 		slog.Warn("openai_privacy_request_error", "error", err.Error())
-		return PrivacyModeFailed
+		return PrivacyModeFailed, 0
 	}
 
 	if resp.StatusCode == 403 || resp.StatusCode == 503 {
 		body := resp.String()
 		if isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), body) {
 			slog.Warn("openai_privacy_cf_blocked", "status", resp.StatusCode)
-			return PrivacyModeCFBlocked
+			return PrivacyModeCFBlocked, resp.StatusCode
 		}
 	}
 
 	if !resp.IsSuccessState() {
 		slog.Warn("openai_privacy_failed", "status", resp.StatusCode, "body", truncate(resp.String(), 200))
-		return PrivacyModeFailed
+		return PrivacyModeFailed, resp.StatusCode
 	}
 
 	slog.Info("openai_privacy_training_disabled")
-	return PrivacyModeTrainingOff
+	return PrivacyModeTrainingOff, resp.StatusCode
 }
 
 // isCloudflareChallengeResponse 判断 chatgpt.com 返回的是否为 Cloudflare 质询/拦截页。
