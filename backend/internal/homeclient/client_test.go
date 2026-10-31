@@ -57,6 +57,7 @@ type fakeHome struct {
 	dropRelease                  bool
 	malformed                    bool
 	usageFailure                 bool
+	usageBlock                   <-chan struct{}
 }
 
 func certificate(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, server bool) (tls.Certificate, []byte, []byte, *x509.Certificate, *ecdsa.PrivateKey) {
@@ -295,7 +296,11 @@ func (h *fakeHome) serve(raw net.Conn, id int) {
 			} else {
 				h.mu.Lock()
 				fail := h.usageFailure
+				block := h.usageBlock
 				h.mu.Unlock()
+				if block != nil {
+					<-block
+				}
 				if fail {
 					io.WriteString(c, "-usage unavailable\r\n")
 				} else {
@@ -425,7 +430,7 @@ func TestTwoClientsShareThreeSlots(t *testing.T) {
 	four.Finish(Result{})
 }
 func TestRejectInvalidAdmission(t *testing.T) {
-	for _, kind := range []string{"wrong-id", "missing-accounting", "invalid-tuple", "remap", "mixed-error"} {
+	for _, kind := range []string{"wrong-id", "missing-accounting", "invalid-tuple", "wrong-model-tuple", "noncanonical-tuple", "remap", "mixed-error"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newFake(t)
 			h.mutate = func(v map[string]any) {
@@ -436,6 +441,10 @@ func TestRejectInvalidAdmission(t *testing.T) {
 					delete(v, "concurrency")
 				case "invalid-tuple":
 					v["concurrency"].(map[string]any)["credential_id"] = ""
+				case "wrong-model-tuple":
+					v["concurrency"].(map[string]any)["model"] = "other"
+				case "noncanonical-tuple":
+					v["concurrency"].(map[string]any)["model"] = strings.ToUpper(testModel)
 				case "remap":
 					v["model"] = "other"
 				case "mixed-error":

@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -36,6 +38,7 @@ func (l *Lease) Finish(result Result) {
 	l.once.Do(func() {
 		l.cancel()
 		l.stop()
+		usage := l.usage(result)
 		c, g := l.client, l.generation
 		c.mu.Lock()
 		delete(g.active, l)
@@ -46,17 +49,18 @@ func (l *Lease) Finish(result Result) {
 				g.ledger[l.key] = n
 			}
 			n.latest++
-		}
-		failed := g.failed
-		notify(g.changed)
-		c.mu.Unlock()
-		if !failed {
-			notify(g.wake)
+			// Publish before making the completed lease visible to shutdown.
+			// Count the in-flight attempt as well as queued reports, so graceful
+			// cancellation cannot discard an unissued final failure/cooldown.
 			select {
-			case g.usage <- l.usage(result):
+			case g.usage <- usage:
+				g.usagePending++
 			default:
 			}
+			notify(g.wake)
 		}
+		notify(g.changed)
+		c.mu.Unlock()
 	})
 }
 
@@ -122,6 +126,40 @@ func (e *envelope) credential(id string) (Credential, error) {
 	return v, nil
 }
 func validateID(id string) bool { u, e := uuid.Parse(id); return e == nil && u.String() == id }
+
+// canonicalAccountingModel follows Home v1.1.7's concurrency key contract.
+// It is only used to validate the returned tuple; the exact returned model
+// still controls upstream identity and the returned tuple controls release.
+func canonicalAccountingModel(model string) string {
+	if !utf8.ValidString(model) {
+		return ""
+	}
+	const whitespace = " \t\r\n\v\f"
+	key := strings.ToLower(strings.Trim(model, whitespace))
+	if strings.HasSuffix(key, ")") {
+		if open := strings.LastIndexByte(key, '('); open >= 0 {
+			suffix := key[open+1 : len(key)-1]
+			recognized := false
+			switch suffix {
+			case "-1", "none", "auto", "minimal", "low", "medium", "high", "xhigh", "max":
+				recognized = true
+			default:
+				if len(suffix) > 0 && len(suffix) <= 10 && strings.IndexFunc(suffix, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+					_, err := strconv.ParseUint(suffix, 10, 31)
+					recognized = err == nil
+				}
+			}
+			if base := strings.Trim(key[:open], whitespace); recognized && base != "" {
+				key = base
+			}
+		}
+	}
+	if len(key) > 256 {
+		return ""
+	}
+	return key
+}
+
 func (c *Client) begin(ctx context.Context) (*generation, context.Context, func(), error) {
 	if e := ctx.Err(); e != nil {
 		return nil, nil, nil, e
@@ -216,7 +254,7 @@ func (c *Client) Acquire(ctx context.Context, req Request) (*Lease, error) {
 	g.active[l] = struct{}{}
 	c.mu.Unlock()
 	credential, e := reply.credential(req.CredentialID)
-	if e == nil && (tuple.Model != reply.Model || reply.Model != req.Model || reply.Provider != "codex") {
+	if e == nil && (tuple.Model != canonicalAccountingModel(reply.Model) || reply.Model != req.Model || reply.Provider != "codex") {
 		e = errors.New("home: unexpected provider or model remapping")
 	}
 	if e != nil {

@@ -93,6 +93,10 @@ func (c *Client) usageLoop(g *generation) {
 		case p := <-g.usage:
 			raw, _ := json.Marshal(p)
 			_, _, _ = c.exchange(g.ctx, g, commandTimeout, "LPUSH", "usage", string(raw)) /* no retry: ACK loss is not idempotent */
+			c.mu.Lock()
+			g.usagePending--
+			notify(g.changed)
+			c.mu.Unlock()
 		}
 	}
 }

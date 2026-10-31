@@ -38,6 +38,7 @@ type generation struct {
 	ledger            map[releaseKey]*releaseCount
 	wake, changed     chan struct{}
 	usage             chan usagePayload
+	usagePending      int // queued reports plus the worker's current delivery attempt
 	workers           sync.WaitGroup
 }
 
@@ -329,7 +330,7 @@ func (c *Client) shutdown(g *generation) {
 	if drained {
 		for {
 			c.mu.Lock()
-			pending := false
+			pending := g.usagePending > 0
 			for _, v := range g.ledger {
 				pending = pending || v.latest > v.acked
 			}

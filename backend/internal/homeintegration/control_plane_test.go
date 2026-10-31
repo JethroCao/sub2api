@@ -151,9 +151,9 @@ func TestHomeControlPlaneInteroperability(t *testing.T) {
 		eventually(t, "acknowledged membership readiness", 35*time.Second, client.Ready)
 		return client
 	}
-	acquire := func(client *homeclient.Client) *homeclient.Lease {
+	acquireModel := func(client *homeclient.Client, model string) *homeclient.Lease {
 		t.Helper()
-		lease, err := client.Acquire(ctx, homeclient.Request{CredentialID: cfg.CredentialID, Model: cfg.Model, SessionID: "fixture-session"})
+		lease, err := client.Acquire(ctx, homeclient.Request{CredentialID: cfg.CredentialID, Model: model, SessionID: "fixture-session"})
 		if err != nil {
 			t.Fatalf("pinned admission: %v", err)
 		}
@@ -165,6 +165,10 @@ func TestHomeControlPlaneInteroperability(t *testing.T) {
 			t.Fatal("new admission context is already canceled")
 		}
 		return lease
+	}
+	acquire := func(client *homeclient.Client) *homeclient.Lease {
+		t.Helper()
+		return acquireModel(client, cfg.Model)
 	}
 	count := func(want int) {
 		t.Helper()
@@ -240,6 +244,14 @@ func TestHomeControlPlaneInteroperability(t *testing.T) {
 	fourth.Finish(homeclient.Result{StatusCode: 200})
 	count(0)
 	t.Log("Finish restored capacity, duplicate Finish was safe, and usage persisted once")
+
+	// Home strips a recognized reasoning suffix from concurrency.model while
+	// preserving the upstream model. Both requests consume the same model group.
+	suffixed := acquireModel(a, cfg.Model+"(high)")
+	count(1)
+	suffixed.Finish(homeclient.Result{StatusCode: http.StatusOK})
+	count(0)
+	t.Log("reasoning-suffixed dispatch accepted and its canonical accounting tuple released")
 
 	_, err = a.Acquire(ctx, homeclient.Request{CredentialID: "00000000-0000-4000-8000-000000000001", Model: cfg.Model})
 	if !errors.As(err, &refused) || refused.Type == "credential_concurrency_exceeded" {
