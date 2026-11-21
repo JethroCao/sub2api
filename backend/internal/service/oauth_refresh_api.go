@@ -181,6 +181,14 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		return nil, errors.New("oauth refresh executor is nil")
 	}
 	requestPath := isOAuthRefreshRequestPath(ctx)
+	if isCredentialBrokerRefresh(ctx) && api.tokenCache == nil {
+		return nil, brokerError(503, "broker_unavailable", 1)
+	}
+	if isCredentialBrokerRefresh(ctx) {
+		if _, ok := api.tokenCache.(OwnedOAuthRefreshLockCache); !ok {
+			return nil, brokerError(503, "broker_unavailable", 1)
+		}
+	}
 	cacheKey := executor.CacheKey(account)
 
 	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
@@ -192,8 +200,22 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 
 	// 1. 获取分布式锁
 	if api.tokenCache != nil {
-		acquired, lockErr := api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
+		var acquired bool
+		var lockErr error
+		var release func()
+		if owned, ok := api.tokenCache.(OwnedOAuthRefreshLockCache); ok {
+			var owner string
+			owner, acquired, lockErr = owned.AcquireOwnedRefreshLock(ctx, cacheKey, api.lockTTL)
+			if acquired && lockErr == nil {
+				ctx, release = api.maintainOwnedRefreshLease(ctx, owned, cacheKey, owner)
+			}
+		} else {
+			acquired, lockErr = api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
+		}
 		if lockErr != nil {
+			if isCredentialBrokerRefresh(ctx) {
+				return nil, brokerError(503, "broker_unavailable", 1)
+			}
 			// Redis 错误，降级为无锁刷新（进程内互斥锁仍生效）
 			slog.Warn("oauth_refresh_lock_failed_degraded",
 				"account_id", account.ID,
@@ -204,7 +226,11 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			// 锁被其他 worker 持有
 			return &OAuthRefreshResult{LockHeld: true}, nil
 		} else {
-			defer api.releaseRefreshLock(ctx, cacheKey)
+			if release != nil {
+				defer release()
+			} else {
+				defer api.releaseRefreshLock(ctx, cacheKey)
+			}
 		}
 	}
 
@@ -259,6 +285,18 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	// 4. 执行平台特定刷新逻辑
 	attemptedAccount := snapshotOAuthRefreshAccount(freshAccount)
 	newCredentials, refreshErr := executor.Refresh(ctx, freshAccount)
+	if refreshErr == nil && newCredentials != nil {
+		if err := confirmOAuthRefreshLease(ctx); err != nil {
+			return nil, err
+		}
+		if isCredentialBrokerRefresh(ctx) {
+			// A completed rotation must survive client disconnects. Keep the
+			// owner-fenced CAS and cache cleanup bounded and under the lease.
+			var commitCancel context.CancelFunc
+			ctx, commitCancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer commitCancel()
+		}
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		// A provider implementation may ignore cancellation and return late
 		// credentials. Never persist them after the attempt/cycle boundary.
@@ -354,11 +392,22 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			// post-refresh cache publication cannot restore that stale snapshot.
 			freshAccount = durableAccount
 		} else if updateErr := persistAccountCredentials(ctx, api.accountRepo, freshAccount, newCredentials); updateErr != nil {
+			logErr := updateErr
+			if isCredentialBrokerRefresh(ctx) {
+				// Driver errors may include parameter values. The node-facing path
+				// records only a fixed classification, never raw credential errors.
+				logErr = errOAuthRefreshCredentialPersist
+			}
 			slog.Error("oauth_refresh_update_failed",
 				"account_id", freshAccount.ID,
-				"error", updateErr,
+				"error", logErr,
 			)
 			return nil, fmt.Errorf("%w: %w", errOAuthRefreshCredentialPersist, updateErr)
+		}
+	}
+	if isCredentialBrokerRefresh(ctx) && newCredentials != nil {
+		if err := api.tokenCache.DeleteAccessToken(ctx, cacheKey); err != nil {
+			return nil, brokerError(503, "broker_unavailable", 1)
 		}
 	}
 

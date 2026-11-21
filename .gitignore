@@ -137,6 +137,7 @@ docs/*
 !docs/admin-api-keys.md
 !docs/mcp.md
 !docs/home-control-plane.md
+!docs/credential-broker.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md

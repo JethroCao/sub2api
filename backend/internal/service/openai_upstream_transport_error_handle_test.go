@@ -253,6 +253,9 @@ func TestForwardAsRawChatCompletions_TransportErrorFailsOver(t *testing.T) {
 		ProxyID:     &proxyID,
 		Proxy:       proxy,
 	}
+	repo.AccountRepository = &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}
 	c, rec := newOpenAITransportErrTestContext()
 	body := []byte(`{"model":"deepseek-v4-flash-free","messages":[{"role":"user","content":"hello"}]}`)
 
@@ -292,6 +295,9 @@ func TestForwardAsRawChatCompletions_RecordsProxyPerAccountAttempt(t *testing.T)
 		{ID: 81, Name: "account-a", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "a", "base_url": "https://example.com/v1"}, ProxyID: &proxyA.ID, Proxy: proxyA},
 		{ID: 82, Name: "account-b", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "b", "base_url": "https://example.com/v1"}, ProxyID: &proxyB.ID, Proxy: proxyB, ProxyFallbackOriginID: &fallbackOriginID},
 		{ID: 83, Name: "account-direct", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "c", "base_url": "https://example.com/v1"}},
+	}
+	svc.accountRepo.(*openaiTransportAccountRepoStub).AccountRepository = &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{accounts[0].ID: accounts[0], accounts[1].ID: accounts[1], accounts[2].ID: accounts[2]},
 	}
 	c, _ := newOpenAITransportErrTestContext()
 	body := []byte(`{"model":"test","messages":[{"role":"user","content":"hello"}]}`)

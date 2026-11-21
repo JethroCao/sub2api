@@ -26,6 +26,21 @@ func persistAccountCredentials(ctx context.Context, repo AccountRepository, acco
 	if account.HasHomeBinding() {
 		return ErrHomeOwnershipChanged
 	}
+	if isCredentialBrokerRefresh(ctx) {
+		updater, ok := repo.(credentialBrokerCredentialsUpdater)
+		if !ok {
+			return ErrCredentialBrokerStateChanged
+		}
+		applied, err := updater.UpdateOpenAIBrokerCredentialsIfUnchanged(ctx, account.ID, account.Credentials, credentials)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return ErrCredentialBrokerStateChanged
+		}
+		account.Credentials = shallowCopyMap(credentials)
+		return nil
+	}
 	account.Credentials = shallowCopyMap(credentials)
 	if updater, ok := any(repo).(accountCredentialsUpdater); ok {
 		return updater.UpdateCredentials(ctx, account.ID, account.Credentials)

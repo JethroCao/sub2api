@@ -158,6 +158,7 @@ func TestOpenAIGatewayServiceForwardImages_TextFallbackDoesNotCoolImageCapabilit
 			"access_token": "token-123",
 		},
 	}
+	repo.accountsByID = map[int64]*Account{account.ID: account}
 
 	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
 
@@ -210,6 +211,7 @@ func TestOpenAIGatewayServiceForwardImages_StructuredUnavailableCoolsImageCapabi
 			"access_token": "token-123",
 		},
 	}
+	repo.accountsByID = map[int64]*Account{account.ID: account}
 
 	before := time.Now()
 	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")

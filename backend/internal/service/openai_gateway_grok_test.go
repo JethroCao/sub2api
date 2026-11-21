@@ -3532,6 +3532,9 @@ func TestOpenAIWSHTTPBridgeGrok429PersistsRateLimit(t *testing.T) {
 	}}
 	svc := &OpenAIGatewayService{accountRepo: repo, httpUpstream: upstream}
 	account := &Account{ID: 68, Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1}
+	repo.mockAccountRepoForPlatform = &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}
 	before := time.Now()
 
 	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
@@ -3572,6 +3575,9 @@ func TestOpenAIWSHTTPBridgeSSEErrorSideEffectsRunOncePerPlatform(t *testing.T) {
 				svc.rateLimitService = NewRateLimitService(repo, nil, cfg, nil, nil)
 			}
 			account := &Account{ID: 70, Platform: platform, Type: AccountTypeOAuth, Concurrency: 1}
+			repo.mockAccountRepoForPlatform = &mockAccountRepoForPlatform{
+				accountsByID: map[int64]*Account{account.ID: account},
+			}
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
@@ -3607,6 +3613,9 @@ func TestOpenAIWSHTTPBridgeGrokExhaustedSuccessPersistsRateLimit(t *testing.T) {
 	upstream := &httpUpstreamRecorder{resp: resp}
 	svc := &OpenAIGatewayService{accountRepo: repo, httpUpstream: upstream}
 	account := &Account{ID: 69, Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1}
+	repo.mockAccountRepoForPlatform = &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}
 
 	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
 		context.Background(), nil, account, "token",

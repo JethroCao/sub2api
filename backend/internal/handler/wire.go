@@ -181,6 +181,7 @@ func ProvideAdminSettingHandler(settingService *service.SettingService, emailSer
 
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
+	credentialBrokerHandler *CredentialBrokerHandler,
 	authHandler *AuthHandler,
 	userHandler *UserHandler,
 	mcpOAuthHandler *MCPOAuthHandler,
@@ -209,6 +210,7 @@ func ProvideHandlers(
 	_ *service.OpenAIQuotaAutoResetService,
 ) *Handlers {
 	return &Handlers{
+		CredentialBroker: credentialBrokerHandler,
 		Auth:             authHandler,
 		User:             userHandler,
 		MCPOAuth:         mcpOAuthHandler,
@@ -237,6 +239,7 @@ func ProvideHandlers(
 
 // ProviderSet is the Wire provider set for all handlers
 var ProviderSet = wire.NewSet(
+	NewCredentialBrokerHandler,
 	// Top-level handlers
 	NewAuthHandler,
 	NewUserHandler,

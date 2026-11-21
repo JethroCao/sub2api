@@ -69,6 +69,9 @@ func currentHomeCredentialOwner(ctx context.Context, repo AccountRepository, a *
 			return nil, ErrAccountNotFound
 		}
 	}
+	if err := requireCredentialBrokerSnapshot(ctx, a); err != nil {
+		return nil, err
+	}
 	if a.IsCredentialShadow() {
 		if a.HasHomeBinding() {
 			return nil, ErrHomeBinding
@@ -85,6 +88,9 @@ func currentHomeCredentialOwner(ctx context.Context, repo AccountRepository, a *
 	// Native-only callers include independent plugins. Every ownership reread
 	// must retain that constraint, including reads made inside Home resolution.
 	if err := requireNativeCredentialMutation(ctx, a); err != nil {
+		return nil, err
+	}
+	if err := requireCredentialBrokerSnapshot(ctx, a); err != nil {
 		return nil, err
 	}
 	return a, nil

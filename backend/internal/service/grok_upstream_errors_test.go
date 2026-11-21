@@ -270,6 +270,9 @@ func TestGrokContentPolicySSEErrorDoesNotMutateOrFailover(t *testing.T) {
 	}}
 	svc := &OpenAIGatewayService{accountRepo: repo, httpUpstream: upstream}
 	account := &Account{ID: 4721, Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1}
+	repo.mockAccountRepoForPlatform = &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)

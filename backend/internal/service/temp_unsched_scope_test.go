@@ -203,6 +203,7 @@ func TestCheckErrorPolicy_ExplicitModelScopeKeeps401ModelScoped(t *testing.T) {
 		"error_code": float64(http.StatusUnauthorized),
 		"keywords":   []any{"unauthorized"},
 	})
+	repo.accountsByID = map[int64]*Account{account.ID: account}
 
 	result := svc.CheckErrorPolicy(context.Background(), account, http.StatusUnauthorized,
 		[]byte(`{"error":{"message":"unauthorized"}}`), "gpt-5.4")
@@ -259,6 +260,7 @@ func TestOpenAIFailoverSideEffects_401FollowsTempUnschedScope(t *testing.T) {
 			repo := &tempUnschedScopeRepoStub{}
 			gateway := &OpenAIGatewayService{rateLimitService: &RateLimitService{accountRepo: repo, cfg: &config.Config{}}}
 			account := newTempUnschedScope401Account(PlatformOpenAI, tc.scopes...)
+			repo.accountsByID = map[int64]*Account{account.ID: account}
 			if tc.poolMode {
 				account.Credentials["pool_mode"] = true
 			}
@@ -341,6 +343,7 @@ func TestCheckErrorPolicy_401FollowsTempUnschedScope(t *testing.T) {
 			repo := &tempUnschedScopeRepoStub{}
 			svc := &RateLimitService{accountRepo: repo}
 			account := newTempUnschedScope401Account(PlatformOpenAI, tc.scope)
+			repo.accountsByID = map[int64]*Account{account.ID: account}
 			if tc.oauth {
 				account.Type = AccountTypeOAuth
 			}
@@ -387,6 +390,7 @@ func TestCountTokensEntries_ExplicitModelScope401OnlyCoolsModel(t *testing.T) {
 		upstream := &httpUpstreamRecorder{resp: unauthorized()}
 		svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{accountRepo: repo, cfg: cfg}}
 		account := newTempUnschedScope401Account(PlatformOpenAI, TempUnschedScopeModel)
+		repo.accountsByID = map[int64]*Account{account.ID: account}
 		account.Credentials["api_key"] = "sk-test"
 		account.Credentials["base_url"] = "http://upstream.example"
 		account.Concurrency = 1
@@ -407,6 +411,7 @@ func TestCountTokensEntries_ExplicitModelScope401OnlyCoolsModel(t *testing.T) {
 		upstream := &httpUpstreamRecorder{resp: unauthorized()}
 		svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, rateLimitService: &RateLimitService{accountRepo: repo, cfg: cfg}}
 		account := newTempUnschedScope401Account(PlatformOpenAI, TempUnschedScopeModel)
+		repo.accountsByID = map[int64]*Account{account.ID: account}
 		account.Credentials["api_key"] = "sk-test"
 		account.Credentials["model_mapping"] = map[string]any{"gpt-5.4": "gpt-5.4-upstream"}
 		account.Concurrency = 1

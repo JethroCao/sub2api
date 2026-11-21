@@ -313,6 +313,7 @@ func TestCheckErrorPolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &errorPolicyRepoStub{}
+			repo.accountsByID = map[int64]*Account{tt.account.ID: tt.account}
 			svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 
 			result := svc.CheckErrorPolicy(context.Background(), tt.account, tt.statusCode, tt.body)
@@ -333,6 +334,7 @@ func TestHandleUpstreamError_PoolModePolicies(t *testing.T) {
 				"pool_mode": true,
 			},
 		}
+		repo.accountsByID = map[int64]*Account{account.ID: account}
 
 		shouldDisable := svc.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
@@ -354,6 +356,7 @@ func TestHandleUpstreamError_PoolModePolicies(t *testing.T) {
 				"custom_error_codes":         []any{float64(401)},
 			},
 		}
+		repo.accountsByID = map[int64]*Account{account.ID: account}
 
 		shouldDisable := svc.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
@@ -381,6 +384,7 @@ func TestHandleUpstreamError_PoolModePolicies(t *testing.T) {
 				},
 			},
 		}
+		repo.accountsByID = map[int64]*Account{account.ID: account}
 
 		shouldDisable := svc.HandleUpstreamError(
 			context.Background(),
@@ -414,6 +418,7 @@ func TestHandleUpstreamError_PoolModePolicies(t *testing.T) {
 				},
 			},
 		}
+		repo.accountsByID = map[int64]*Account{account.ID: account}
 
 		shouldDisable := svc.HandleUpstreamError(
 			context.Background(),

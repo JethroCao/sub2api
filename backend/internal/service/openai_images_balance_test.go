@@ -65,6 +65,9 @@ func TestForwardOpenAIImagesAPIKey_ClassifiesWrappedBalanceBeforeTransientFailov
 				Status: StatusActive, Schedulable: true,
 				Credentials: map[string]any{"api_key": "test-key", "base_url": "https://images.example.test"},
 			}
+			repo.AccountRepository = &mockAccountRepoForPlatform{
+				accountsByID: map[int64]*Account{account.ID: account},
+			}
 			body := []byte(`{"model":"gpt-image-1","prompt":"cat"}`)
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)

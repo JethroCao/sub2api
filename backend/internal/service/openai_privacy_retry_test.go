@@ -39,6 +39,7 @@ func TestAdminService_EnsureOpenAIPrivacy_RetriesNonSuccessModes(t *testing.T) {
 					"privacy_mode": mode,
 				},
 			}
+			svc.accountRepo.(*mockAccountRepoForGemini).accountsByID = map[int64]*Account{account.ID: account}
 
 			got := svc.EnsureOpenAIPrivacy(context.Background(), account)
 
