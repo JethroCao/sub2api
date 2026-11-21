@@ -71,6 +71,7 @@
             :show-source-toggle="false"
             :show-metric-toggle="true"
             :enable-breakdown="false"
+            :show-account-cost="false"
             :title="t('usage.endpointDistribution')"
             :start-date="startDate"
             :end-date="endDate"
@@ -721,6 +722,27 @@ const escapeCSVValue = (value: unknown): string => {
   return str
 }
 
+const EXPORT_PAGE_SIZE = 1000
+const EXPORT_RATE_LIMIT_MAX_RETRIES = 3
+const EXPORT_RATE_LIMIT_MAX_WAIT_SECONDS = 60
+
+// 导出逐页请求计入按用户的重查询限流；429 时按 Retry-After 等待后重试同一页。
+const queryExportPage = async (query: typeof usageAPI.query, params: UsageQueryParams) => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await query(params)
+    } catch (error: any) {
+      if (error?.status !== 429 || attempt >= EXPORT_RATE_LIMIT_MAX_RETRIES) throw error
+      const waitSeconds = Math.min(
+        Math.max(error.retry_after_seconds ?? EXPORT_RATE_LIMIT_MAX_WAIT_SECONDS, 1),
+        EXPORT_RATE_LIMIT_MAX_WAIT_SECONDS
+      )
+      appStore.showInfo(t('usage.exportRateLimited', { seconds: waitSeconds }))
+      await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000))
+    }
+  }
+}
+
 const exportToCSV = async () => {
   if (pagination.total === 0) {
     appStore.showWarning(t('usage.noDataToExport'))
@@ -730,13 +752,12 @@ const exportToCSV = async () => {
   appStore.showInfo(t('usage.preparingExport'))
   try {
     const allLogs: UsageLog[] = []
-    const pageSize = 100
-    const exportParams = buildUsageListParams(1, pageSize)
-    const totalPages = Math.ceil(pagination.total / pageSize)
+    const teamScope = isTeamScope.value
+    const query = teamScope ? feishuOrgAPI.queryManagerUsage : usageAPI.query
+    const exportParams = buildUsageListParams(1, EXPORT_PAGE_SIZE)
+    const totalPages = Math.ceil(pagination.total / EXPORT_PAGE_SIZE)
     for (let page = 1; page <= totalPages; page++) {
-      const response = isTeamScope.value
-        ? await feishuOrgAPI.queryManagerUsage({ ...exportParams, page })
-        : await usageAPI.query({ ...exportParams, page })
+      const response = await queryExportPage(query, { ...exportParams, page })
       allLogs.push(...response.items)
     }
     if (allLogs.length === 0) {
@@ -745,7 +766,7 @@ const exportToCSV = async () => {
     }
     const headers = [
       'Time',
-      ...(isTeamScope.value ? ['User'] : []),
+      ...(teamScope ? ['User'] : []),
       'API Key Name',
       'Model',
       'Reasoning Effort',
@@ -765,7 +786,7 @@ const exportToCSV = async () => {
     ]
     const rows = allLogs.map((log) => [
       log.created_at,
-      ...(isTeamScope.value ? [log.user?.email || log.user?.username || (log.user_id ? `#${log.user_id}` : '')] : []),
+      ...(teamScope ? [log.user?.email || log.user?.username || (log.user_id ? `#${log.user_id}` : '')] : []),
       log.api_key?.name || '',
       log.model,
       formatReasoningEffort(log.reasoning_effort),

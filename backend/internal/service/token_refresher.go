@@ -124,6 +124,13 @@ func (r *OpenAITokenRefresher) NeedsRefresh(account *Account, refreshWindow time
 // Refresh 执行token刷新
 // 保留原有credentials中的所有字段，只更新token相关字段
 func (r *OpenAITokenRefresher) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
+	ctx = WithNativeCredentialMutation(ctx)
+	if account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth &&
+		!account.IsCredentialShadow() && !account.IsOpenAIPersonalAccessToken() && !isCredentialBrokerRefresh(ctx) {
+		// Both downstream owner reads must match the snapshot against which the
+		// completed rotation will be committed. Never consume a newer token here.
+		ctx = context.WithValue(ctx, openAINativeRefreshSnapshotKey{}, snapshotOAuthRefreshAccount(account))
+	}
 	current, err := currentHomeCredentialOwner(ctx, r.accountRepo, account)
 	if err != nil {
 		return nil, err

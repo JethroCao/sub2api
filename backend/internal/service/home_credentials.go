@@ -72,6 +72,9 @@ func currentHomeCredentialOwner(ctx context.Context, repo AccountRepository, a *
 	if err := requireCredentialBrokerSnapshot(ctx, a); err != nil {
 		return nil, err
 	}
+	if err := requireOpenAINativeRefreshSnapshot(ctx, a); err != nil {
+		return nil, err
+	}
 	if a.IsCredentialShadow() {
 		if a.HasHomeBinding() {
 			return nil, ErrHomeBinding

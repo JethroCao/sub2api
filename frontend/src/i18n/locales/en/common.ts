@@ -253,6 +253,7 @@ export default {
     errors: {
       USER_NOT_ACTIVE: 'Account has been disabled.',
       EMAIL_PASSWORD_LOGIN_DISABLED: 'Email password login is disabled. Please use Feishu or another sign-in method.',
+      EMAIL_BLOCKED: 'This email address is not allowed. Please use a different one.',
     },
     registrationFailed: 'Registration failed. Please try again.',
     emailDomainRegistrationLimit:
