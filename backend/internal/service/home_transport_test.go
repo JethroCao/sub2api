@@ -404,7 +404,7 @@ func TestHomeTransportControlFailureIsNotProxyFault(t *testing.T) {
 	_, s := homeTransportSetup(t)
 	a := homeTransportAccount()
 	err := homeControlError(errors.New("connection refused"))
-	require.False(t, classifyUpstreamTransportError(err).Persistent)
+	require.Equal(t, upstreamTransportTransient, classifyUpstreamTransportError(err))
 	converted := s.handleOpenAIUpstreamTransportError(context.Background(), nil, a, err, false)
 	var failover *UpstreamFailoverError
 	require.ErrorAs(t, converted, &failover)

@@ -262,6 +262,7 @@ func ProvideAccountUsageService(
 	identityCache IdentityCache,
 	tlsFPProfileService *TLSFingerprintProfileService,
 	openAIGatewayService *OpenAIGatewayService,
+	opsService *OpsService,
 ) *AccountUsageService {
 	service := NewAccountUsageService(
 		accountRepo,
@@ -278,6 +279,9 @@ func ProvideAccountUsageService(
 	)
 	service.homeCredentials = home
 	service.agentIdentityWS = openAIGatewayService
+	if opsService != nil {
+		service.opsMonitoring = opsService
+	}
 	return service
 }
 

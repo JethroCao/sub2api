@@ -81,7 +81,7 @@ func TestHomeBindingHeaderOverridesCannotReplaceIdentity(t *testing.T) {
 	a := homeTestAccount()
 	a.Credentials = map[string]any{"access_token": "home-at", "chatgpt_account_id": "home-account", "header_override_enabled": true, "header_overrides": map[string]any{"authorization": "Bearer injected", "chatgpt-account-id": "injected"}}
 	h := http.Header{}
-	a.ApplyHeaderOverrides(h)
+	a.ApplyHeaderOverrides(context.Background(), h)
 	require.Equal(t, "Bearer home-at", h.Get("Authorization"))
 	require.Equal(t, "home-account", h.Get("ChatGPT-Account-ID"))
 }
